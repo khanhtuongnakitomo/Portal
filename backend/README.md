@@ -1,0 +1,166 @@
+# TNE Portal Backend
+
+REST API đặt phòng cho ba nhóm quyền `USER`, `MANAGER`, `ADMIN`, xây bằng NestJS 12, Prisma 7 và PostgreSQL 17.
+
+## Kiến trúc
+
+```text
+Frontend
+   │ HTTPS + Bearer access token
+   ▼
+NestJS API
+   ├── Auth + RBAC
+   ├── Booking/key state machine
+   ├── Manager/Admin workflows
+   └── Prisma
+         │ PostgreSQL protocol
+         ▼
+PostgreSQL local hoặc Supabase (private schema app)
+```
+
+Frontend không truy cập database trực tiếp. Schema `app` không được expose qua Supabase Data API; migration cũng thu hồi quyền của `anon` và `authenticated` nếu các role này tồn tại.
+
+## Chức năng
+
+- Đăng ký sinh viên và đăng nhập bằng email/password; mật khẩu hash Argon2id.
+- JWT access token và RBAC `USER`, `MANAGER`, `ADMIN`; role/status được đọc lại từ database trên mỗi request.
+- `users` là superclass; mỗi tài khoản có đúng một subclass `student_profiles`, `manager_profiles` hoặc `admin_profiles`.
+- Public xem phòng và lịch đã duyệt.
+- User tạo booking, xem booking cá nhân, hủy và mở digital pass.
+- Manager/Admin duyệt, từ chối, giao chìa, nhận lại chìa và theo dõi chìa quá hạn.
+- Một state machine duy nhất: `PENDING → APPROVED → KEY_CHECKED_OUT → COMPLETED`.
+- Manager/Admin đặt một khoảng block cho từng phòng; block và schedule lock được lưu trong `rooms`.
+- Admin quản lý user/role/status, phòng, chính sách và audit log.
+- Swagger, DTO validation, Helmet, CORS, health checks.
+- Row lock theo phòng và PostgreSQL exclusion constraint chống booking trùng lịch khi request đồng thời.
+
+## Chạy local
+
+Yêu cầu: Docker Desktop, Node.js 24+ và pnpm 11.25.x.
+
+```powershell
+cd backend
+Copy-Item .env.example .env
+docker compose up -d
+pnpm install
+pnpm prisma:generate
+pnpm db:deploy
+pnpm db:seed
+pnpm start:dev
+```
+
+- API: `http://localhost:3000/api/v1`
+- Swagger: `http://localhost:3000/api/v1/docs`
+- Liveness: `GET /api/v1/health/live`
+- Readiness: `GET /api/v1/health/ready`
+
+Đổi `ADMIN_PASSWORD` trước khi seed môi trường dùng chung. Không commit `.env`.
+
+Đặt `SEED_DEMO_USERS=true` để tạo tài khoản manager và student dùng cho frontend local. Thông tin nằm trong [`../docs/API_HANDOFF.md`](../docs/API_HANDOFF.md); không bật demo users ở production.
+
+## Xác thực
+
+`POST /auth/register` và `POST /auth/login` trả:
+
+```json
+{
+  "accessToken": "...",
+  "expiresIn": 28800,
+  "user": {
+    "id": "uuid",
+    "email": "student@school.edu.vn",
+    "fullName": "Nguyen Van A",
+    "studentCode": "SE123456",
+    "role": "USER",
+    "status": "ACTIVE"
+  }
+}
+```
+
+Frontend gửi `Authorization: Bearer <accessToken>`. Theo ERD v2, hệ thống không lưu refresh token; mặc định access token sống 8 giờ và khi hết hạn người dùng đăng nhập lại. Logout là xóa access token phía frontend.
+
+JWT chỉ chứa định danh, không dùng role trong token để authorize. Strategy đọc role/status hiện tại từ database nên khóa tài khoản hoặc đổi role có hiệu lực ở request kế tiếp.
+
+## Database v2
+
+Các bảng nghiệp vụ:
+
+- `users`, `student_profiles`, `manager_profiles`, `admin_profiles`
+- `rooms`, `bookings`, `booking_status_history`
+- `audit_logs`, `system_settings`
+
+Migration `20261103000000_apply_erd_v2` nâng schema v1 lên v2 và giữ dữ liệu tương thích. Migration sẽ dừng nếu một phòng đang có nhiều hơn một `room_blocks` ACTIVE, vì schema mới chỉ lưu một block trên mỗi phòng.
+
+Quy tắc chính:
+
+- Mỗi user phải có đúng một profile khớp `users.role`; deferred constraint trigger kiểm tra lúc commit.
+- `USER` bắt buộc có `studentCode` duy nhất.
+- `PENDING`, `APPROVED`, `KEY_CHECKED_OUT` giữ slot.
+- `REJECTED`, `CANCELLED`, `COMPLETED` không giữ slot.
+- `rooms` chỉ lưu một block hiện tại/gần nhất. Muốn tạo block mới khi block hiện tại chưa kết thúc phải hủy block trước.
+- Booking create và room-block create cùng lock row `rooms`, giữ transaction ngắn và ngăn race condition giữa hai workflow.
+- `bookings_no_active_overlap` là lớp bảo vệ cuối ở database.
+
+## Đưa database lên Supabase
+
+1. Tạo Supabase project gần region chạy backend, ưu tiên Singapore cho ứng dụng tại Việt Nam.
+2. Dùng pooled connection string cho `DATABASE_URL` và direct/session connection string cho `DIRECT_URL`.
+3. Giữ tham số SSL đúng như connection string trong Dashboard.
+4. Chạy `pnpm prisma:generate`, `pnpm db:deploy`, rồi `pnpm db:seed` từ máy phát hành hoặc CI.
+5. Không thêm schema `app` vào Data API exposed schemas và không đưa database URL vào frontend.
+
+Supabase/PostgreSQL dùng extension `btree_gist` cho exclusion constraint. Khi Supabase thông báo nâng Postgres có yêu cầu reindex extension, làm theo hướng dẫn nâng cấp của project trước khi đưa production trở lại hoạt động.
+
+## Endpoint chính
+
+| Method     | Path                                      | Quyền                     |
+| ---------- | ----------------------------------------- | ------------------------- |
+| POST       | `/auth/register`                          | Public                    |
+| POST       | `/auth/login`                             | Public                    |
+| GET        | `/rooms`                                  | Public                    |
+| GET        | `/bookings/calendar`                      | Public                    |
+| POST       | `/bookings`                               | Đã đăng nhập              |
+| GET        | `/bookings/me`                            | Đã đăng nhập              |
+| GET        | `/bookings/:id/pass`                      | Chủ booking/Manager/Admin |
+| PATCH      | `/bookings/:id/cancel`                    | Chủ booking/Manager/Admin |
+| GET        | `/manager/bookings`                       | Manager/Admin             |
+| GET        | `/manager/bookings/today`                 | Manager/Admin             |
+| GET        | `/manager/bookings/overdue-keys`          | Manager/Admin             |
+| PATCH      | `/manager/bookings/:id/approve`           | Manager/Admin             |
+| PATCH      | `/manager/bookings/:id/reject`            | Manager/Admin             |
+| PATCH      | `/manager/bookings/:id/key-checkout`      | Manager/Admin             |
+| PATCH      | `/manager/bookings/:id/key-return`        | Manager/Admin             |
+| GET/POST   | `/manager/room-blocks`                    | Manager/Admin             |
+| PATCH      | `/manager/room-blocks/:roomId/cancel`     | Manager/Admin             |
+| GET        | `/admin/users`                            | Admin                     |
+| PATCH      | `/admin/users/:id/role`                   | Admin                     |
+| POST/PATCH | `/admin/rooms...`                         | Admin                     |
+| PATCH      | `/admin/settings`                         | Admin                     |
+| GET        | `/admin/audit-logs`                       | Admin                     |
+
+Swagger runtime là hợp đồng đầy đủ nhất.
+
+## Kiểm tra chất lượng
+
+```powershell
+pnpm prisma:generate
+pnpm lint
+pnpm test --runInBand
+pnpm test:e2e --runInBand
+pnpm build
+pnpm audit --prod
+```
+
+E2E test chạy toàn bộ luồng đăng ký → booking → approve → giao/trả chìa → room block. GitHub Actions tự dựng PostgreSQL 17, chạy ba migration và test trên mỗi push/PR có thay đổi backend.
+
+## Lưu ý dependency
+
+`pg` được khóa ở `8.18.0` trong `pnpm-workspace.yaml` do compatibility với `@prisma/adapter-pg`. Chỉ bỏ override sau khi nâng Prisma lên bản đã sửa và chạy lại migration/E2E PostgreSQL.
+
+## Việc cần bổ sung trước production
+
+- Email verification, quên mật khẩu và SMTP/provider của trường.
+- Rate limiting tại reverse proxy hoặc NestJS throttler.
+- Email/push notification cho thay đổi trạng thái và chìa quá hạn.
+- Backup, monitoring, alerting và kiểm thử restore.
+- Chính sách retention dữ liệu sinh viên và phê duyệt của nhà trường.

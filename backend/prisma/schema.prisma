@@ -1,0 +1,220 @@
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+  schemas  = ["app"]
+}
+
+enum Role {
+  USER
+  MANAGER
+  ADMIN
+
+  @@schema("app")
+}
+
+enum UserStatus {
+  ACTIVE
+  SUSPENDED
+
+  @@schema("app")
+}
+
+enum RoomStatus {
+  AVAILABLE
+  MAINTENANCE
+  INACTIVE
+
+  @@schema("app")
+}
+
+enum BookingStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  CANCELLED
+  KEY_CHECKED_OUT
+  COMPLETED
+
+  @@schema("app")
+}
+
+enum RoomBlockStatus {
+  ACTIVE
+  CANCELLED
+
+  @@schema("app")
+}
+
+model User {
+  id                  String                 @id @default(uuid()) @db.Uuid
+  email               String                 @unique @db.VarChar(255)
+  passwordHash        String                 @map("password_hash") @db.VarChar(255)
+  fullName            String                 @map("full_name") @db.VarChar(120)
+  role                Role                   @default(USER)
+  status              UserStatus             @default(ACTIVE)
+  createdAt           DateTime               @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt           DateTime               @updatedAt @map("updated_at") @db.Timestamptz(3)
+  studentProfile      StudentProfile?
+  managerProfile      ManagerProfile?
+  adminProfile        AdminProfile?
+  bookings            Booking[]              @relation("BookingOwner")
+  reviewedBookings    Booking[]              @relation("BookingReviewer")
+  keyCheckouts        Booking[]              @relation("KeyCheckoutManager")
+  keyReturns          Booking[]              @relation("KeyReturnManager")
+  roomBlocksCreated   Room[]                 @relation("RoomBlockCreator")
+  roomBlocksCancelled Room[]                 @relation("RoomBlockCanceller")
+  statusHistory       BookingStatusHistory[] @relation("HistoryActor")
+  auditLogs           AuditLog[]             @relation("AuditActor")
+  settingsUpdates     SystemSetting[]        @relation("SettingUpdater")
+
+  @@index([role, status])
+  @@map("users")
+  @@schema("app")
+}
+
+model StudentProfile {
+  userId      String @id @map("user_id") @db.Uuid
+  studentCode String @unique @map("student_code") @db.VarChar(50)
+  user        User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("student_profiles")
+  @@schema("app")
+}
+
+model ManagerProfile {
+  userId String @id @map("user_id") @db.Uuid
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("manager_profiles")
+  @@schema("app")
+}
+
+model AdminProfile {
+  userId String @id @map("user_id") @db.Uuid
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("admin_profiles")
+  @@schema("app")
+}
+
+model Room {
+  id                 String           @id @default(uuid()) @db.Uuid
+  name               String           @unique @db.VarChar(100)
+  description        String?          @db.VarChar(500)
+  location           String           @db.VarChar(200)
+  capacity           Int
+  autoApprove        Boolean          @default(false) @map("auto_approve")
+  status             RoomStatus       @default(AVAILABLE)
+  scheduleVersion    Int              @default(0) @map("schedule_version")
+  blockStartTime     DateTime?        @map("block_start_time") @db.Timestamptz(3)
+  blockEndTime       DateTime?        @map("block_end_time") @db.Timestamptz(3)
+  blockReason        String?          @map("block_reason") @db.VarChar(500)
+  blockStatus        RoomBlockStatus? @map("block_status")
+  blockCreatedById   String?          @map("block_created_by_id") @db.Uuid
+  blockCancelledById String?          @map("block_cancelled_by_id") @db.Uuid
+  blockCancelledAt   DateTime?        @map("block_cancelled_at") @db.Timestamptz(3)
+  createdAt          DateTime         @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt          DateTime         @updatedAt @map("updated_at") @db.Timestamptz(3)
+  bookings           Booking[]
+  blockCreatedBy     User?            @relation("RoomBlockCreator", fields: [blockCreatedById], references: [id], onDelete: Restrict)
+  blockCancelledBy   User?            @relation("RoomBlockCanceller", fields: [blockCancelledById], references: [id], onDelete: Restrict)
+
+  @@index([status])
+  @@index([blockStatus, blockStartTime, blockEndTime])
+  @@index([blockCreatedById])
+  @@index([blockCancelledById])
+  @@map("rooms")
+  @@schema("app")
+}
+
+model Booking {
+  id                String                 @id @default(uuid()) @db.Uuid
+  roomId            String                 @map("room_id") @db.Uuid
+  userId            String                 @map("user_id") @db.Uuid
+  title             String                 @db.VarChar(150)
+  purpose           String                 @db.VarChar(1000)
+  attendeeCount     Int                    @map("attendee_count")
+  passCode          String                 @unique @map("pass_code") @db.VarChar(20)
+  startTime         DateTime               @map("start_time") @db.Timestamptz(3)
+  endTime           DateTime               @map("end_time") @db.Timestamptz(3)
+  status            BookingStatus          @default(PENDING)
+  keyCheckedOutAt   DateTime?              @map("key_checked_out_at") @db.Timestamptz(3)
+  keyCheckedOutById String?                @map("key_checked_out_by_id") @db.Uuid
+  keyReturnedAt     DateTime?              @map("key_returned_at") @db.Timestamptz(3)
+  keyReturnedById   String?                @map("key_returned_by_id") @db.Uuid
+  reviewedById      String?                @map("reviewed_by_id") @db.Uuid
+  reviewedAt        DateTime?              @map("reviewed_at") @db.Timestamptz(3)
+  reviewNote        String?                @map("review_note") @db.VarChar(1000)
+  createdAt         DateTime               @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt         DateTime               @updatedAt @map("updated_at") @db.Timestamptz(3)
+  room              Room                   @relation(fields: [roomId], references: [id], onDelete: Restrict)
+  user              User                   @relation("BookingOwner", fields: [userId], references: [id], onDelete: Restrict)
+  reviewedBy        User?                  @relation("BookingReviewer", fields: [reviewedById], references: [id], onDelete: SetNull)
+  keyCheckedOutBy   User?                  @relation("KeyCheckoutManager", fields: [keyCheckedOutById], references: [id], onDelete: SetNull)
+  keyReturnedBy     User?                  @relation("KeyReturnManager", fields: [keyReturnedById], references: [id], onDelete: SetNull)
+  history           BookingStatusHistory[]
+
+  @@index([userId, status, startTime])
+  @@index([roomId, startTime, endTime])
+  @@index([status, createdAt])
+  @@index([status, endTime])
+  @@index([reviewedById])
+  @@index([keyCheckedOutById])
+  @@index([keyReturnedById])
+  @@map("bookings")
+  @@schema("app")
+}
+
+model BookingStatusHistory {
+  id          String         @id @default(uuid()) @db.Uuid
+  bookingId   String         @map("booking_id") @db.Uuid
+  fromStatus  BookingStatus? @map("from_status")
+  toStatus    BookingStatus  @map("to_status")
+  changedById String         @map("changed_by_id") @db.Uuid
+  note        String?        @db.VarChar(1000)
+  createdAt   DateTime       @default(now()) @map("created_at") @db.Timestamptz(3)
+  booking     Booking        @relation(fields: [bookingId], references: [id], onDelete: Cascade)
+  changedBy   User           @relation("HistoryActor", fields: [changedById], references: [id], onDelete: Restrict)
+
+  @@index([bookingId, createdAt])
+  @@index([changedById])
+  @@map("booking_status_history")
+  @@schema("app")
+}
+
+model AuditLog {
+  id         String   @id @default(uuid()) @db.Uuid
+  actorId    String?  @map("actor_id") @db.Uuid
+  action     String   @db.VarChar(100)
+  targetType String   @map("target_type") @db.VarChar(100)
+  targetId   String?  @map("target_id") @db.VarChar(100)
+  metadata   Json?
+  createdAt  DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  actor      User?    @relation("AuditActor", fields: [actorId], references: [id], onDelete: SetNull)
+
+  @@index([actorId, createdAt])
+  @@index([targetType, targetId])
+  @@map("audit_logs")
+  @@schema("app")
+}
+
+model SystemSetting {
+  id                       String   @id @default("default") @db.VarChar(30)
+  timezone                 String   @default("Asia/Ho_Chi_Minh") @db.VarChar(100)
+  openTime                 String   @default("07:00") @map("open_time") @db.Char(5)
+  closeTime                String   @default("21:00") @map("close_time") @db.Char(5)
+  maxDurationMinutes       Int      @default(240) @map("max_duration_minutes")
+  maxAdvanceDays           Int      @default(90) @map("max_advance_days")
+  maxActiveBookingsPerUser Int      @default(5) @map("max_active_bookings_per_user")
+  updatedById              String?  @map("updated_by_id") @db.Uuid
+  updatedAt                DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+  updatedBy                User?    @relation("SettingUpdater", fields: [updatedById], references: [id], onDelete: SetNull)
+
+  @@index([updatedById])
+  @@map("system_settings")
+  @@schema("app")
+}

@@ -1,0 +1,283 @@
+Project TNE_Portal {
+  database_type: 'PostgreSQL'
+  Note: '''
+    ERD v2 đã triển khai của Portal — Student Room Booking & Key Management System.
+
+    Bản này đã áp dụng feedback thiết kế ngày 2026-11-02:
+    - Gộp rooms, room_blocks và room_schedule_locks vào rooms.
+    - users là superclass; student_profiles, manager_profiles và admin_profiles là subclasses.
+    - Bỏ refresh_tokens và key_pickup_window_minutes.
+    - Booking chỉ còn một status cho toàn bộ vòng đời booking + chìa khóa.
+
+    Nguồn chuẩn: backend/prisma/schema.prisma và migration 20261103000000_apply_erd_v2.
+
+    Tất cả bảng nghiệp vụ nằm trong schema riêng `app`; frontend chỉ gọi NestJS API.
+    Schema `app` không được expose qua Supabase Data API cho anon/authenticated.
+
+    Ràng buộc PostgreSQL không thể biểu diễn trực tiếp bằng DBML:
+    - Extension btree_gist.
+    - bookings_no_active_overlap: một phòng không có hai booking PENDING/APPROVED/KEY_CHECKED_OUT giao nhau.
+    - Users sử dụng total, disjoint specialization: mỗi users row phải có đúng một subclass khớp với role.
+    - Backend khóa row rooms tương ứng trong transaction trước khi tạo/cập nhật booking hoặc block.
+  '''
+}
+
+Enum app.Role {
+  USER [note: 'Học sinh/sinh viên đặt phòng; có một student_profiles row']
+  MANAGER [note: 'Duyệt booking và quản lý chìa khóa; có một manager_profiles row']
+  ADMIN [note: 'Quản trị toàn hệ thống; có một admin_profiles row']
+}
+
+Enum app.UserStatus {
+  ACTIVE
+  SUSPENDED
+}
+
+Enum app.RoomStatus {
+  AVAILABLE [note: 'Phòng đang hoạt động và có thể nhận booking']
+  MAINTENANCE [note: 'Tạm dừng toàn bộ booking để bảo trì']
+  INACTIVE [note: 'Ngừng sử dụng']
+}
+
+Enum app.RoomBlockStatus {
+  ACTIVE [note: 'Khoảng block đang có hiệu lực về mặt dữ liệu']
+  CANCELLED [note: 'Khoảng block đã bị hủy']
+}
+
+Enum app.BookingStatus {
+  PENDING [note: 'Chờ manager duyệt; đang giữ slot']
+  APPROVED [note: 'Đã duyệt, chưa giao chìa; đang giữ slot']
+  REJECTED [note: 'Bị từ chối; không giữ slot']
+  CANCELLED [note: 'Đã hủy; không giữ slot']
+  KEY_CHECKED_OUT [note: 'Đã giao chìa; booking đang diễn ra và vẫn giữ slot']
+  COMPLETED [note: 'Đã nhận lại chìa và hoàn tất']
+}
+
+Table app.users {
+  id uuid [pk, not null, note: 'UUID do Prisma tạo']
+  email varchar(255) [not null]
+  password_hash varchar(255) [not null, note: 'Hash Argon2id; không bao giờ trả về frontend']
+  full_name varchar(120) [not null]
+  role app.Role [not null, default: 'USER', note: 'Discriminator xác định subclass hợp lệ']
+  status app.UserStatus [not null, default: 'ACTIVE']
+  created_at timestamptz(3) [not null, default: `CURRENT_TIMESTAMP`]
+  updated_at timestamptz(3) [not null, note: 'Prisma @updatedAt quản lý']
+
+  indexes {
+    email [unique, name: 'users_email_key']
+    (role, status) [name: 'users_role_status_idx']
+  }
+
+  Note: '''
+    Superclass chứa dữ liệu đăng nhập và thông tin chung. Mỗi row phải có đúng một row trong
+    student_profiles, manager_profiles hoặc admin_profiles, và subclass đó phải khớp với role.
+    Việc bỏ refresh_tokens đồng nghĩa access token hết hạn thì người dùng phải đăng nhập lại.
+  '''
+}
+
+Table app.student_profiles {
+  user_id uuid [pk, not null]
+  student_code varchar(50) [not null]
+
+  indexes {
+    student_code [unique, name: 'student_profiles_student_code_key']
+  }
+
+  Note: 'Subclass dành cho users.role = USER.'
+}
+
+Table app.manager_profiles {
+  user_id uuid [pk, not null]
+
+  Note: 'Subclass dành cho users.role = MANAGER; có thể bổ sung staff_code/department khi có yêu cầu thật.'
+}
+
+Table app.admin_profiles {
+  user_id uuid [pk, not null]
+
+  Note: 'Subclass dành cho users.role = ADMIN.'
+}
+
+Table app.rooms {
+  id uuid [pk, not null, note: 'UUID do Prisma tạo']
+  name varchar(100) [not null]
+  description varchar(500)
+  location varchar(200) [not null]
+  capacity integer [not null]
+  auto_approve boolean [not null, default: false, note: 'Tự duyệt booking hợp lệ của phòng']
+  status app.RoomStatus [not null, default: 'AVAILABLE']
+  schedule_version integer [not null, default: 0, note: 'Tăng khi lịch phòng thay đổi; hỗ trợ concurrency control']
+  block_start_time timestamptz(3) [note: 'Bắt đầu khoảng khóa lịch hiện tại/gần nhất']
+  block_end_time timestamptz(3) [note: 'Kết thúc khoảng khóa lịch hiện tại/gần nhất']
+  block_reason varchar(500)
+  block_status app.RoomBlockStatus
+  block_created_by_id uuid [note: 'Manager/admin tạo block']
+  block_cancelled_by_id uuid [note: 'Manager/admin hủy block']
+  block_cancelled_at timestamptz(3)
+  created_at timestamptz(3) [not null, default: `CURRENT_TIMESTAMP`]
+  updated_at timestamptz(3) [not null, note: 'Prisma @updatedAt quản lý']
+
+  indexes {
+    name [unique, name: 'rooms_name_key']
+    status [name: 'rooms_status_idx']
+    (block_status, block_start_time, block_end_time) [name: 'rooms_block_schedule_idx']
+    block_created_by_id [name: 'rooms_block_created_by_id_idx']
+    block_cancelled_by_id [name: 'rooms_block_cancelled_by_id_idx']
+  }
+
+  checks {
+    `capacity > 0` [name: 'rooms_capacity_check']
+    `(block_start_time IS NULL AND block_end_time IS NULL AND block_reason IS NULL AND block_status IS NULL AND block_created_by_id IS NULL) OR (block_start_time IS NOT NULL AND block_end_time IS NOT NULL AND block_reason IS NOT NULL AND block_status IS NOT NULL AND block_created_by_id IS NOT NULL)` [name: 'rooms_block_required_fields_check']
+    `block_start_time IS NULL OR block_end_time > block_start_time` [name: 'rooms_block_time_check']
+    `block_status IS DISTINCT FROM 'CANCELLED' OR (block_cancelled_by_id IS NOT NULL AND block_cancelled_at IS NOT NULL)` [name: 'rooms_block_cancelled_fields_check']
+  }
+
+  Note: '''
+    Danh mục phòng, khóa đồng thời và một khoảng block được gộp trong cùng bảng.
+    Thiết kế đơn giản này chỉ lưu được một block hiện tại/gần nhất cho mỗi phòng; tạo block mới sẽ ghi đè
+    thông tin block cũ. Backend phải SELECT ... FOR UPDATE row phòng trước khi kiểm tra lịch và ghi booking.
+  '''
+}
+
+Table app.bookings {
+  id uuid [pk, not null, note: 'UUID do Prisma tạo']
+  room_id uuid [not null]
+  user_id uuid [not null, note: 'Chủ booking; phải là users.role = USER']
+  title varchar(150) [not null]
+  purpose varchar(1000) [not null]
+  attendee_count integer [not null]
+  pass_code varchar(20) [not null, note: 'Mã digital pass ngẫu nhiên, chỉ dùng từ trạng thái APPROVED']
+  start_time timestamptz(3) [not null]
+  end_time timestamptz(3) [not null]
+  status app.BookingStatus [not null, default: 'PENDING', note: 'Trạng thái duy nhất cho booking và chìa khóa']
+  key_checked_out_at timestamptz(3)
+  key_checked_out_by_id uuid [note: 'Manager/admin giao chìa']
+  key_returned_at timestamptz(3)
+  key_returned_by_id uuid [note: 'Manager/admin nhận lại chìa']
+  reviewed_by_id uuid [note: 'Manager/admin duyệt hoặc từ chối']
+  reviewed_at timestamptz(3)
+  review_note varchar(1000)
+  created_at timestamptz(3) [not null, default: `CURRENT_TIMESTAMP`]
+  updated_at timestamptz(3) [not null, note: 'Prisma @updatedAt quản lý']
+
+  indexes {
+    pass_code [unique, name: 'bookings_pass_code_key']
+    (user_id, status, start_time) [name: 'bookings_user_id_status_start_time_idx']
+    (room_id, start_time, end_time) [name: 'bookings_room_id_start_time_end_time_idx']
+    (status, created_at) [name: 'bookings_status_created_at_idx']
+    (status, end_time) [name: 'bookings_status_end_time_idx']
+    reviewed_by_id [name: 'bookings_reviewed_by_id_idx']
+    key_checked_out_by_id [name: 'bookings_key_checked_out_by_id_idx']
+    key_returned_by_id [name: 'bookings_key_returned_by_id_idx']
+  }
+
+  checks {
+    `end_time > start_time` [name: 'bookings_time_check']
+    `attendee_count > 0` [name: 'bookings_attendee_count_check']
+    `status NOT IN ('KEY_CHECKED_OUT', 'COMPLETED') OR key_checked_out_at IS NOT NULL` [name: 'bookings_checkout_state_check']
+    `status <> 'COMPLETED' OR key_returned_at IS NOT NULL` [name: 'bookings_return_state_check']
+  }
+
+  Note: '''
+    Một state machine duy nhất: PENDING -> APPROVED -> KEY_CHECKED_OUT -> COMPLETED.
+    PENDING có thể thành APPROVED, REJECTED hoặc CANCELLED; APPROVED có thể thành CANCELLED.
+    PostgreSQL exclusion constraint bookings_no_active_overlap chặn khoảng giao nhau của cùng room_id
+    khi status là PENDING, APPROVED hoặc KEY_CHECKED_OUT.
+  '''
+}
+
+Table app.booking_status_history {
+  id uuid [pk, not null, note: 'UUID do Prisma tạo']
+  booking_id uuid [not null]
+  from_status app.BookingStatus [note: 'Null ở sự kiện tạo booking đầu tiên']
+  to_status app.BookingStatus [not null]
+  changed_by_id uuid [not null, note: 'User hoặc manager/admin gây ra chuyển trạng thái']
+  note varchar(1000)
+  created_at timestamptz(3) [not null, default: `CURRENT_TIMESTAMP`]
+
+  indexes {
+    (booking_id, created_at) [name: 'booking_status_history_booking_id_created_at_idx']
+    changed_by_id [name: 'booking_status_history_changed_by_id_idx']
+  }
+
+  Note: 'Lịch sử bất biến tương đối của toàn bộ vòng đời booking, bao gồm giao và trả chìa.'
+}
+
+Table app.audit_logs {
+  id uuid [pk, not null, note: 'UUID do Prisma tạo']
+  actor_id uuid [note: 'Null nếu actor đã bị xóa hoặc sự kiện hệ thống']
+  action varchar(100) [not null, note: 'Ví dụ BOOKING_APPROVED, ROOM_BLOCK_SET']
+  target_type varchar(100) [not null]
+  target_id varchar(100) [note: 'Polymorphic identifier; cố ý không có FK']
+  metadata jsonb
+  created_at timestamptz(3) [not null, default: `CURRENT_TIMESTAMP`]
+
+  indexes {
+    (actor_id, created_at) [name: 'audit_logs_actor_id_created_at_idx']
+    (target_type, target_id) [name: 'audit_logs_target_type_target_id_idx']
+  }
+
+  Note: 'Nhật ký hành động quản trị và nghiệp vụ quan trọng.'
+}
+
+Table app.system_settings {
+  id varchar(30) [pk, not null, default: 'default', note: 'Singleton row: default']
+  timezone varchar(100) [not null, default: 'Asia/Ho_Chi_Minh']
+  open_time char(5) [not null, default: '07:00']
+  close_time char(5) [not null, default: '21:00']
+  max_duration_minutes integer [not null, default: 240]
+  max_advance_days integer [not null, default: 90]
+  max_active_bookings_per_user integer [not null, default: 5]
+  updated_by_id uuid [note: 'Admin cập nhật settings gần nhất']
+  updated_at timestamptz(3) [not null, note: 'Prisma @updatedAt quản lý']
+
+  indexes {
+    updated_by_id [name: 'system_settings_updated_by_id_idx']
+  }
+
+  checks {
+    `max_duration_minutes BETWEEN 15 AND 1440` [name: 'settings_duration_check']
+    `max_advance_days BETWEEN 1 AND 365` [name: 'settings_advance_check']
+    `max_active_bookings_per_user BETWEEN 1 AND 100` [name: 'settings_active_booking_check']
+    `open_time ~ '^([01][0-9]|2[0-3]):[0-5][0-9]$' AND close_time ~ '^([01][0-9]|2[0-3]):[0-5][0-9]$'` [name: 'settings_time_format_check']
+  }
+
+  Note: 'Chính sách booking toàn hệ thống. Backend duy trì đúng một row id=default.'
+}
+
+Ref student_profile_user: app.users.id - app.student_profiles.user_id [delete: cascade, update: cascade]
+Ref manager_profile_user: app.users.id - app.manager_profiles.user_id [delete: cascade, update: cascade]
+Ref admin_profile_user: app.users.id - app.admin_profiles.user_id [delete: cascade, update: cascade]
+
+Ref room_block_creator: app.users.id < app.rooms.block_created_by_id [delete: restrict, update: cascade]
+Ref room_block_canceller: app.users.id < app.rooms.block_cancelled_by_id [delete: restrict, update: cascade]
+
+Ref booking_room: app.rooms.id < app.bookings.room_id [delete: restrict, update: cascade]
+Ref booking_owner: app.users.id < app.bookings.user_id [delete: restrict, update: cascade]
+Ref booking_reviewer: app.users.id < app.bookings.reviewed_by_id [delete: set null, update: cascade]
+Ref booking_key_checkout_manager: app.users.id < app.bookings.key_checked_out_by_id [delete: set null, update: cascade]
+Ref booking_key_return_manager: app.users.id < app.bookings.key_returned_by_id [delete: set null, update: cascade]
+
+Ref booking_history_booking: app.bookings.id < app.booking_status_history.booking_id [delete: cascade, update: cascade]
+Ref booking_history_actor: app.users.id < app.booking_status_history.changed_by_id [delete: restrict, update: cascade]
+
+Ref audit_actor: app.users.id < app.audit_logs.actor_id [delete: set null, update: cascade]
+Ref setting_updater: app.users.id < app.system_settings.updated_by_id [delete: set null, update: cascade]
+
+TableGroup identity_and_access {
+  app.users
+  app.student_profiles
+  app.manager_profiles
+  app.admin_profiles
+}
+
+TableGroup booking_core {
+  app.rooms
+  app.bookings
+  app.booking_status_history
+}
+
+TableGroup administration {
+  app.system_settings
+  app.audit_logs
+}

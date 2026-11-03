@@ -1,0 +1,59 @@
+name: Backend CI
+
+on:
+  push:
+    paths:
+      - "backend/**"
+      - ".github/workflows/backend-ci.yml"
+  pull_request:
+    paths:
+      - "backend/**"
+      - ".github/workflows/backend-ci.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_DB: tne_portal_test
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d tne_portal_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/tne_portal_test?schema=app
+      DIRECT_URL: postgresql://postgres:postgres@localhost:5432/tne_portal_test?schema=app
+      JWT_ACCESS_SECRET: ci-only-secret-with-at-least-32-characters
+      JWT_ACCESS_TTL_SECONDS: 3600
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6
+        with:
+          version: 11.25.0
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: backend/pnpm-lock.yaml
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm prisma:generate
+        env:
+          DIRECT_URL: postgresql://postgres:postgres@localhost:5432/tne_portal?schema=app
+      - run: pnpm lint
+      - run: pnpm test --runInBand
+      - run: pnpm db:deploy
+      - run: pnpm test:e2e --runInBand
+      - run: pnpm build

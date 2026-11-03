@@ -1,0 +1,9 @@
+overrides:
+  pg: 8.18.0
+
+allowBuilds:
+  "@prisma/engines": true
+  "@scarf/scarf": false
+  argon2: true
+  esbuild: true
+  prisma: true

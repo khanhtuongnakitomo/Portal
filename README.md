@@ -1,31 +1,46 @@
 # Portal — Student Room Booking & Key Management System
 
-## Overview
-Previously, booking a study or meeting room in the student department required emailing the Student Manager to ask for permission and coordinate physical key pickup. This manual process was slow, inconvenient, and made it difficult to see room availability or track who currently held a room key.
+Portal thay thế quy trình đặt phòng và nhận chìa khóa qua email bằng một lịch trực quan và vòng đời rõ ràng:
 
-**Portal** is a simple, self-service system designed to streamline room scheduling, approvals, and physical key handover for both students and the Student Manager.
+1. Sinh viên xem lịch và gửi yêu cầu đặt phòng.
+2. Student Manager duyệt, từ chối hoặc hệ thống tự duyệt theo cấu hình phòng.
+3. Khi sinh viên đến, manager kiểm tra digital pass và ghi nhận giao chìa khóa.
+4. Khi chìa khóa được trả, manager ghi nhận hoàn tất booking.
 
----
+## Repository layout
 
-## Core Idea
-Replace back-and-forth emails with a clear visual schedule and a 4-step lifecycle:
-1. **Check & Request:** Students check real-time room availability and submit a booking request in seconds.
-2. **Review & Approve:** The Student Manager approves (or auto-approves) requests with a single click.
-3. **Key Pickup:** When the student arrives, the manager marks the physical key as **Checked Out**.
-4. **Key Return:** When the session ends and the key is returned, the manager marks the booking as **Completed**.
+```text
+backend/                 NestJS REST API + Prisma + PostgreSQL
+docs/API_HANDOFF.md      Hợp đồng API và luồng tích hợp frontend
+docs/TNE_PORTAL_ERD.dbml ERD chi tiết để import vào dbdiagram.io
+.github/workflows/       CI kiểm tra backend
+```
 
----
+Frontend chưa được scaffold để team design/frontend tự chọn framework. Backend cung cấp Swagger tại `http://localhost:3000/api/v1/docs`, tài liệu tích hợp ở [docs/API_HANDOFF.md](docs/API_HANDOFF.md) và ERD ở [docs/ERD.md](docs/ERD.md).
 
-## Main Functions
+Backend hiện đã triển khai ERD v2, có migration nâng cấp dữ liệu, unit test, PostgreSQL E2E test và CI GitHub Actions.
 
-### 1. For Students
-- **Live Room Schedule:** View daily and weekly availability across all department study and meeting rooms.
-- **Quick Room Booking:** Select a room, date, time slot, number of attendees, and purpose (e.g., Group Study, Club Meeting, Project Discussion).
-- **Booking Status & Digital Pass:** Track whether a request is *Pending*, *Approved*, or *Rejected*, and show the approved booking pass when picking up the room key.
-- **Easy Cancellation:** Cancel upcoming bookings if plans change so other students can use the room.
+## Roles
 
-### 2. For the Student Manager (Admin)
-- **Approval Queue:** View pending booking requests and approve or reject them with a single click (with an optional note).
-- **Today's Key Tracker:** See all bookings happening today and toggle key status (`Key Handed Out` → `Key Returned`) to always know who currently holds each room key.
-- **Overdue Key Alerts:** Quickly spot if a booking has ended and the physical key has not yet been returned.
-- **Room & Schedule Control:** Add or update rooms, set opening hours, block rooms for department events, and apply fair-use limits (such as maximum hours per booking).
+- `USER`: sinh viên xem lịch, tạo/hủy booking, theo dõi trạng thái và hiển thị digital pass.
+- `MANAGER`: duyệt booking, quản lý giao/trả chìa, cảnh báo chìa quá hạn và chặn phòng theo lịch.
+- `ADMIN`: toàn quyền manager cộng quản lý user, role, trạng thái phòng và chính sách hệ thống.
+
+## Quick start
+
+```powershell
+cd backend
+Copy-Item .env.example .env
+docker compose up -d
+pnpm install
+pnpm prisma:generate
+pnpm db:deploy
+pnpm db:seed
+pnpm start:dev
+```
+
+Hướng dẫn backend chi tiết: [backend/README.md](backend/README.md).
+
+## Product scope
+
+Backend bám theo product overview ban đầu của Portal: room schedule, approval queue, digital pass, key tracker, overdue alerts, room blocking và fair-use limits.
