@@ -1,0 +1,11 @@
+{
+  "title": "UTS-TNE Ledger — Room & Key Portal",
+  "description": "A university portal for students to book rooms and access digital passes, while managers track keys and admins manage rooms, users, and policies.",
+  "robots": {
+    "index": false
+  },
+  "accessibility": {
+    "addBypassLinks": false,
+    "ignoreReducedMotion": false
+  }
+}
