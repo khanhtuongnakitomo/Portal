@@ -19,7 +19,7 @@ Chi tiết toàn bộ triết lý thiết kế **Modern Treasury**, bảng màu 
 
 ```text
 backend/                 NestJS REST API + Prisma + PostgreSQL
-src/                     React 19 + TypeScript + Tailwind CSS v4 Frontend
+frontend/                React 19 + TypeScript + Tailwind CSS v4 Frontend
 docs/API_HANDOFF.md      Hợp đồng API và luồng tích hợp frontend
 docs/TNE_PORTAL_ERD.dbml ERD chi tiết để import vào dbdiagram.io
 DESIGN.md                Tài liệu Design System & Style Guide chi tiết
@@ -39,13 +39,16 @@ DESIGN.md                Tài liệu Design System & Style Guide chi tiết
 ## 🚀 Hướng dẫn chạy Frontend (Local)
 
 ```bash
-# 1. Cài đặt dependencies
+# 1. Di chuyển vào thư mục frontend
+cd frontend
+
+# 2. Cài đặt dependencies
 npm install
 
-# 2. Khởi chạy môi trường phát triển (Dev Server)
+# 3. Khởi chạy môi trường phát triển (Dev Server)
 npm run dev
 
-# 3. Build kiểm tra production
+# 4. Build kiểm tra production
 npm run build
 ```
 
