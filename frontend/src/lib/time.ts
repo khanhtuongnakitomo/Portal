@@ -87,3 +87,8 @@ export function toLocalInput(d: Date) {
 export function overlaps(aStart: string | Date, aEnd: string | Date, bStart: string | Date, bEnd: string | Date) {
   return new Date(aStart) < new Date(bEnd) && new Date(bStart) < new Date(aEnd)
 }
+
+export function isWeekend(d: Date): boolean { const day = d.getDay(); return day === 0 || day === 6; }
+
+export function ensureWorkday(d: Date): Date { const x = new Date(d); const day = x.getDay(); if (day === 6) return addDays(x, 2); if (day === 0) return addDays(x, 1); return x;
+}

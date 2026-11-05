@@ -1,6 +1,12 @@
-import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
-import { Role } from '../generated/prisma/client.js';
+import * as argon2 from 'argon2';
+import {
+  BadRequestException,
+  ConflictException,
+  NotFoundException,
+} from '../common/http-exceptions.js';
+import { Role, UserStatus } from '../generated/prisma/client.js';
 import { PrismaService } from '../prisma/prisma.service.js';
+import type { CreateManagerDto } from './dto/create-manager.dto.js';
 import type { ListUsersDto } from './dto/list-users.dto.js';
 import type { UpdateUserRoleDto } from './dto/update-user-role.dto.js';
 import type { UpdateUserStatusDto } from './dto/update-user-status.dto.js';
@@ -16,7 +22,6 @@ const publicUserSelect = {
   studentProfile: { select: { studentCode: true } },
 } as const;
 
-@Injectable()
 export class UsersService {
   constructor(private readonly prisma: PrismaService) {}
 
@@ -26,6 +31,44 @@ export class UsersService {
       select: publicUserSelect,
     });
     return this.toPublicUser(user);
+  }
+
+  async createManager(dto: CreateManagerDto, actorId: string) {
+    const email = dto.email.trim().toLowerCase();
+    const existing = await this.prisma.user.findUnique({
+      where: { email },
+      select: { id: true },
+    });
+    if (existing) {
+      throw new ConflictException('Email is already registered');
+    }
+
+    const passwordHash = await argon2.hash(dto.password, { type: argon2.argon2id });
+    return this.prisma.$transaction(async (tx) => {
+      const created = await tx.user.create({
+        data: {
+          email,
+          fullName: dto.fullName.trim(),
+          passwordHash,
+          role: Role.MANAGER,
+          status: UserStatus.ACTIVE,
+          managerProfile: { create: {} },
+        },
+        select: publicUserSelect,
+      });
+
+      await tx.auditLog.create({
+        data: {
+          actorId,
+          action: 'MANAGER_CREATED',
+          targetType: 'User',
+          targetId: created.id,
+          metadata: { email, role: 'MANAGER' },
+        },
+      });
+
+      return this.toPublicUser(created);
+    });
   }
 
   async list(query: ListUsersDto) {

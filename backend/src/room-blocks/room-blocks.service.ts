@@ -1,9 +1,8 @@
 import {
   BadRequestException,
   ConflictException,
-  Injectable,
   NotFoundException,
-} from '@nestjs/common';
+} from '../common/http-exceptions.js';
 import { BookingStatus, RoomBlockStatus, RoomStatus } from '../generated/prisma/client.js';
 import { PrismaService } from '../prisma/prisma.service.js';
 import type { CreateRoomBlockDto } from './dto/create-room-block.dto.js';
@@ -14,7 +13,6 @@ const blockRoomInclude = {
   blockCancelledBy: { select: { id: true, fullName: true } },
 } as const;
 
-@Injectable()
 export class RoomBlocksService {
   constructor(private readonly prisma: PrismaService) {}
 
@@ -39,26 +37,60 @@ export class RoomBlocksService {
       if (
         room.blockStatus === RoomBlockStatus.ACTIVE &&
         room.blockEndTime &&
-        room.blockEndTime > now
+        room.blockEndTime > now &&
+        room.blockStartTime?.getTime() === startTime.getTime() &&
+        room.blockEndTime.getTime() === endTime.getTime() &&
+        room.blockReason === dto.reason.trim()
       ) {
-        throw new ConflictException('Room already has an active block; cancel it first');
+        throw new ConflictException('Room already has an identical active block');
       }
 
-      const bookingConflict = await tx.booking.findFirst({
+      const keyCheckedOutConflict = await tx.booking.findFirst({
         where: {
           roomId: dto.roomId,
-          status: {
-            in: [BookingStatus.PENDING, BookingStatus.APPROVED, BookingStatus.KEY_CHECKED_OUT],
-          },
+          status: BookingStatus.KEY_CHECKED_OUT,
           startTime: { lt: endTime },
           endTime: { gt: startTime },
         },
         select: { id: true },
       });
-      if (bookingConflict) {
+      if (keyCheckedOutConflict) {
         throw new ConflictException(
-          'Cancel or reject conflicting bookings before blocking this room',
+          'Cannot block room: a key is currently checked out for this time slot',
         );
+      }
+
+      const overlappingBookings = await tx.booking.findMany({
+        where: {
+          roomId: dto.roomId,
+          status: { in: [BookingStatus.PENDING, BookingStatus.APPROVED] },
+          startTime: { lt: endTime },
+          endTime: { gt: startTime },
+        },
+        select: { id: true, status: true },
+      });
+
+      if (overlappingBookings.length > 0) {
+        const displacementNote = `Displaced by university event: ${dto.reason.trim()}`;
+        const bookingIds = overlappingBookings.map((b) => b.id);
+        await tx.booking.updateMany({
+          where: { id: { in: bookingIds } },
+          data: {
+            status: BookingStatus.REJECTED,
+            reviewedById: actorId,
+            reviewedAt: new Date(),
+            reviewNote: displacementNote,
+          },
+        });
+        await tx.bookingStatusHistory.createMany({
+          data: overlappingBookings.map((b) => ({
+            bookingId: b.id,
+            fromStatus: b.status,
+            toStatus: BookingStatus.REJECTED,
+            changedById: actorId,
+            note: displacementNote,
+          })),
+        });
       }
 
       const blockedRoom = await tx.room.update({

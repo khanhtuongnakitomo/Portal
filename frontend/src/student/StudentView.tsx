@@ -14,12 +14,14 @@ import { StudentBookingPopover } from './StudentBookingPopover'
 
 export function StudentView() {
   const { rooms, bookings, blocks, settings, currentUser, notify } = useStore()
-  const [roomId, setRoomId] = useState(rooms[0]?.id)
+  const [roomId, setRoomId] = useState<string>('ALL')
   const [weekStart, setWeekStart] = useState(() => startOfWeek(firstBookableWeek(settings)))
   const [selection, setSelection] = useState<Selection | null>(null)
   const [activeBooking, setActiveBooking] = useState<{ id: string; el: HTMLElement } | null>(null)
   const [drawer, setDrawer] = useState(false)
-  const room = rooms.find((r) => r.id === roomId) ?? rooms[0]
+
+  const isAllRooms = roomId === 'ALL'
+  const room = isAllRooms ? rooms[0] : (rooms.find((r) => r.id === roomId) ?? rooms[0])
 
   const activeBookingObj = bookings.find((b) => b.id === activeBooking?.id)
 
@@ -67,7 +69,7 @@ export function StudentView() {
           <Reveal as="section">
             <RoomTabs
               rooms={rooms}
-              activeId={room.id}
+              activeId={isAllRooms ? 'ALL' : room.id}
               onChange={(id) => {
                 setRoomId(id)
                 setSelection(null)
@@ -113,10 +115,18 @@ export function StudentView() {
                     This week
                   </Button>
                   <div className="ml-2 font-mono text-[13px] font-semibold text-ink">
-                    {fmtShort(weekStart)} — {fmtShort(addDays(weekStart, 6))}
+                    {fmtShort(weekStart)} — {fmtShort(addDays(weekStart, 4))} · MON–FRI
                   </div>
                 </div>
                 <div className="flex flex-wrap items-center gap-3 text-[11px] text-graphite">
+                  {isAllRooms && (
+                    <>
+                      <Legend swatch="bg-blue-600" label="RM 601" />
+                      <Legend swatch="bg-emerald-600" label="RM 602" />
+                      <Legend swatch="bg-violet-600" label="RM 605" />
+                      <span className="text-rule">|</span>
+                    </>
+                  )}
                   <Legend swatch="border border-accent bg-accent" label="Yours" />
                   <Legend swatch="border border-dashed border-meta" label="Yours · pending" />
                   <Legend swatch="border border-[#b9c0cb] bg-reserved" label="Reserved" />
@@ -125,7 +135,7 @@ export function StudentView() {
                   <Legend swatch="border border-accent bg-tint" label="Selection" />
                 </div>
               </div>
-              {room.status !== 'AVAILABLE' && (
+              {!isAllRooms && room.status !== 'AVAILABLE' && (
                 <div className="border-b border-plum/30 bg-plum/[0.06] px-4 py-2 font-mono text-[12px] font-semibold text-plum">
                   ROOM {room.code} IS {room.status} — BOOKINGS SUSPENDED
                 </div>
@@ -150,6 +160,8 @@ export function StudentView() {
                       setActiveBooking((prev) => (prev?.id === b.id ? null : { id: b.id, el }))
                     }}
                     activeId={activeBooking?.id}
+                    allRooms={isAllRooms}
+                    rooms={rooms}
                   />
                 </div>
               </div>
@@ -159,15 +171,15 @@ export function StudentView() {
           <Reveal as="aside" stagger className="flex flex-col gap-6">
             <div className="rounded-lg bg-ice p-6">
               <Eyebrow>
-                ROOM {room.code} · LEVEL {room.floor}
+                {isAllRooms ? 'ALL ROOMS · LEVEL 6' : `ROOM ${room.code} · LEVEL ${room.floor}`}
               </Eyebrow>
               <h3 className="mt-3 font-display text-feature font-w450 text-ink">
-                <SplitText key={room.id} text={room.name} />
+                <SplitText key={isAllRooms ? 'all' : room.id} text={isAllRooms ? 'Combined Room Schedule' : room.name} />
               </h3>
               <div className="mt-4 grid grid-cols-2 gap-px border border-rule bg-rule">
                 <div className="bg-paper px-3 py-2">
                   <div className="font-mono text-[10px] text-steel">APPROVAL</div>
-                  <div className="font-mono text-[13px] font-semibold text-accent">{room.autoApprove ? 'INSTANT' : 'MANAGER'}</div>
+                  <div className="font-mono text-[13px] font-semibold text-accent">MANAGER</div>
                 </div>
                 <div className="bg-paper px-3 py-2">
                   <div className="font-mono text-[10px] text-steel">KEY DESK</div>
@@ -175,7 +187,7 @@ export function StudentView() {
                 </div>
               </div>
               <div className="mt-4 flex flex-wrap gap-1.5">
-                {room.features.map((f) => (
+                {(isAllRooms ? ['Projector', 'PA System', 'Dual Display', 'Whiteboard Wall', 'Recording', 'Tiered Seating'] : room.features).map((f) => (
                   <Tag key={f}>{f}</Tag>
                 ))}
               </div>
@@ -186,7 +198,7 @@ export function StudentView() {
               {[
                 ['01', 'Drag across open slots on a highlighted day.'],
                 ['02', 'Confirm your contact details and purpose in the ledger entry.'],
-                ['03', 'Present your Student ID at the key desk to collect the physical key.'],
+                ['03', 'Wait for Manager approval on your reservation.'],
               ].map(([n, t]) => (
                 <div key={n} className="flex gap-3 border-b border-dashed border-rule pb-3 last:border-0">
                   <span className="font-mono text-[12px] font-semibold text-accent">{n}</span>
@@ -216,7 +228,7 @@ export function StudentView() {
         </div>
       </main>
 
-      <BookingModal room={room} selection={selection} onClose={() => setSelection(null)} />
+      <BookingModal room={room} rooms={rooms} allowRoomChange={isAllRooms} selection={selection} onClose={() => setSelection(null)} />
       <MyBookingsDrawer open={drawer} onClose={() => setDrawer(false)} />
       {activeBooking && activeBookingObj && (
         <StudentBookingPopover

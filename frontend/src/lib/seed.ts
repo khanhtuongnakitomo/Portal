@@ -1,5 +1,5 @@
 import type { AuditLog, Booking, Room, RoomBlock, Settings, User } from './types'
-import { addDays, at, startOfDay } from './time'
+import { addDays, at, startOfWeek } from './time'
 
 export function makePassCode(roomCode: string) {
   const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'
@@ -21,20 +21,23 @@ export const seedSettings: Settings = {
 }
 
 export const seedRooms: Room[] = [
-  { id: 'r601', code: '601', name: 'Seminar Hall 601', floor: 6, capacity: 80, autoApprove: false, status: 'AVAILABLE', features: ['Projector', 'PA System', 'Lectern'] },
-  { id: 'r602', code: '602', name: 'Studio Room 602', floor: 6, capacity: 48, autoApprove: true, status: 'AVAILABLE', features: ['Dual Display', 'Whiteboard Wall'] },
-  { id: 'r603', code: '603', name: 'Lecture Theatre 603', floor: 6, capacity: 120, autoApprove: false, status: 'AVAILABLE', features: ['Recording', 'Tiered Seating', 'Hybrid Kit'] },
+  { id: 'r_601', code: '601', name: 'Seminar Hall 601', floor: 6, capacity: 40, autoApprove: false, status: 'AVAILABLE', features: ['Projector', 'PA System', 'Lectern'] },
+  { id: 'r_602', code: '602', name: 'Studio Room 602', floor: 6, capacity: 24, autoApprove: false, status: 'AVAILABLE', features: ['Dual Display', 'Whiteboard Wall'] },
+  { id: 'r_605', code: '605', name: 'Lecture Theatre 605', floor: 6, capacity: 80, autoApprove: false, status: 'AVAILABLE', features: ['Recording', 'Tiered Seating', 'Hybrid Kit'] },
 ]
 
 const created = (daysAgo: number) => addDays(new Date(), -daysAgo).toISOString()
 
 export const seedUsers: User[] = [
-  { id: 'u_stu', fullName: 'Linh Nguyen', email: 'linh.nguyen@student.uts.edu.au', password: 'student', role: 'USER', studentCode: 'SE123456', status: 'ACTIVE', createdAt: created(120) },
-  { id: 'u_mgr', fullName: 'Daniel Tran', email: 'd.tran@uts-tne.edu.vn', password: 'manager', role: 'MANAGER', status: 'ACTIVE', createdAt: created(400) },
-  { id: 'u_adm', fullName: 'Grace Pham', email: 'g.pham@uts-tne.edu.vn', password: 'admin', role: 'ADMIN', status: 'ACTIVE', createdAt: created(800) },
-  { id: 'u_s2', fullName: 'Minh Le', email: 'minh.le@student.uts.edu.au', password: 'student', role: 'USER', studentCode: 'SE184022', status: 'ACTIVE', createdAt: created(90) },
-  { id: 'u_s3', fullName: 'Anh Vo', email: 'anh.vo@student.uts.edu.au', password: 'student', role: 'USER', studentCode: 'SE170311', status: 'ACTIVE', createdAt: created(60) },
-  { id: 'u_s4', fullName: 'Khoa Dang', email: 'khoa.dang@student.uts.edu.au', password: 'student', role: 'USER', studentCode: 'SE161907', status: 'ACTIVE', createdAt: created(44) },
+  { id: 'u_stu', fullName: 'Linh Nguyen', email: 'student@tne.edu.vn', password: 'Student123456!', role: 'USER', studentCode: 'SE184022', status: 'ACTIVE', createdAt: created(120) },
+  { id: 'u_mgr', fullName: 'Duc Tran', email: 'manager@tne.edu.vn', password: 'Manager123456!', role: 'MANAGER', status: 'ACTIVE', createdAt: created(400) },
+  { id: 'u_adm', fullName: 'Giang Pham', email: 'admin@tne.edu.vn', password: 'Admin12345678!', role: 'ADMIN', status: 'ACTIVE', createdAt: created(800) },
+  { id: 'u_s2', fullName: 'Minh Le', email: 'student2@tne.edu.vn', password: 'student', role: 'USER', studentCode: 'SE184023', status: 'ACTIVE', createdAt: created(90) },
+  { id: 'u_stu2', fullName: 'Minh Le', email: 'minh.le@student.uts.edu.au', password: 'student', role: 'USER', studentCode: 'SE184023', status: 'ACTIVE', createdAt: created(90) },
+  { id: 'u_s3', fullName: 'Anh Vo', email: 'student3@tne.edu.vn', password: 'student', role: 'USER', studentCode: 'SE170311', status: 'ACTIVE', createdAt: created(60) },
+  { id: 'u_stu3', fullName: 'Anh Vo', email: 'anh.vo@student.uts.edu.au', password: 'student', role: 'USER', studentCode: 'SE170311', status: 'ACTIVE', createdAt: created(60) },
+  { id: 'u_s4', fullName: 'Khoa Dang', email: 'student4@tne.edu.vn', password: 'student', role: 'USER', studentCode: 'SE161907', status: 'ACTIVE', createdAt: created(44) },
+  { id: 'u_stu4', fullName: 'Khoa Dang', email: 'khoa.dang@student.uts.edu.au', password: 'student', role: 'USER', studentCode: 'SE161907', status: 'ACTIVE', createdAt: created(44) },
   { id: 'u_s5', fullName: 'Thu Hoang', email: 'thu.hoang@student.uts.edu.au', password: 'student', role: 'USER', studentCode: 'SE152288', status: 'SUSPENDED', createdAt: created(200) },
   { id: 'u_s6', fullName: 'Bao Phan', email: 'bao.phan@student.uts.edu.au', password: 'student', role: 'USER', studentCode: 'SE190145', status: 'ACTIVE', createdAt: created(12) },
 ]
@@ -42,8 +45,11 @@ export const seedUsers: User[] = [
 const PHONES: Record<string, string> = {
   u_stu: '+84 90 312 4456',
   u_s2: '+84 91 884 0221',
+  u_stu2: '+84 91 884 0221',
   u_s3: '+84 93 170 3118',
+  u_stu3: '+84 93 170 3118',
   u_s4: '+84 98 161 9070',
+  u_stu4: '+84 98 161 9070',
   u_s6: '+84 97 190 1452',
 }
 
@@ -76,44 +82,47 @@ function b(
 }
 
 export function seedBookings(): Booking[] {
-  const now = new Date()
-  const today = startOfDay(now)
-  const d = (n: number) => addDays(today, n)
+  const mon = startOfWeek(new Date())
+  const d = (n: number) => addDays(mon, n)
   return [
     // Current student
-    b('bk_1001', 'r601', 'u_stu', at(d(3), 10), at(d(3), 12), 'APPROVED', 'Capstone sprint review — Team Kestrel', 6),
-    b('bk_1002', 'r602', 'u_stu', at(d(5), 14), at(d(5), 15, 30), 'PENDING', 'Data Structures peer tutoring', 12),
-    b('bk_1003', 'r603', 'u_stu', at(today, 10), at(today, 12), 'KEY_CHECKED_OUT', 'Robotics society weekly build night', 24, {
-      checkedOutAt: at(today, 9, 58).toISOString(),
+    b('bk_1001', 'r_601', 'u_stu', at(d(2), 10), at(d(2), 12), 'APPROVED', 'Capstone sprint review — Team Kestrel', 6),
+    b('bk_1002', 'r_602', 'u_stu', at(d(3), 14), at(d(3), 15, 30), 'PENDING', 'Data Structures peer tutoring', 12),
+    b('bk_1003', 'r_605', 'u_stu', at(d(0), 10), at(d(0), 12), 'APPROVED', 'Robotics society weekly build night', 24, {
+      checkedOutAt: at(d(0), 9, 58).toISOString(),
     }),
-    b('bk_1004', 'r601', 'u_stu', at(d(-3), 13), at(d(-3), 15), 'COMPLETED', 'Thesis defence rehearsal', 4, {
-      checkedOutAt: at(d(-3), 12, 56).toISOString(),
-      returnedAt: at(d(-3), 15, 7).toISOString(),
+    b('bk_1004', 'r_601', 'u_stu', at(d(1), 13), at(d(1), 15), 'COMPLETED', 'Thesis defence rehearsal', 4, {
+      checkedOutAt: at(d(1), 12, 56).toISOString(),
+      returnedAt: at(d(1), 15, 7).toISOString(),
     }),
-    b('bk_1005', 'r603', 'u_stu', at(d(4), 9), at(d(4), 11), 'REJECTED', 'Film club screening', 60, {
+    b('bk_1005', 'r_605', 'u_stu', at(d(3), 9), at(d(3), 11), 'REJECTED', 'Film club screening', 60, {
       note: 'Conflicts with Faculty Open Day block. Please choose 602.',
     }),
-    b('bk_1006', 'r602', 'u_stu', at(d(-6), 8), at(d(-6), 9), 'CANCELLED', 'Group study — Networks', 5),
+    b('bk_1006', 'r_602', 'u_stu', at(d(1), 8), at(d(1), 9), 'CANCELLED', 'Group study — Networks', 5),
     // Other students — pending queue
-    b('bk_2001', 'r601', 'u_s2', at(d(2), 15), at(d(2), 17), 'PENDING', 'IEEE student branch AGM', 54),
-    b('bk_2002', 'r603', 'u_s3', at(d(6), 14), at(d(6), 16), 'PENDING', 'Hackathon kickoff & team formation', 96),
-    b('bk_2003', 'r601', 'u_s4', at(d(4), 8), at(d(4), 10), 'PENDING', 'UX research participant sessions', 10),
-    b('bk_2004', 'r603', 'u_s6', at(d(3), 13), at(d(3), 14, 30), 'PENDING', 'Debate society mock tournament', 40),
+    b('bk_2001', 'r_601', 'u_s2', at(d(1), 15), at(d(1), 17), 'PENDING', 'IEEE student branch AGM', 54),
+    b('bk_2002', 'r_605', 'u_s3', at(d(4), 14), at(d(4), 16), 'PENDING', 'Hackathon kickoff & team formation', 96),
+    b('bk_2003', 'r_601', 'u_s4', at(d(3), 8), at(d(3), 10), 'PENDING', 'UX research participant sessions', 10),
+    b('bk_2004', 'r_605', 'u_s6', at(d(2), 13), at(d(2), 14, 30), 'PENDING', 'Debate society mock tournament', 40),
+    // 2 Competing PENDING requests on Room 601 (r_601) for the exact same time slot (Tuesday 09:00–11:00)
+    b('bk_comp_1', 'r_601', 'u_s2', at(d(1), 9), at(d(1), 11), 'PENDING', 'AI Research Group Sync (Minh Tran)', 10),
+    b('bk_comp_2', 'r_601', 'u_s3', at(d(1), 9), at(d(1), 11), 'PENDING', 'Advanced Algorithms Study Group (Huy Le)', 11),
     // Other students — approved / today
-    b('bk_2101', 'r601', 'u_s2', at(today, 13, 30), at(today, 15, 30), 'APPROVED', 'Machine learning reading group', 14),
-    b('bk_2104', 'r603', 'u_s6', at(today, 15), at(today, 17), 'APPROVED', 'Startup pitch practice', 18),
-    b('bk_2105', 'r602', 'u_s2', at(d(3), 9), at(d(3), 11), 'APPROVED', 'Cloud computing lab prep', 20),
-    b('bk_2106', 'r601', 'u_s3', at(d(1), 14), at(d(1), 16), 'APPROVED', 'Women in Tech mentoring circle', 22),
-    b('bk_2107', 'r602', 'u_s6', at(d(6), 10), at(d(6), 12), 'APPROVED', 'Design critique session', 15),
+    b('bk_2101', 'r_601', 'u_s2', at(d(0), 13, 30), at(d(0), 15, 30), 'APPROVED', 'Machine learning reading group', 14),
+    b('bk_2104', 'r_605', 'u_s6', at(d(0), 15), at(d(0), 17), 'APPROVED', 'Startup pitch practice', 18),
+    b('bk_2105', 'r_602', 'u_s2', at(d(2), 9), at(d(2), 11), 'APPROVED', 'Cloud computing lab prep', 20),
+    b('bk_2106', 'r_601', 'u_s3', at(d(1), 14), at(d(1), 16), 'APPROVED', 'Women in Tech mentoring circle', 22),
+    b('bk_2107', 'r_602', 'u_s6', at(d(4), 10), at(d(4), 12), 'APPROVED', 'Design critique session', 15),
   ]
 }
 
 export function seedBlocks(): RoomBlock[] {
-  const today = startOfDay(new Date())
+  const mon = startOfWeek(new Date())
+  const d = (n: number) => addDays(mon, n)
   return [
-    { id: 'blk_01', roomId: 'r603', start: at(addDays(today, 4), 8).toISOString(), end: at(addDays(today, 4), 13).toISOString(), reason: 'Faculty Open Day — keynote', createdBy: 'u_mgr', active: true },
-    { id: 'blk_02', roomId: 'r601', start: at(addDays(today, 5), 13).toISOString(), end: at(addDays(today, 5), 17).toISOString(), reason: 'Industry Advisory Board dinner', createdBy: 'u_mgr', active: true },
-    { id: 'blk_03', roomId: 'r602', start: at(addDays(today, 2), 8).toISOString(), end: at(addDays(today, 2), 10).toISOString(), reason: 'AV maintenance window', createdBy: 'u_adm', active: true },
+    { id: 'blk_01', roomId: 'r_605', start: at(d(3), 8).toISOString(), end: at(d(3), 13).toISOString(), reason: 'Faculty Open Day — keynote', createdBy: 'u_mgr', active: true },
+    { id: 'blk_02', roomId: 'r_601', start: at(d(4), 13).toISOString(), end: at(d(4), 17).toISOString(), reason: 'Industry Advisory Board dinner', createdBy: 'u_mgr', active: true },
+    { id: 'blk_03', roomId: 'r_602', start: at(d(2), 8).toISOString(), end: at(d(2), 10).toISOString(), reason: 'AV maintenance window', createdBy: 'u_adm', active: true },
   ]
 }
 

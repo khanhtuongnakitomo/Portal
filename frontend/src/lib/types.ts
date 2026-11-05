@@ -40,6 +40,9 @@ export interface Booking {
   createdAt: string
   checkedOutAt?: string
   returnedAt?: string
+  category?: string
+  attendeeCount?: number
+  isEvent?: boolean
 }
 
 export interface RoomBlock {

@@ -1,14 +1,44 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { ArrowRight, Ban, Check, ChevronLeft, ChevronRight, KeyRound, Mail, Phone, Search, TriangleAlert, Undo2, X } from 'lucide-react'
+import {
+  Ban,
+  Calendar,
+  Check,
+  ChevronDown,
+  ChevronLeft,
+  ChevronRight,
+  ChevronUp,
+  LayoutGrid,
+  Phone,
+  Plus,
+  TriangleAlert,
+  X,
+} from 'lucide-react'
 import { useLookups, useStore } from '@/lib/store'
-import type { Booking } from '@/lib/types'
-import { addDays, durationMin, fmtDate, fmtDuration, fmtRange, fmtShort, fmtTime, overlaps, sameDay, startOfDay, startOfWeek, toLocalInput } from '@/lib/time'
-import { Button, EmptyState, Eyebrow, Field, Input, StatusChip, Tag, Textarea, cx } from '@/components/ui'
+import type { Booking, RoomBlock } from '@/lib/types'
+import {
+  addDays,
+  durationMin,
+  fmtDate,
+  fmtDuration,
+  fmtRange,
+  fmtShort,
+  fmtTime,
+  overlaps,
+  sameDay,
+  startOfDay,
+  startOfWeek,
+} from '@/lib/time'
+import { Button, Eyebrow, Field, StatusChip, Tag, Textarea, cx } from '@/components/ui'
 import { NavItem, PageHeader, TopNav } from '@/components/Shell'
 import { RoomTabs } from '@/components/RoomTabs'
 import { Reveal, SplitText } from '@/components/effects'
-import { WeekCalendar } from '@/student/WeekCalendar'
+import { WeekCalendar, extractEventBadge, isOfficialEvent } from '@/student/WeekCalendar'
+import { AssignActivityModal, type AssignModalInitial } from './AssignActivityModal'
+import { DayMatrixView } from './DayMatrixView'
+import { ApprovalBoard } from './ApprovalBoard'
+import { BlockInspectorModal } from './BlockInspectorModal'
+import { QUICK_REJECT_REASONS } from './types'
 
 function useNow(ms = 30000) {
   const [now, setNow] = useState(() => new Date())
@@ -19,92 +49,78 @@ function useNow(ms = 30000) {
   return now
 }
 
-const scrollTo = (id: string) => document.getElementById(id)?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+function getInitialWorkday(candidate?: Date) {
+  const d = candidate ? new Date(candidate) : new Date()
+  const dow = d.getDay()
+  if (dow === 6) return addDays(startOfDay(d), 2) // Sat -> Mon
+  if (dow === 0) return addDays(startOfDay(d), 1) // Sun -> Mon
+  return startOfDay(d)
+}
 
 export function ManagerView() {
   const { bookings, blocks } = useStore()
-  const { user, room } = useLookups()
   const now = useNow()
 
   const pending = bookings.filter((b) => b.status === 'PENDING')
-  const overdue = bookings.filter((b) => b.status === 'KEY_CHECKED_OUT' && new Date(b.end) < now)
-  const today = bookings.filter((b) => sameDay(new Date(b.start), now) && ['APPROVED', 'KEY_CHECKED_OUT', 'COMPLETED'].includes(b.status))
-  const keysOut = bookings.filter((b) => b.status === 'KEY_CHECKED_OUT').length
+  const today = bookings.filter(
+    (b) => sameDay(new Date(b.start), now) && ['APPROVED', 'COMPLETED', 'KEY_CHECKED_OUT'].includes(b.status),
+  )
+  const scheduled = bookings.filter((b) => ['APPROVED', 'KEY_CHECKED_OUT'].includes(b.status)).length
   const activeBlocks = blocks.filter((k) => k.active && new Date(k.end) > now).length
 
   return (
     <>
       <TopNav>
-        <NavItem active onClick={() => scrollTo('ops')} badge={pending.length}>
-          Operations
+        <NavItem active badge={pending.length}>
+          Operations & Schedule
         </NavItem>
-        <NavItem onClick={() => scrollTo('tracker')}>Key custody</NavItem>
-        <NavItem onClick={() => scrollTo('blocks')}>Room blocks</NavItem>
       </TopNav>
 
-      {overdue.length > 0 ? (
-        <div className="border-b border-plum bg-plum text-paper">
-          <div className="mx-auto flex max-w-[1440px] flex-wrap items-center gap-x-4 gap-y-2 px-6 py-2.5">
-            <span className="flex items-center gap-2 rounded-sm bg-paper px-2 py-0.5 font-mono text-[12px] font-semibold text-plum">
-              <TriangleAlert size={13} /> {overdue.length} KEY{overdue.length > 1 ? 'S' : ''} OVERDUE
-            </span>
-            <div className="flex flex-1 flex-wrap gap-x-5 gap-y-1">
-              {overdue.map((b) => (
-                <span key={b.id} className="font-mono text-[12px] text-white/85">
-                  RM {room(b.roomId)?.code} · {user(b.userId)?.fullName} · {user(b.userId)?.studentCode} ·{' '}
-                  <span className="text-tint">
-                    +{fmtDuration(Math.max(1, Math.round((+now - +new Date(b.end)) / 60000)))} past {fmtTime(b.end)}
-                  </span>
-                </span>
-              ))}
-            </div>
-            <button onClick={() => scrollTo('tracker')} className="flex items-center gap-1 text-[13px] font-semibold text-paper underline-offset-4 hover:underline">
-              Open key tracker <ArrowRight size={14} />
-            </button>
-          </div>
-        </div>
-      ) : (
-        <div className="border-b border-rule bg-ice">
-          <div className="mx-auto flex max-w-[1440px] items-center gap-2 px-6 py-2 font-mono text-[12px] text-accent">
-            <span className="h-1.5 w-1.5 bg-accent" /> ALL KEYS ACCOUNTED FOR · {fmtTime(now)}
-          </div>
-        </div>
-      )}
-
-      <main className="mx-auto max-w-[1440px] px-6 pt-10">
+      <main className="mx-auto max-w-[1440px] px-6 pt-10 pb-24">
+        {/* Page Header */}
         <PageHeader
-          eyebrow={`FACILITIES DESK · ${fmtDate(now)}`}
+          eyebrow={`FACILITIES COMMAND · ${fmtDate(now)}`}
           title="Operations desk"
-          body="Review requests directly on the master calendar, hand over physical keys against Student ID, and reserve rooms for university events."
+          body="Review booking requests with 1-click approvals, monitor the interactive hour occupancy grid & daily matrix, and assign room schedules for classes and university events."
           right={
-            <Reveal stagger className="grid grid-cols-2 border-t border-l border-rule sm:grid-cols-4">
-              {[
-                ['PENDING', pending.length, ''],
-                ['TODAY', today.length, ''],
-                ['KEYS OUT', keysOut, ''],
-                ['OVERDUE', overdue.length, overdue.length ? 'text-plum' : ''],
-              ].map(([k, v, c]) => (
-                <div key={k as string} className="min-w-[110px] border-r border-b border-rule px-4 py-3">
-                  <div className="font-mono text-[11px] text-steel">{k}</div>
-                  <div className={cx('mt-1 font-display text-[32px] leading-none font-w450', c as string)}>{String(v).padStart(2, '0')}</div>
-                </div>
-              ))}
-            </Reveal>
+            <div className="flex flex-col items-end gap-3">
+              <Reveal stagger className="grid grid-cols-2 border-t border-l border-rule sm:grid-cols-4">
+                {[
+                  ['PENDING', pending.length, pending.length ? 'text-accent' : ''],
+                  ['TODAY', today.length, ''],
+                  ['SCHEDULED', scheduled, ''],
+                  ['ACTIVE BLOCKS', activeBlocks, ''],
+                ].map(([k, v, c]) => (
+                  <div key={k as string} className="min-w-[110px] border-r border-b border-rule px-4 py-3 bg-paper">
+                    <div className="font-mono text-[11px] text-steel">{k}</div>
+                    <div className={cx('mt-1 font-display text-[32px] leading-none font-w450', c as string)}>
+                      {String(v).padStart(2, '0')}
+                    </div>
+                  </div>
+                ))}
+              </Reveal>
+            </div>
           }
         />
 
-        <Reveal stagger id="ops" className="mt-10 grid scroll-mt-24 gap-8 2xl:grid-cols-[minmax(0,65fr)_minmax(0,35fr)] xl:grid-cols-[minmax(0,62fr)_minmax(0,38fr)]">
-          <MasterCalendar />
-          <KeyTracker today={today} now={now} />
-        </Reveal>
-
-        <BlockPanel activeCount={activeBlocks} />
+        {/* Master Operations Workspace */}
+        <div className="mt-10">
+          <OperationsWorkspace />
+        </div>
       </main>
     </>
   )
 }
 
-function ColumnHead({ n, title, meta }: { n: string; title: string; meta?: React.ReactNode }) {
+function ColumnHead({
+  n,
+  title,
+  meta,
+}: {
+  n: string
+  title: string
+  meta?: React.ReactNode
+}) {
   return (
     <div className="flex flex-wrap items-end justify-between gap-4 border-b border-ink pb-3">
       <div className="flex flex-col gap-2">
@@ -118,7 +134,380 @@ function ColumnHead({ n, title, meta }: { n: string; title: string; meta?: React
   )
 }
 
-/* ───────────── 01 · Master calendar ───────────── */
+/* ───────────── Reusable Operations Workspace ───────────── */
+
+export interface OperationsWorkspaceProps {
+  eyebrow?: string
+  title?: string
+  hideHeader?: boolean
+}
+
+export function OperationsWorkspace({
+  eyebrow = '01 / MASTER CALENDAR · ALL-ROOMS MATRIX & APPROVAL',
+  title = 'Room schedule & occupancy',
+  hideHeader = false,
+}: OperationsWorkspaceProps = {}) {
+  const { rooms, bookings, blocks, settings, currentUser, notify } = useStore()
+  const { user, room: roomOf } = useLookups()
+
+  const firstPending = useMemo(
+    () => bookings.filter((b) => b.status === 'PENDING').sort((a, b) => +new Date(a.start) - +new Date(b.start))[0],
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [],
+  )
+
+  const [roomId, setRoomId] = useState<string>('ALL')
+  const [weekStart, setWeekStart] = useState(() => startOfWeek(firstPending ? new Date(firstPending.start) : new Date()))
+  const [selectedDay, setSelectedDay] = useState<Date>(() =>
+    getInitialWorkday(firstPending ? new Date(firstPending.start) : undefined),
+  )
+  const [calendarViewMode, setCalendarViewMode] = useState<'week' | 'matrix'>('week')
+  const [showApprovalBoard, setShowApprovalBoard] = useState(true)
+
+  const [review, setReview] = useState<{ id: string; el: HTMLElement } | null>(null)
+  const [jumpTo, setJumpTo] = useState<string | null>(firstPending?.id ?? null)
+  const [inspectedBlock, setInspectedBlock] = useState<RoomBlock | null>(null)
+
+  const [assignModalOpen, setAssignModalOpen] = useState(false)
+  const [assignInitial, setAssignInitial] = useState<AssignModalInitial | null>(null)
+
+  useEffect(() => {
+    if (rooms.length > 0 && roomId !== 'ALL' && !rooms.some((r) => r.id === roomId)) {
+      setRoomId('ALL')
+    }
+  }, [rooms, roomId])
+
+  const isAllRooms = roomId === 'ALL'
+  const room = isAllRooms ? rooms[0] : (rooms.find((r) => r.id === roomId) ?? rooms[0])
+  const pending = bookings.filter((b) => b.status === 'PENDING').sort((a, b) => +new Date(a.start) - +new Date(b.start))
+  const weekEnd = addDays(weekStart, 5) // 5 Workdays (Mon–Fri)
+  const pendingThisWeek = pending.filter(
+    (b) => (isAllRooms || b.roomId === room?.id) && new Date(b.start) >= weekStart && new Date(b.start) < weekEnd,
+  ).length
+
+  const handleOpenAssign = (initial?: AssignModalInitial) => {
+    setAssignInitial(
+      initial ?? {
+        roomId: room?.id ?? rooms[0]?.id ?? '',
+        date: selectedDay ?? new Date(),
+        startTime: '09:00',
+        endTime: '11:00',
+        mode: 'EVENT',
+      },
+    )
+    setAssignModalOpen(true)
+  }
+
+  // After jumping to a pending request, anchor the popover
+  useEffect(() => {
+    if (!jumpTo) return
+    const el = document.querySelector<HTMLElement>(`[data-booking-id="${jumpTo}"]`)
+    if (el) {
+      el.scrollIntoView({ block: 'center', behavior: 'smooth' })
+      setTimeout(() => setReview({ id: jumpTo, el }), 350)
+    }
+    setJumpTo(null)
+  }, [jumpTo, roomId, weekStart, calendarViewMode])
+
+  if (!room || !currentUser) return null
+  const reviewing = review ? bookings.find((b) => b.id === review.id) : undefined
+
+  return (
+    <section className="flex min-w-0 flex-col gap-5">
+      {/* Column Header & View Switcher */}
+      {!hideHeader && (
+        <ColumnHead
+          n={eyebrow}
+          title={title}
+          meta={
+            <div className="flex flex-wrap items-center gap-2">
+              {/* View Switcher */}
+              <div className="flex items-center rounded-[4px] border border-rule bg-ice p-0.5">
+                <button
+                  type="button"
+                  onClick={() => setCalendarViewMode('week')}
+                  className={cx(
+                    'flex items-center gap-1.5 rounded-[3px] px-3 py-1.5 font-mono text-[12px] font-semibold transition-all',
+                    calendarViewMode === 'week'
+                      ? 'border border-ink bg-paper text-ink shadow-xs'
+                      : 'text-steel hover:text-ink',
+                  )}
+                >
+                  <Calendar size={13} />
+                  Week Grid · By Room
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => setCalendarViewMode('matrix')}
+                  className={cx(
+                    'flex items-center gap-1.5 rounded-[3px] px-3 py-1.5 font-mono text-[12px] font-semibold transition-all',
+                    calendarViewMode === 'matrix'
+                      ? 'border border-ink bg-paper text-ink shadow-xs'
+                      : 'text-steel hover:text-ink',
+                  )}
+                >
+                  <LayoutGrid size={13} />
+                  Day Matrix · All Rooms
+                </button>
+              </div>
+
+              {/* Toggle Approval Board */}
+              <Button
+                variant={showApprovalBoard ? 'dark' : 'outline'}
+                size="sm"
+                onClick={() => setShowApprovalBoard((v) => !v)}
+                className="gap-1.5"
+              >
+                <span>Approval Board ({pending.length})</span>
+                {showApprovalBoard ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+              </Button>
+
+              {/* Primary Action */}
+              <Button
+                variant="accent"
+                size="sm"
+                onClick={() => handleOpenAssign({ roomId: isAllRooms ? rooms[0]?.id ?? '' : room.id, date: selectedDay })}
+                className="gap-1.5 shadow-xs"
+              >
+                <Plus size={14} strokeWidth={2.5} /> Assign Activity / Event
+              </Button>
+            </div>
+          }
+        />
+      )}
+
+      {/* Pending Requests Carousel */}
+      <PendingQueueCarousel
+        pending={pending}
+        roomOf={roomOf}
+        user={user}
+        reviewId={review?.id}
+        onSelectItem={(b) => {
+          if (!isAllRooms) {
+            setRoomId(b.roomId)
+          }
+          setWeekStart(startOfWeek(new Date(b.start)))
+          setSelectedDay(startOfDay(new Date(b.start)))
+          setReview(null)
+          setJumpTo(b.id)
+        }}
+      />
+
+      {/* Collapsible / Expandable Approval Board */}
+      {showApprovalBoard && (
+        <ApprovalBoard
+          pending={pending}
+          onInspect={(b) => {
+            if (!isAllRooms) {
+              setRoomId(b.roomId)
+            }
+            setWeekStart(startOfWeek(new Date(b.start)))
+            setSelectedDay(startOfDay(new Date(b.start)))
+            setReview(null)
+            setJumpTo(b.id)
+          }}
+        />
+      )}
+
+      {/* View Mode 1: Week Grid by Room */}
+      {calendarViewMode === 'week' ? (
+        <div>
+          <RoomTabs
+            rooms={rooms}
+            activeId={roomId}
+            onChange={(id) => {
+              setRoomId(id)
+              setReview(null)
+            }}
+            badge={(id) => pending.filter((b) => b.roomId === id).length}
+          />
+
+          <div className="rounded-lg rounded-tl-none border border-ink bg-paper">
+            {/* Week Navigation Toolbar */}
+            <div className="flex flex-wrap items-center justify-between gap-3 border-b border-rule px-4 py-3 bg-ice/30">
+              <div className="flex items-center gap-2">
+                <Button
+                  variant="outline"
+                  className="!rounded-md !p-1.5"
+                  aria-label="Previous week"
+                  onClick={() => {
+                    setReview(null)
+                    setWeekStart((w) => addDays(w, -7))
+                  }}
+                >
+                  <ChevronLeft size={16} />
+                </Button>
+
+                <Button
+                  variant="outline"
+                  className="!rounded-md !p-1.5"
+                  aria-label="Next week"
+                  onClick={() => {
+                    setReview(null)
+                    setWeekStart((w) => addDays(w, 7))
+                  }}
+                >
+                  <ChevronRight size={16} />
+                </Button>
+
+                <Button
+                  variant="ghost"
+                  size="xs"
+                  className="!rounded-md"
+                  onClick={() => {
+                    setReview(null)
+                    setWeekStart(startOfWeek(new Date()))
+                  }}
+                >
+                  This week
+                </Button>
+
+                <div className="ml-2 font-mono text-[13px] font-semibold text-ink">
+                  {fmtShort(weekStart)} — {fmtShort(addDays(weekStart, 4))} · MON–FRI
+                </div>
+
+                {pendingThisWeek > 0 && (
+                  <Tag className="ml-1 !border-dashed !border-plum !bg-plum/10 !text-plum">
+                    {pendingThisWeek} TO REVIEW
+                  </Tag>
+                )}
+              </div>
+
+              {/* Legend with Multi-Room Colors & Statuses */}
+              <div className="flex flex-wrap items-center gap-3 text-[11px] text-graphite font-mono">
+                {isAllRooms && (
+                  <>
+                    <div className="flex items-center gap-1.5">
+                      <span className="h-2.5 w-2.5 rounded-full bg-blue-600 shrink-0" />
+                      <span className="font-semibold text-ink">RM 601</span>
+                    </div>
+                    <div className="flex items-center gap-1.5">
+                      <span className="h-2.5 w-2.5 rounded-full bg-emerald-600 shrink-0" />
+                      <span className="font-semibold text-ink">RM 602</span>
+                    </div>
+                    <div className="flex items-center gap-1.5">
+                      <span className="h-2.5 w-2.5 rounded-full bg-violet-600 shrink-0" />
+                      <span className="font-semibold text-ink">RM 605</span>
+                    </div>
+                    <span className="text-rule">|</span>
+                  </>
+                )}
+                <Legend swatch="border border-ink bg-ink" label="Approved" />
+                <Legend swatch="border border-dashed border-plum bg-plum/[0.08]" label="Pending" />
+                <Legend swatch="border-2 border-accent bg-paper" label="Scheduled Event" />
+                <Legend swatch="hatch-slate border border-ink" label="Room block" />
+              </div>
+            </div>
+
+            {/* Calendar Canvas */}
+            <div className="scrollbar-thin overflow-x-auto">
+              <div className="min-w-[860px]">
+                <WeekCalendar
+                  mode="manager"
+                  room={room}
+                  weekStart={weekStart}
+                  bookings={bookings}
+                  blocks={blocks}
+                  settings={settings}
+                  currentUserId={currentUser.id}
+                  selection={null}
+                  onSelect={(s) => {
+                    // Open Assign Modal prefilled with exact room and time window
+                    const sh = String(s.start.getHours()).padStart(2, '0')
+                    const sm = String(s.start.getMinutes()).padStart(2, '0')
+                    const eh = String(s.end.getHours()).padStart(2, '0')
+                    const em = String(s.end.getMinutes()).padStart(2, '0')
+                    handleOpenAssign({
+                      roomId: isAllRooms ? rooms[0]?.id ?? '' : room.id,
+                      date: s.start,
+                      startTime: `${sh}:${sm}`,
+                      endTime: `${eh}:${em}`,
+                      mode: 'EVENT',
+                    })
+                  }}
+                  onReject={(m) => notify(m, 'error')}
+                  who={(id) => {
+                    const u = user(id)
+                    return u ? { name: u.fullName, code: u.studentCode } : undefined
+                  }}
+                  onEventClick={(b, el) => setReview(review?.id === b.id ? null : { id: b.id, el })}
+                  onBlockClick={(blk) => setInspectedBlock(blk)}
+                  activeId={review?.id}
+                  allRooms={isAllRooms}
+                  rooms={rooms}
+                />
+              </div>
+            </div>
+
+            {/* Bottom Comfort Notice */}
+            <div className="flex items-center justify-between border-t border-rule px-4 py-2.5 font-mono text-[11px] text-steel">
+              <div className="flex items-center gap-2">
+                <span className="h-2 w-2 rounded-full bg-accent" />
+                DRAG OR CLICK ANY OPEN HOUR SLOT TO ASSIGN ROOM ACTIVITY · CLICK ANY BLOCK OR EVENT TO INSPECT / MANAGE
+              </div>
+              <button
+                type="button"
+                onClick={() => setCalendarViewMode('matrix')}
+                className="font-bold text-accent hover:underline"
+              >
+                Switch to All-Rooms Day Matrix →
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : (
+        /* View Mode 2: Day Matrix Across All Rooms */
+        <DayMatrixView
+          selectedDay={selectedDay}
+          onChangeDay={setSelectedDay}
+          onAssignSlot={(init) => handleOpenAssign(init)}
+          onBookingClick={(b, el) => setReview(review?.id === b.id ? null : { id: b.id, el })}
+          onBlockClick={(blk) => setInspectedBlock(blk)}
+        />
+      )}
+
+      {/* Review & Details Popover anchored to calendar/matrix block */}
+      {review && reviewing && (
+        <ReviewPopover
+          booking={reviewing}
+          anchor={review.el}
+          onClose={() => setReview(null)}
+          onSwitchBooking={(nextId) => {
+            const nextEl = document.querySelector<HTMLElement>(`[data-booking-id="${nextId}"]`)
+            setReview({ id: nextId, el: nextEl ?? review.el })
+          }}
+        />
+      )}
+
+      {/* Block Inspector Modal */}
+      {inspectedBlock && (
+        <BlockInspectorModal
+          block={inspectedBlock}
+          onClose={() => setInspectedBlock(null)}
+        />
+      )}
+
+      {/* Global Assign Activity Modal */}
+      <AssignActivityModal
+        isOpen={assignModalOpen}
+        initial={assignInitial}
+        onClose={() => setAssignModalOpen(false)}
+      />
+    </section>
+  )
+}
+
+function Legend({ swatch, label }: { swatch: string; label: string }) {
+  return (
+    <span className="flex items-center gap-1.5">
+      <span className={cx('h-3 w-3 rounded-[1px]', swatch)} />
+      {label}
+    </span>
+  )
+}
+
+/* ───────────── Pending Queue Carousel ───────────── */
 
 interface PendingQueueCarouselProps {
   pending: Booking[]
@@ -283,7 +672,7 @@ function PendingQueueCarousel({
       >
         {pending.length === 0 && (
           <span className="inline-flex items-center rounded-[4px] border border-[#E0E0E0] bg-[#F4F5F7] px-3.5 py-2 font-mono text-[11px] text-steel select-none">
-            QUEUE CLEAR
+            QUEUE CLEAR · ALL REQUESTS PROCESSED
           </span>
         )}
         {pending.map((b) => {
@@ -339,152 +728,52 @@ function PendingQueueCarousel({
   )
 }
 
-function MasterCalendar() {
-  const { rooms, bookings, blocks, settings, currentUser, notify } = useStore()
-  const { user, room: roomOf } = useLookups()
-  const firstPending = useMemo(
-    () => bookings.filter((b) => b.status === 'PENDING').sort((a, b) => +new Date(a.start) - +new Date(b.start))[0],
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [],
-  )
-  const [roomId, setRoomId] = useState(firstPending?.roomId ?? rooms[0]?.id ?? '')
-  const [weekStart, setWeekStart] = useState(() => startOfWeek(firstPending ? new Date(firstPending.start) : new Date()))
-  const [review, setReview] = useState<{ id: string; el: HTMLElement } | null>(null)
-  // Open the review popover on the earliest pending request when the desk loads
-  const [jumpTo, setJumpTo] = useState<string | null>(firstPending?.id ?? null)
-  const room = rooms.find((r) => r.id === roomId) ?? rooms[0]
+/* ───────────── Anchored Review Popover ───────────── */
 
-  const pending = bookings.filter((b) => b.status === 'PENDING').sort((a, b) => +new Date(a.start) - +new Date(b.start))
-  const weekEnd = addDays(weekStart, 7)
-  const pendingThisWeek = pending.filter((b) => b.roomId === room?.id && new Date(b.start) >= weekStart && new Date(b.start) < weekEnd).length
-
-  // After jumping to a pending request from the index, anchor the popover to its block.
-  useEffect(() => {
-    if (!jumpTo) return
-    const el = document.querySelector<HTMLElement>(`[data-booking-id="${jumpTo}"]`)
-    if (el) {
-      el.scrollIntoView({ block: 'center', behavior: 'smooth' })
-      setTimeout(() => setReview({ id: jumpTo, el }), 350)
-    }
-    setJumpTo(null)
-  }, [jumpTo, roomId, weekStart])
-
-  if (!room || !currentUser) return null
-  const reviewing = review ? bookings.find((b) => b.id === review.id) : undefined
-
-  return (
-    <section className="flex min-w-0 flex-col gap-4">
-      <ColumnHead
-        n="01 / MASTER CALENDAR · APPROVAL QUEUE"
-        title="Room schedule"
-        meta={<span className="font-mono text-[12px] text-steel">{pending.length} PENDING · CLICK A PEND BLOCK TO REVIEW</span>}
-      />
-
-      {/* Pending index */}
-      <PendingQueueCarousel
-        pending={pending}
-        roomOf={roomOf}
-        user={user}
-        reviewId={review?.id}
-        onSelectItem={(b) => {
-          setRoomId(b.roomId)
-          setWeekStart(startOfWeek(new Date(b.start)))
-          setReview(null)
-          setJumpTo(b.id)
-        }}
-      />
-
-      <div>
-        <RoomTabs
-          rooms={rooms}
-          activeId={room.id}
-          onChange={(id) => {
-            setRoomId(id)
-            setReview(null)
-          }}
-          badge={(id) => pending.filter((b) => b.roomId === id).length}
-        />
-        <div className="rounded-lg rounded-tl-none border border-ink bg-paper">
-          <div className="flex flex-wrap items-center justify-between gap-3 border-b border-rule px-4 py-3">
-            <div className="flex items-center gap-2">
-              <Button variant="outline" className="!rounded-md !p-1.5" aria-label="Previous week" onClick={() => (setReview(null), setWeekStart((w) => addDays(w, -7)))}>
-                <ChevronLeft size={16} />
-              </Button>
-              <Button variant="outline" className="!rounded-md !p-1.5" aria-label="Next week" onClick={() => (setReview(null), setWeekStart((w) => addDays(w, 7)))}>
-                <ChevronRight size={16} />
-              </Button>
-              <Button variant="ghost" size="xs" className="!rounded-md" onClick={() => (setReview(null), setWeekStart(startOfWeek(new Date())))}>
-                This week
-              </Button>
-              <div className="ml-2 font-mono text-[13px] font-semibold text-ink">
-                {fmtShort(weekStart)} — {fmtShort(addDays(weekStart, 6))}
-              </div>
-              {pendingThisWeek > 0 && <Tag className="ml-1 !border-dashed !border-ink">{pendingThisWeek} TO REVIEW</Tag>}
-            </div>
-            <div className="flex flex-wrap items-center gap-3 text-[11px] text-graphite">
-              <Legend swatch="border border-dashed border-ink bg-paper" label="Pending" />
-              <Legend swatch="border border-ink bg-ink" label="Approved" />
-              <Legend swatch="border border-accent bg-accent" label="Key out" />
-              <Legend swatch="hatch-slate border border-ink" label="Event block" />
-            </div>
-          </div>
-          <div className="scrollbar-thin overflow-x-auto">
-            <div className="min-w-[820px]">
-              <WeekCalendar
-                mode="manager"
-                room={room}
-                weekStart={weekStart}
-                bookings={bookings}
-                blocks={blocks}
-                settings={settings}
-                currentUserId={currentUser.id}
-                selection={null}
-                onSelect={() => {}}
-                onReject={(m) => notify(m, 'error')}
-                who={(id) => {
-                  const u = user(id)
-                  return u ? { name: u.fullName, code: u.studentCode } : undefined
-                }}
-                onEventClick={(b, el) => setReview(review?.id === b.id ? null : { id: b.id, el })}
-                activeId={review?.id}
-              />
-            </div>
-          </div>
-          <div className="flex items-center gap-2 border-t border-rule px-4 py-2.5 font-mono text-[11px] text-steel">
-            <span className="h-2 w-2 border border-dashed border-ink bg-ice" />
-            VIEW-ONLY SCHEDULE · CLICK A DASHED PENDING BLOCK TO REVIEW &amp; APPROVE · ROOM BLOCKS ARE CREATED IN 03 BELOW
-          </div>
-        </div>
-      </div>
-
-      {review && reviewing && <ReviewPopover booking={reviewing} anchor={review.el} onClose={() => setReview(null)} />}
-    </section>
-  )
-}
-
-function Legend({ swatch, label }: { swatch: string; label: string }) {
-  return (
-    <span className="flex items-center gap-1.5">
-      <span className={cx('h-3 w-3 rounded-[1px]', swatch)} />
-      {label}
-    </span>
-  )
-}
-
-/* Popover anchored to a calendar block */
-function ReviewPopover({ booking: b, anchor, onClose }: { booking: Booking; anchor: HTMLElement; onClose: () => void }) {
-  const { approveBooking, rejectBooking, bookings, blocks } = useStore()
+function ReviewPopover({
+  booking: b,
+  anchor,
+  onClose,
+  onSwitchBooking,
+}: {
+  booking: Booking
+  anchor: HTMLElement
+  onClose: () => void
+  onSwitchBooking?: (id: string) => void
+}) {
+  const { approveBooking, rejectBooking, cancelBooking, bookings, blocks, notify } = useStore()
   const { user, room } = useLookups()
   const ref = useRef<HTMLDivElement>(null)
   const [pos, setPos] = useState<{ top: number; left: number; side: 'left' | 'right'; arrowTop: number } | null>(null)
   const [note, setNote] = useState('')
   const [error, setError] = useState<string | null>(null)
+
   const u = user(b.userId)
   const r = room(b.roomId)
   const isPending = b.status === 'PENDING'
+  const isEvent = isOfficialEvent(b)
+  const badgeInfo = extractEventBadge(b.title)
+
+  // Find all competing PENDING bookings in the same room that overlap [b.start, b.end]
+  const competingGroup = useMemo(() => {
+    if (b.status !== 'PENDING') return []
+    return bookings.filter(
+      (other) =>
+        other.roomId === b.roomId &&
+        other.status === 'PENDING' &&
+        overlaps(new Date(other.start), new Date(other.end), new Date(b.start), new Date(b.end)),
+    )
+  }, [bookings, b.roomId, b.status, b.start, b.end])
+
   const conflict =
-    bookings.some((x) => x.id !== b.id && x.roomId === b.roomId && ['APPROVED', 'KEY_CHECKED_OUT'].includes(x.status) && overlaps(x.start, x.end, b.start, b.end)) ||
-    blocks.some((k) => k.active && k.roomId === b.roomId && overlaps(k.start, k.end, b.start, b.end))
+    bookings.some(
+      (x) =>
+        x.id !== b.id &&
+        x.roomId === b.roomId &&
+        ['APPROVED', 'KEY_CHECKED_OUT'].includes(x.status) &&
+        overlaps(new Date(x.start), new Date(x.end), new Date(b.start), new Date(b.end)),
+    ) ||
+    blocks.some((k) => k.active && k.roomId === b.roomId && overlaps(new Date(k.start), new Date(k.end), new Date(b.start), new Date(b.end)))
 
   useEffect(() => {
     setNote('')
@@ -495,8 +784,8 @@ function ReviewPopover({ booking: b, anchor, onClose }: { booking: Booking; anch
     const place = () => {
       if (!anchor.isConnected) return onClose()
       const a = anchor.getBoundingClientRect()
-      const w = 360
-      const h = ref.current?.offsetHeight ?? 420
+      const w = 380
+      const h = ref.current?.offsetHeight ?? 440
       const gap = 10
       const side: 'left' | 'right' = a.right + gap + w <= window.innerWidth - 12 ? 'right' : 'left'
       const left = side === 'right' ? a.right + gap : Math.max(12, a.left - gap - w)
@@ -507,7 +796,6 @@ function ReviewPopover({ booking: b, anchor, onClose }: { booking: Booking; anch
     place()
     window.addEventListener('scroll', place, true)
     window.addEventListener('resize', place)
-    // re-anchor after any reveal transition settles the block's final position
     window.addEventListener('transitionend', place, true)
     return () => {
       window.removeEventListener('scroll', place, true)
@@ -532,94 +820,200 @@ function ReviewPopover({ booking: b, anchor, onClose }: { booking: Booking; anch
     }
   }, [anchor, onClose])
 
-  // Portalled so ancestor reveal transforms never offset this fixed popover
   return createPortal(
     <div
       ref={ref}
       role="dialog"
       aria-label={`Review booking ${b.id}`}
-      className="fixed z-50 w-[360px] rounded-lg border border-ink bg-paper shadow-nav"
+      className="fixed z-50 w-[380px] rounded-lg border border-ink bg-paper shadow-nav"
       style={{ top: pos?.top ?? -9999, left: pos?.left ?? -9999 }}
     >
       {pos && (
         <span
-          className={cx('absolute h-3 w-3 rotate-45 border-ink bg-paper', pos.side === 'right' ? '-left-[7px] border-b border-l' : '-right-[7px] border-t border-r')}
+          className={cx(
+            'absolute h-3 w-3 rotate-45 border-ink bg-paper',
+            pos.side === 'right' ? '-left-[7px] border-b border-l' : '-right-[7px] border-t border-r',
+          )}
           style={{ top: pos.arrowTop }}
         />
       )}
+
+      {/* Header */}
       <div className="flex items-start justify-between gap-3 border-b border-rule px-5 pt-4 pb-3">
         <div className="flex min-w-0 flex-col gap-1.5">
           <div className="flex items-center gap-2">
-            <Eyebrow className="!text-[12px]">REVIEW · {b.id}</Eyebrow>
+            <Eyebrow className="!text-[12px]">
+              {isEvent ? 'OFFICIAL SCHEDULE · ' : 'REVIEW · '}
+              {b.id}
+            </Eyebrow>
+            {isEvent && (
+              <span className="rounded-[2px] bg-accent px-1.5 py-0.2 font-mono text-[10px] font-bold text-paper">
+                {badgeInfo?.tag ?? 'EVENT'}
+              </span>
+            )}
           </div>
-          <div className="font-display text-feature leading-tight font-w450 text-ink">{b.title}</div>
+          <div className="font-display text-feature leading-tight font-w450 text-ink">
+            {badgeInfo?.cleanTitle || b.title}
+          </div>
         </div>
-        <button onClick={onClose} aria-label="Close" className="-mr-1.5 rounded-md p-1 text-steel hover:bg-ice hover:text-ink">
+        <button
+          onClick={onClose}
+          aria-label="Close"
+          className="-mr-1.5 rounded-md p-1 text-steel hover:bg-ice hover:text-ink"
+        >
           <X size={16} strokeWidth={1.5} />
         </button>
       </div>
 
+      {/* Competing Requests Switcher & Notice */}
+      {competingGroup.length > 1 && (
+        <div className="border-b border-rule bg-plum/[0.04] p-3.5">
+          <div className="flex items-center justify-between">
+            <span className="flex items-center gap-1.5 font-mono text-[11px] font-bold text-plum">
+              <span>⚡</span> {competingGroup.length} COMPETING REQUESTS FOR THIS WINDOW
+            </span>
+            <span className="font-mono text-[9px] text-steel">CLICK TO SWITCH</span>
+          </div>
+
+          <p className="mt-1 font-sans text-[11px] leading-tight text-graphite">
+            Approving this request will automatically decline the other {competingGroup.length - 1} overlapping pending request(s).
+          </p>
+
+          <div className="mt-2 flex flex-col gap-1.5">
+            {competingGroup.map((other) => {
+              const isCurrent = other.id === b.id
+              const otherUser = user(other.userId)
+              return (
+                <button
+                  key={other.id}
+                  type="button"
+                  onClick={() => {
+                    if (!isCurrent) onSwitchBooking?.(other.id)
+                  }}
+                  className={cx(
+                    'flex items-center justify-between gap-2 rounded-[3px] px-2.5 py-1.5 text-left text-[11px] transition-colors',
+                    isCurrent
+                      ? 'border border-ink bg-ink text-paper font-semibold shadow-xs'
+                      : 'border border-rule bg-paper text-ink hover:border-accent hover:bg-tint/30',
+                  )}
+                >
+                  <div className="flex items-center gap-2 truncate">
+                    <span className={cx('font-mono font-bold', isCurrent ? 'text-tint' : 'text-accent')}>
+                      {otherUser?.studentCode ?? '—'}
+                    </span>
+                    <span className="truncate">{otherUser?.fullName}</span>
+                  </div>
+
+                  <div className="flex items-center gap-2 shrink-0 font-mono text-[10px]">
+                    <span>{fmtRange(other.start, other.end)}</span>
+                    {isCurrent && (
+                      <span className="rounded-[2px] bg-paper px-1 font-mono text-[9px] font-bold text-ink">
+                        CURRENT
+                      </span>
+                    )}
+                  </div>
+                </button>
+              )
+            })}
+          </div>
+        </div>
+      )}
+
+      {/* Body */}
       <div className="flex flex-col gap-3 px-5 py-4">
         <div className="flex flex-wrap items-center gap-2">
           <StatusChip status={b.status} />
-          <span className="font-mono text-[12px] font-semibold">RM {r?.code}</span>
+          <span className="font-mono text-[12px] font-bold">RM {r?.code}</span>
           <span className="font-mono text-[12px] text-graphite">
             {fmtDate(b.start)} · {fmtRange(b.start, b.end)} · {fmtDuration(durationMin(b.start, b.end))}
           </span>
           {conflict && isPending && <Tag tone="plum">CONFLICT</Tag>}
         </div>
 
+        {/* Credentials / Organizer */}
         <div className="grid grid-cols-[1fr_auto] items-end gap-3 border border-rule bg-ice px-3 py-2.5">
           <div className="min-w-0">
-            <div className="font-mono text-[10px] text-steel">STUDENT</div>
+            <div className="font-mono text-[10px] text-steel">
+              {isEvent ? 'ORGANIZER / STUDENT' : 'STUDENT'}
+            </div>
             <div className="truncate text-[15px] font-semibold text-ink">{u?.fullName}</div>
           </div>
           <div className="text-right">
             <div className="font-mono text-[10px] text-steel">STUDENT ID</div>
             <div className="font-mono text-[14px] font-semibold text-meta">{u?.studentCode ?? '—'}</div>
           </div>
-          <div className="col-span-2 flex flex-col gap-1 border-t border-dashed border-edge pt-2 text-[12px] text-graphite">
-            <span className="flex items-center gap-2">
-              <Phone size={12} className="text-steel" />
-              <span className="font-mono font-semibold text-ink">{b.phone}</span>
-            </span>
-            <span className="flex min-w-0 items-center gap-2">
-              <Mail size={12} className="shrink-0 text-steel" />
-              <span className="truncate">{u?.email}</span>
-            </span>
-          </div>
+          {b.phone && (
+            <div className="col-span-2 flex flex-col gap-1 border-t border-dashed border-edge pt-2 text-[12px] text-graphite">
+              <span className="flex items-center gap-2">
+                <Phone size={12} className="text-steel" />
+                <span className="font-mono font-semibold text-ink">{b.phone}</span>
+              </span>
+            </div>
+          )}
         </div>
 
+        {/* Purpose */}
         <div>
-          <div className="font-mono text-[10px] text-steel">PURPOSE</div>
+          <div className="font-mono text-[10px] text-steel">PURPOSE / SESSION NOTES</div>
           <p className="mt-0.5 text-[13px] leading-[1.5] text-graphite">{b.purpose}</p>
         </div>
 
+        {/* Review Note & Quick Chips */}
         {isPending ? (
-          <Field label="Review note / comment" hint="required to reject" error={error}>
-            <Textarea
-              rows={2}
-              value={note}
-              onChange={(e) => {
-                setNote(e.target.value)
-                setError(null)
-              }}
-              placeholder="Review note / comment — optional to approve, required to reject"
-              className="!rounded-none text-[13px]"
-            />
-          </Field>
+          <div className="flex flex-col gap-2">
+            <Field label="Review Note / Rejection Reason" hint="Optional to approve, required to reject" error={error}>
+              <Textarea
+                rows={2}
+                value={note}
+                onChange={(e) => {
+                  setNote(e.target.value)
+                  setError(null)
+                }}
+                placeholder="Select a quick reason below or type custom note..."
+                className="!rounded-none text-[12px]"
+              />
+            </Field>
+
+            {/* Quick-Reject Reason Chips */}
+            <div className="flex flex-col gap-1">
+              <span className="font-mono text-[10px] font-semibold text-steel uppercase">
+                1-Click Preset Rejection Reasons:
+              </span>
+              <div className="flex flex-wrap gap-1">
+                {QUICK_REJECT_REASONS.map((reason) => (
+                  <button
+                    key={reason}
+                    type="button"
+                    onClick={() => {
+                      setNote(reason)
+                      setError(null)
+                    }}
+                    className={cx(
+                      'rounded-[2px] border px-1.5 py-0.5 text-left font-mono text-[10px] transition-colors',
+                      note === reason
+                        ? 'border-plum bg-plum text-paper font-semibold'
+                        : 'border-rule bg-ice text-graphite hover:border-plum',
+                    )}
+                  >
+                    {reason}
+                  </button>
+                ))}
+              </div>
+            </div>
+          </div>
         ) : (
           b.note && (
-            <div className="border-l-2 border-accent bg-ice px-2 py-1 text-[12px] text-graphite">
-              <span className="font-mono text-[10px] font-semibold">NOTE · </span>
+            <div className="border-l-2 border-accent bg-ice px-2.5 py-1.5 text-[12px] text-graphite">
+              <span className="font-mono text-[10px] font-bold">DESK NOTE · </span>
               {b.note}
             </div>
           )
         )}
       </div>
 
+      {/* Footer Actions */}
       {isPending ? (
-        <div className="grid grid-cols-2 gap-2 border-t border-rule px-5 py-3">
+        <div className="grid grid-cols-2 gap-2 border-t border-rule px-5 py-3 bg-ice/40">
           <Button
             variant="outline"
             className="hover:!bg-plum hover:!text-paper hover:!shadow-none"
@@ -631,251 +1025,48 @@ function ReviewPopover({ booking: b, anchor, onClose }: { booking: Booking; anch
           >
             <X size={14} /> Reject
           </Button>
+
           <Button
+            variant="dark"
             onClick={() => {
               approveBooking(b.id, note)
               onClose()
             }}
           >
-            <Check size={14} /> Approve
+            <Check size={14} />{' '}
+            {competingGroup.length > 1
+              ? `Approve & Decline ${competingGroup.length - 1} Other${competingGroup.length - 1 > 1 ? 's' : ''}`
+              : 'Approve Now'}
           </Button>
         </div>
       ) : (
-        <div className="flex items-center justify-between gap-2 border-t border-rule px-5 py-3">
-          <span className="font-mono text-[11px] text-steel">{b.status === 'APPROVED' || b.status === 'KEY_CHECKED_OUT' ? 'MANAGE KEY IN TRACKER →' : 'READ-ONLY ENTRY'}</span>
+        <div className="flex items-center justify-between gap-2 border-t border-rule px-5 py-3 bg-ice/40">
+          {/* Allow manager/admin to cancel official scheduled events */}
+          {isEvent && (b.status === 'APPROVED' || b.status === 'PENDING') ? (
+            <Button
+              variant="plum"
+              size="xs"
+              onClick={() => {
+                cancelBooking(b.id)
+                notify('Scheduled event cancelled. Slots released.')
+                onClose()
+              }}
+              className="gap-1"
+            >
+              <Ban size={12} /> Cancel Event
+            </Button>
+          ) : (
+            <span className="font-mono text-[11px] text-steel">
+              {b.status === 'APPROVED' ? 'APPROVED RESERVATION' : 'ENTRY RECORD'}
+            </span>
+          )}
+
           <Button variant="outline" size="xs" onClick={onClose}>
             Close
           </Button>
         </div>
       )}
-    </div>
-    ,
+    </div>,
     document.body,
-  )
-}
-
-/* ───────────── 02 · Key tracker ───────────── */
-
-function KeyTracker({ today, now }: { today: Booking[]; now: Date }) {
-  const { checkoutKey, returnKey } = useStore()
-  const { user, room } = useLookups()
-  const [q, setQ] = useState('')
-  const list = useMemo(() => {
-    const s = q.trim().toUpperCase()
-    return today
-      .filter((b) => {
-        if (!s) return true
-        const u = user(b.userId)
-        return u?.studentCode?.includes(s) || u?.fullName.toUpperCase().includes(s)
-      })
-      .sort((a, b) => {
-        const rank = (x: Booking) => (x.status === 'KEY_CHECKED_OUT' && new Date(x.end) < now ? 0 : x.status === 'COMPLETED' ? 2 : 1)
-        return rank(a) - rank(b) || +new Date(a.start) - +new Date(b.start)
-      })
-  }, [today, q, user, now])
-
-  return (
-    <section id="tracker" className="flex min-w-0 scroll-mt-24 flex-col gap-4">
-      <ColumnHead
-        n="02 / TODAY'S KEY TRACKER"
-        title="Key custody"
-        meta={
-          <span className="flex items-center gap-2 font-mono text-[12px] text-accent">
-            <span className="h-1.5 w-1.5 animate-pulse bg-accent" /> LIVE · {fmtTime(now)}
-          </span>
-        }
-      />
-      <div className="relative">
-        <Search size={15} className="pointer-events-none absolute top-1/2 left-3 -translate-y-1/2 text-steel" />
-        <Input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search by Student ID or Student Name — e.g. SE184022" className="pl-9" />
-      </div>
-      <div className="overflow-hidden rounded-lg border border-edge">
-        <div className="grid grid-cols-[76px_1fr] border-b border-ink bg-ice font-mono text-[11px] font-semibold text-steel">
-          <span className="border-r border-rule px-3 py-2">TIME</span>
-          <span className="px-4 py-2">STUDENT · STATUS · KEY</span>
-        </div>
-        {list.length === 0 ? (
-          <div className="p-4">
-            <EmptyState title="NO MATCH" body="No bookings today match this search." />
-          </div>
-        ) : (
-          list.map((b) => {
-            const u = user(b.userId)
-            const late = b.status === 'KEY_CHECKED_OUT' && new Date(b.end) < now
-            return (
-              <div key={b.id} className={cx('grid grid-cols-[76px_1fr] border-b border-rule last:border-0', late && 'bg-plum/[0.05]', b.status === 'COMPLETED' && 'bg-ice/50')}>
-                <div className={cx('flex flex-col gap-0.5 border-r px-3 py-3', late ? 'border-l-[3px] border-plum' : 'border-rule')}>
-                  <span className="font-mono text-[14px] font-semibold">{fmtTime(b.start)}</span>
-                  <span className="font-mono text-[11px] text-steel">→ {fmtTime(b.end)}</span>
-                  <span className="mt-1 font-mono text-[11px] font-semibold text-meta">RM {room(b.roomId)?.code}</span>
-                </div>
-                <div className="flex min-w-0 flex-col gap-2 px-4 py-3">
-                  <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
-                    <span className="text-[14px] font-medium">{u?.fullName}</span>
-                    <span className="font-mono text-[12px] font-semibold text-graphite">{u?.studentCode}</span>
-                    <StatusChip status={b.status} className="ml-auto" />
-                  </div>
-                  {(late || (b.status === 'COMPLETED' && b.returnedAt) || (b.status === 'KEY_CHECKED_OUT' && b.checkedOutAt)) && (
-                    <div className="flex flex-wrap gap-3 font-mono text-[11px]">
-                      {b.status === 'KEY_CHECKED_OUT' && b.checkedOutAt && <span className="text-steel">OUT {fmtTime(b.checkedOutAt)}</span>}
-                      {late && <span className="font-semibold text-plum">OVERDUE +{fmtDuration(Math.round((+now - +new Date(b.end)) / 60000))}</span>}
-                      {b.status === 'COMPLETED' && b.returnedAt && <span className="text-steel">RETURNED {fmtTime(b.returnedAt)}</span>}
-                    </div>
-                  )}
-                  <div className="flex flex-wrap gap-2">
-                    <Button size="xs" variant={b.status === 'APPROVED' ? 'dark' : 'outline'} disabled={b.status !== 'APPROVED'} onClick={() => checkoutKey(b.id)}>
-                      <KeyRound size={12} /> Checkout key
-                    </Button>
-                    <Button
-                      size="xs"
-                      variant={b.status === 'KEY_CHECKED_OUT' ? (late ? 'dark' : 'accent') : 'outline'}
-                      className={late ? '!border-plum !bg-plum' : ''}
-                      disabled={b.status !== 'KEY_CHECKED_OUT'}
-                      onClick={() => returnKey(b.id)}
-                    >
-                      <Undo2 size={12} /> Return key
-                    </Button>
-                  </div>
-                </div>
-              </div>
-            )
-          })
-        )}
-      </div>
-      <p className="font-mono text-[11px] leading-[1.5] text-steel">VERIFY THE PHYSICAL STUDENT ID CARD BEFORE ISSUING ANY KEY.</p>
-    </section>
-  )
-}
-
-/* ───────────── 03 · Room blocks ───────────── */
-
-function BlockPanel({ activeCount }: { activeCount: number }) {
-  const { rooms, blocks, bookings, createBlock, cancelBlock } = useStore()
-  const { room, user } = useLookups()
-  const tomorrow = addDays(startOfDay(new Date()), 1)
-  const [form, setForm] = useState(() => ({
-    roomId: rooms[0]?.id ?? '',
-    start: toLocalInput(new Date(tomorrow.getTime() + 9 * 3600000)),
-    end: toLocalInput(new Date(tomorrow.getTime() + 12 * 3600000)),
-    reason: '',
-  }))
-  const [error, setError] = useState<string | null>(null)
-
-
-  const s = new Date(form.start)
-  const e = new Date(form.end)
-  const valid = !isNaN(+s) && !isNaN(+e) && e > s
-  const displaced = valid ? bookings.filter((b) => b.roomId === form.roomId && (b.status === 'PENDING' || b.status === 'APPROVED') && overlaps(b.start, b.end, s, e)) : []
-  const sorted = [...blocks].sort((a, b) => Number(b.active) - Number(a.active) || +new Date(a.start) - +new Date(b.start))
-
-  return (
-    <section id="blocks" className="mt-16 scroll-mt-24">
-      <ColumnHead n="03 / ROOM BLOCKS" title="Room blocks & university event priority" meta={<span className="font-mono text-[12px] text-steel">{activeCount} ACTIVE BLOCKS</span>} />
-      <Reveal stagger className="mt-6 grid gap-6 lg:grid-cols-[440px_1fr]">
-        <form
-          className="flex flex-col gap-4 rounded-lg bg-ink p-6 text-paper"
-          onSubmit={(ev) => {
-            ev.preventDefault()
-            if (!valid) return setError('Enter a valid start and end.')
-            const err = createBlock({ roomId: form.roomId, start: s, end: e, reason: form.reason })
-            setError(err)
-            if (!err) {
-              setForm((f) => ({ ...f, reason: '' }))
-            }
-          }}
-        >
-          <div className="flex items-center justify-between gap-3">
-            <Eyebrow tone="paper">NEW BLOCK · OVERRIDES STUDENT BOOKINGS</Eyebrow>
-          </div>
-          <h3 className="font-display text-feature font-w450">
-            <SplitText text="Reserve a room for a university event" />
-          </h3>
-          <div>
-            <div className="mb-1.5 font-mono text-[12px] font-semibold text-white/70 uppercase">Room</div>
-            <div className="grid grid-cols-3 gap-1 rounded-md border border-white/20 p-1">
-              {rooms.map((r) => (
-                <button
-                  type="button"
-                  key={r.id}
-                  onClick={() => setForm((f) => ({ ...f, roomId: r.id }))}
-                  className={cx('rounded-sm py-1.5 font-mono text-[13px] font-semibold transition-colors', form.roomId === r.id ? 'bg-accent text-paper' : 'text-white/80 hover:bg-white/10')}
-                >
-                  {r.code}
-                </button>
-              ))}
-            </div>
-          </div>
-          <div className="grid gap-3 sm:grid-cols-2 [&_label>span_span]:!text-white/70">
-            <Field label="Start · date & time">
-              <Input type="datetime-local" step={1800} value={form.start} onChange={(ev) => setForm((f) => ({ ...f, start: ev.target.value }))} className="border-transparent font-mono !text-[13px]" />
-            </Field>
-            <Field label="End · date & time">
-              <Input type="datetime-local" step={1800} value={form.end} onChange={(ev) => setForm((f) => ({ ...f, end: ev.target.value }))} className="border-transparent font-mono !text-[13px]" />
-            </Field>
-          </div>
-          <div className="font-mono text-[12px] text-white/70">LENGTH · <span className="font-semibold text-paper">{valid ? fmtDuration(durationMin(s, e)) : '—'}</span></div>
-          <Field label="Event reason" className="[&_label>span_span]:!text-white/70 [&>span_span]:!text-white/70">
-            <Input value={form.reason} onChange={(ev) => setForm((f) => ({ ...f, reason: ev.target.value }))} placeholder="e.g. Graduation rehearsal" className="border-transparent" />
-          </Field>
-          {displaced.length > 0 && (
-            <div className="flex gap-2 border border-white/25 px-3 py-2 text-[12px] leading-[1.5] text-white/85">
-              <TriangleAlert size={14} className="mt-0.5 shrink-0 text-tint" />
-              <span>
-                Event priority will displace <b className="font-semibold text-paper">{displaced.length}</b> booking(s):{' '}
-                {displaced.map((d) => `${user(d.userId)?.studentCode} ${fmtRange(d.start, d.end)}`).join(', ')}
-              </span>
-            </div>
-          )}
-          {error && <div className="bg-paper px-3 py-2 text-[13px] font-medium text-plum">{error}</div>}
-          <Button type="submit" size="md" variant="tint" className="mt-1">
-            <Ban size={15} /> Block room {room(form.roomId)?.code} <ArrowRight size={15} />
-          </Button>
-        </form>
-
-        <div className="self-start overflow-hidden rounded-lg border border-edge">
-          <div className="grid grid-cols-[70px_1fr_170px_110px] gap-3 border-b border-ink bg-ice px-4 py-2 font-mono text-[11px] font-semibold text-steel max-md:hidden">
-            <span>ROOM</span>
-            <span>REASON</span>
-            <span>WINDOW</span>
-            <span className="text-right">ACTION</span>
-          </div>
-          {sorted.length === 0 && (
-            <div className="p-4">
-              <EmptyState title="NO BLOCKS" />
-            </div>
-          )}
-          {sorted.map((k) => {
-            const multi = !sameDay(new Date(k.start), new Date(k.end))
-            return (
-              <div
-                key={k.id}
-                className={cx('grid grid-cols-[70px_1fr_170px_110px] items-center gap-3 border-b border-rule px-4 py-3 last:border-0 max-md:grid-cols-[60px_1fr]', !k.active && 'hatch opacity-60')}
-              >
-                <span className="font-display text-[24px] leading-none font-w450">{room(k.roomId)?.code}</span>
-                <div className="min-w-0">
-                  <div className={cx('truncate text-[14px] font-medium', !k.active && 'line-through')}>{k.reason}</div>
-                  <div className="font-mono text-[11px] text-steel">
-                    {k.id} · BY {user(k.createdBy)?.fullName.toUpperCase() ?? k.createdBy}
-                  </div>
-                </div>
-                <div className="font-mono text-[12px] max-md:col-start-2">
-                  <div className="font-semibold">{multi ? `${fmtShort(k.start)} → ${fmtShort(k.end)}` : fmtDate(k.start)}</div>
-                  <div className="text-graphite">{fmtRange(k.start, k.end)}</div>
-                </div>
-                <div className="text-right max-md:col-start-2 max-md:text-left">
-                  {k.active ? (
-                    <Button size="xs" variant="plum" onClick={() => cancelBlock(k.id)}>
-                      Cancel block
-                    </Button>
-                  ) : (
-                    <Tag>CANCELLED</Tag>
-                  )}
-                </div>
-              </div>
-            )
-          })}
-        </div>
-      </Reveal>
-    </section>
   )
 }

@@ -1,8 +1,7 @@
-import { BadRequestException, Injectable } from '@nestjs/common';
+import { BadRequestException } from '../common/http-exceptions.js';
 import { PrismaService } from '../prisma/prisma.service.js';
 import type { UpdateSettingsDto } from './dto/update-settings.dto.js';
 
-@Injectable()
 export class SettingsService {
   constructor(private readonly prisma: PrismaService) {}
 

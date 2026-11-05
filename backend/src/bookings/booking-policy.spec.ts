@@ -1,5 +1,9 @@
-import { BadRequestException } from '@nestjs/common';
-import { getZonedDayRange, validateBookingWindow } from './booking-policy.js';
+import { BadRequestException } from '../common/http-exceptions.js';
+import {
+  getZonedDayRange,
+  validateBookingWindow,
+  validateStaffBookingWindow,
+} from './booking-policy.js';
 
 const settings = {
   timezone: 'Asia/Ho_Chi_Minh',
@@ -14,8 +18,8 @@ describe('validateBookingWindow', () => {
   it('accepts a valid booking in local opening hours', () => {
     expect(() =>
       validateBookingWindow(
-        new Date('2026-11-01T02:00:00.000Z'),
-        new Date('2026-11-01T04:00:00.000Z'),
+        new Date('2026-11-02T02:00:00.000Z'),
+        new Date('2026-11-02T04:00:00.000Z'),
         settings,
         now,
       ),
@@ -25,8 +29,8 @@ describe('validateBookingWindow', () => {
   it('rejects a booking outside opening hours', () => {
     expect(() =>
       validateBookingWindow(
-        new Date('2026-11-01T14:00:00.000Z'),
-        new Date('2026-11-01T15:00:00.000Z'),
+        new Date('2026-11-02T14:00:00.000Z'),
+        new Date('2026-11-02T15:00:00.000Z'),
         settings,
         now,
       ),
@@ -36,8 +40,8 @@ describe('validateBookingWindow', () => {
   it('rejects a duration over the configured limit', () => {
     expect(() =>
       validateBookingWindow(
-        new Date('2026-11-01T01:00:00.000Z'),
-        new Date('2026-11-01T06:00:00.000Z'),
+        new Date('2026-11-02T01:00:00.000Z'),
+        new Date('2026-11-02T06:00:00.000Z'),
         settings,
         now,
       ),
@@ -47,12 +51,78 @@ describe('validateBookingWindow', () => {
   it('rejects a booking crossing local midnight', () => {
     expect(() =>
       validateBookingWindow(
-        new Date('2026-11-01T16:30:00.000Z'),
-        new Date('2026-11-01T17:30:00.000Z'),
+        new Date('2026-11-02T16:30:00.000Z'),
+        new Date('2026-11-02T17:30:00.000Z'),
         { ...settings, closeTime: '23:59' },
         now,
       ),
     ).toThrow('same local calendar day');
+  });
+
+  it('rejects a booking on weekends (Saturday or Sunday)', () => {
+    expect(() =>
+      validateBookingWindow(
+        new Date('2026-11-01T02:00:00.000Z'), // Sunday
+        new Date('2026-11-01T04:00:00.000Z'),
+        settings,
+        now,
+      ),
+    ).toThrow('Bookings are only allowed on workdays (Monday–Friday)');
+
+    expect(() =>
+      validateStaffBookingWindow(
+        new Date('2026-11-07T02:00:00.000Z'), // Saturday
+        new Date('2026-11-07T04:00:00.000Z'),
+        settings,
+        now,
+      ),
+    ).toThrow('Bookings are only allowed on workdays (Monday–Friday)');
+  });
+});
+
+describe('validateStaffBookingWindow', () => {
+  it('accepts staff bookings that exceed student duration limits', () => {
+    expect(() =>
+      validateStaffBookingWindow(
+        new Date('2026-11-02T01:00:00.000Z'),
+        new Date('2026-11-02T07:00:00.000Z'), // 6 hours
+        settings,
+        now,
+      ),
+    ).not.toThrow();
+  });
+
+  it('accepts staff bookings far into the future beyond maxAdvanceDays', () => {
+    expect(() =>
+      validateStaffBookingWindow(
+        new Date('2027-05-03T02:00:00.000Z'),
+        new Date('2027-05-03T04:00:00.000Z'),
+        settings,
+        now,
+      ),
+    ).not.toThrow();
+  });
+
+  it('rejects staff booking outside opening hours', () => {
+    expect(() =>
+      validateStaffBookingWindow(
+        new Date('2026-11-02T14:00:00.000Z'),
+        new Date('2026-11-02T15:00:00.000Z'),
+        settings,
+        now,
+      ),
+    ).toThrow(BadRequestException);
+  });
+
+  it('rejects staff booking ending in the past', () => {
+    expect(() =>
+      validateStaffBookingWindow(
+        new Date('2026-10-30T02:00:00.000Z'),
+        new Date('2026-10-30T04:00:00.000Z'),
+        settings,
+        now,
+      ),
+    ).toThrow('endTime must be in the future');
   });
 });
 

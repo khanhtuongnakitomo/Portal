@@ -1,4 +1,4 @@
-import { BadRequestException } from '@nestjs/common';
+import { BadRequestException } from '../common/http-exceptions.js';
 
 export interface BookingPolicySettings {
   timezone: string;
@@ -14,6 +14,7 @@ interface LocalParts {
   day: number;
   hour: number;
   minute: number;
+  weekday: string;
 }
 
 export function validateBookingWindow(
@@ -42,6 +43,58 @@ export function validateBookingWindow(
 
   const localStart = localParts(start, settings.timezone);
   const localEnd = localParts(end, settings.timezone);
+  if (
+    localStart.weekday === 'Sat' ||
+    localStart.weekday === 'Sun' ||
+    localEnd.weekday === 'Sat' ||
+    localEnd.weekday === 'Sun'
+  ) {
+    throw new BadRequestException('Bookings are only allowed on workdays (Monday–Friday)');
+  }
+
+  if (
+    localStart.year !== localEnd.year ||
+    localStart.month !== localEnd.month ||
+    localStart.day !== localEnd.day
+  ) {
+    throw new BadRequestException('Booking must start and end on the same local calendar day');
+  }
+
+  const startMinutes = localStart.hour * 60 + localStart.minute;
+  const endMinutes = localEnd.hour * 60 + localEnd.minute;
+  if (
+    startMinutes < timeToMinutes(settings.openTime) ||
+    endMinutes > timeToMinutes(settings.closeTime)
+  ) {
+    throw new BadRequestException(
+      `Booking must be within opening hours ${settings.openTime.trim()}-${settings.closeTime.trim()}`,
+    );
+  }
+}
+
+export function validateStaffBookingWindow(
+  start: Date,
+  end: Date,
+  settings: Pick<BookingPolicySettings, 'timezone' | 'openTime' | 'closeTime'>,
+  now = new Date(),
+) {
+  if (!Number.isFinite(start.getTime()) || !Number.isFinite(end.getTime())) {
+    throw new BadRequestException('Invalid booking time');
+  }
+  if (end <= start) throw new BadRequestException('endTime must be later than startTime');
+  if (end <= now) throw new BadRequestException('endTime must be in the future');
+
+  const localStart = localParts(start, settings.timezone);
+  const localEnd = localParts(end, settings.timezone);
+  if (
+    localStart.weekday === 'Sat' ||
+    localStart.weekday === 'Sun' ||
+    localEnd.weekday === 'Sat' ||
+    localEnd.weekday === 'Sun'
+  ) {
+    throw new BadRequestException('Bookings are only allowed on workdays (Monday–Friday)');
+  }
+
   if (
     localStart.year !== localEnd.year ||
     localStart.month !== localEnd.month ||
@@ -93,6 +146,7 @@ export function getZonedDayRange(date: string | undefined, timezone: string, now
 function localParts(date: Date, timezone: string): LocalParts {
   const parts = new Intl.DateTimeFormat('en-CA', {
     timeZone: timezone,
+    weekday: 'short',
     year: 'numeric',
     month: '2-digit',
     day: '2-digit',
@@ -102,12 +156,14 @@ function localParts(date: Date, timezone: string): LocalParts {
   }).formatToParts(date);
   const get = (name: Intl.DateTimeFormatPartTypes) =>
     Number(parts.find((part) => part.type === name)?.value);
+  const weekday = parts.find((part) => part.type === 'weekday')?.value ?? '';
   return {
     year: get('year'),
     month: get('month'),
     day: get('day'),
     hour: get('hour'),
     minute: get('minute'),
+    weekday,
   };
 }
 

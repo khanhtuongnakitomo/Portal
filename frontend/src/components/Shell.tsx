@@ -35,20 +35,20 @@ export function LogoMark({ size = 18, className }: { size?: number; className?: 
 }
 
 const roles: { role: Role | null; label: string; who: string }[] = [
-  { role: 'USER', label: 'USER', who: 'Student · SE123456' },
-  { role: 'MANAGER', label: 'MANAGER', who: 'Facilities · D. Tran' },
-  { role: 'ADMIN', label: 'ADMIN', who: 'System · G. Pham' },
+  { role: 'USER', label: 'USER', who: 'Student · SE184022' },
+  { role: 'MANAGER', label: 'MANAGER', who: 'Facilities · Duc Tran' },
+  { role: 'ADMIN', label: 'ADMIN', who: 'System · Giang Pham' },
   { role: null, label: 'SIGNED OUT', who: 'Auth screen' },
 ]
 
 export function RoleSwitcher({ go }: { go: (r: Route) => void }) {
-  const { currentUser, previewAs, logout } = useStore()
+  const { currentUser, previewAs, logout, apiConnected } = useStore()
   return (
     <div className="bg-forest text-paper">
-      <div className="mx-auto flex max-w-[1440px] flex-wrap items-center gap-x-4 gap-y-2 px-6 py-2">
-        <div className="flex items-center gap-2 font-mono text-[12px] text-white/75">
-          <span className="h-1.5 w-1.5 animate-pulse bg-tint" />
-          REVIEW MODE · ROLE PREVIEW
+      <div className="mx-auto flex max-w-[1440px] flex-wrap items-center justify-between gap-x-4 gap-y-2 px-6 py-2">
+        <div className="flex items-center gap-2.5 font-mono text-[12px] text-white/75">
+          <span className={cx('h-2 w-2 rounded-full', apiConnected ? 'bg-tint animate-pulse' : 'bg-steel')} />
+          <span>{apiConnected ? 'API LIVE SYNC' : 'HYBRID STORAGE'} · ROLE PREVIEW</span>
         </div>
         <div className="flex flex-wrap gap-1">
           {roles.map((r) => {
@@ -181,7 +181,7 @@ export function AccessDenied({ need, go }: { need: Role; go: (r: Route) => void 
 
 export function Footer() {
   const cols = [
-    { t: 'Rooms', l: ['Seminar Hall 601', 'Studio Room 602', 'Lecture Theatre 603'] },
+    { t: 'Rooms', l: ['Seminar Hall 601', 'Studio Room 602', 'Lecture Theatre 605'] },
     { t: 'Policy', l: ['Booking window 2–7 days', 'Key custody rules', 'Event priority'] },
     { t: 'Support', l: ['Facilities desk · Level 1', 'it-support@uts-tne.edu.vn', 'Ext. 6021'] },
   ]

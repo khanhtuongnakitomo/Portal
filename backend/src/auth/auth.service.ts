@@ -1,10 +1,9 @@
-import { ConflictException, Injectable, UnauthorizedException } from '@nestjs/common';
-import { ConfigService } from '@nestjs/config';
-import { JwtService } from '@nestjs/jwt';
 import * as argon2 from 'argon2';
+import jwt from 'jsonwebtoken';
+import { ConflictException, UnauthorizedException } from '../common/http-exceptions.js';
+import type { JwtPayload } from '../common/interfaces/jwt-payload.interface.js';
 import { Prisma, UserStatus } from '../generated/prisma/client.js';
 import { PrismaService } from '../prisma/prisma.service.js';
-import type { JwtPayload } from '../common/interfaces/jwt-payload.interface.js';
 import type { LoginDto } from './dto/login.dto.js';
 import type { RegisterDto } from './dto/register.dto.js';
 
@@ -19,13 +18,8 @@ const safeUserSelect = {
 
 type SafeUserRecord = Prisma.UserGetPayload<{ select: typeof safeUserSelect }>;
 
-@Injectable()
 export class AuthService {
-  constructor(
-    private readonly prisma: PrismaService,
-    private readonly jwt: JwtService,
-    private readonly config: ConfigService,
-  ) {}
+  constructor(private readonly prisma: PrismaService) {}
 
   async register(dto: RegisterDto) {
     const email = dto.email.trim().toLowerCase();
@@ -71,7 +65,7 @@ export class AuthService {
     return this.issueAccess(user);
   }
 
-  private async issueAccess(user: SafeUserRecord) {
+  private issueAccess(user: SafeUserRecord) {
     const publicUser = {
       id: user.id,
       email: user.email,
@@ -81,12 +75,16 @@ export class AuthService {
       status: user.status,
     };
     const payload: JwtPayload = { sub: user.id, email: user.email, type: 'access' };
-    const expiresIn = this.config.get<number>('JWT_ACCESS_TTL_SECONDS', 28_800);
-    const accessToken = await this.jwt.signAsync(payload, {
-      secret: this.config.getOrThrow<string>('JWT_ACCESS_SECRET'),
+    const secret =
+      process.env.JWT_ACCESS_SECRET || 'replace-with-at-least-32-random-characters-access';
+    const expiresIn = Number(process.env.JWT_ACCESS_TTL_SECONDS ?? 28_800);
+    const issuer = process.env.JWT_ISSUER || 'tne-portal-api';
+    const audience = process.env.JWT_AUDIENCE || 'tne-portal-client';
+
+    const accessToken = jwt.sign(payload, secret, {
       expiresIn,
-      issuer: this.config.get<string>('JWT_ISSUER', 'tne-portal-api'),
-      audience: this.config.get<string>('JWT_AUDIENCE', 'tne-portal-client'),
+      issuer,
+      audience,
     });
     return { accessToken, expiresIn, user: publicUser };
   }

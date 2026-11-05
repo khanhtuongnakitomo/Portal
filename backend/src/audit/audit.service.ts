@@ -1,8 +1,6 @@
-import { Injectable } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service.js';
 import type { ListAuditLogsDto } from './dto/list-audit-logs.dto.js';
 
-@Injectable()
 export class AuditService {
   constructor(private readonly prisma: PrismaService) {}
 

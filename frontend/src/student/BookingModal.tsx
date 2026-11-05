@@ -3,19 +3,39 @@ import { ArrowRight, Info } from 'lucide-react'
 import { useStore } from '@/lib/store'
 import type { Room } from '@/lib/types'
 import { at, durationMin, fmtDate, fmtDuration, fmtTime, parseHM } from '@/lib/time'
-import { Button, Field, Input, LedgerRow, Modal, Select, Textarea, Mono } from '@/components/ui'
+import { Button, Field, Input, LedgerRow, Modal, Select, Textarea, Mono, cx } from '@/components/ui'
 import type { Selection } from './WeekCalendar'
+import { getRoomColor } from '@/components/RoomTabs'
 
-export function BookingModal({ room, selection, onClose }: { room: Room; selection: Selection | null; onClose: () => void }) {
+export function BookingModal({
+  room,
+  rooms,
+  allowRoomChange,
+  selection,
+  onClose,
+}: {
+  room: Room
+  rooms?: Room[]
+  allowRoomChange?: boolean
+  selection: Selection | null
+  onClose: () => void
+}) {
   const { createBooking, validateSlot, settings, bookings, currentUser } = useStore()
+  const availableRooms = rooms && rooms.length > 0 ? rooms : [room]
+  const [selectedRoomId, setSelectedRoomId] = useState(room.id)
   const [start, setStart] = useState('')
   const [end, setEnd] = useState('')
   const [phone, setPhone] = useState('')
   const [title, setTitle] = useState('')
   const [purpose, setPurpose] = useState('')
   const [error, setError] = useState<string | null>(null)
+
   // Prefill contact number from the student's most recent booking
   const lastPhone = bookings.filter((b) => b.userId === currentUser?.id).sort((a, b) => +new Date(b.createdAt) - +new Date(a.createdAt))[0]?.phone ?? ''
+
+  useEffect(() => {
+    setSelectedRoomId(room.id)
+  }, [room.id, selection])
 
   useEffect(() => {
     if (selection) {
@@ -42,18 +62,56 @@ export function BookingModal({ room, selection, onClose }: { room: Room; selecti
   const s = toDate(start || fmtTime(selection.start))
   const e = toDate(end || fmtTime(selection.end))
   const dur = durationMin(s, e)
-  const slotErr = validateSlot(room.id, s, e)
+
+  const activeRoom = availableRooms.find((r) => r.id === selectedRoomId) ?? room
+  const slotErr = validateSlot(activeRoom.id, s, e)
+
+  const competingPending = bookings.filter(
+    (b) => b.roomId === activeRoom.id && b.status === 'PENDING' && new Date(b.start) < e && new Date(b.end) > s,
+  )
 
   const submit = () => {
-    const err = createBooking({ roomId: room.id, start: s, end: e, phone, title, purpose })
+    const err = createBooking({ roomId: activeRoom.id, start: s, end: e, phone, title, purpose })
     if (err) setError(err)
     else onClose()
   }
 
   return (
-    <Modal open onClose={onClose} title="Confirm reservation" eyebrow={`NEW ENTRY · ROOM ${room.code}`} width="max-w-[720px]">
+    <Modal open onClose={onClose} title="Confirm reservation" eyebrow={`NEW ENTRY · ROOM ${activeRoom.code}`} width="max-w-[720px]">
       <div className="grid md:grid-cols-[1fr_260px]">
         <div className="flex flex-col gap-4 p-6">
+          {allowRoomChange && availableRooms.length > 1 && (
+            <div className="flex flex-col gap-1.5">
+              <label className="font-mono text-[11px] text-steel">SELECT ROOM</label>
+              <div className="grid grid-cols-3 gap-2">
+                {availableRooms.map((r) => {
+                  const rc = getRoomColor(r.code)
+                  const isSel = r.id === activeRoom.id
+                  const errCheck = validateSlot(r.id, s, e)
+                  return (
+                    <button
+                      key={r.id}
+                      type="button"
+                      onClick={() => setSelectedRoomId(r.id)}
+                      className={cx(
+                        'flex flex-col items-start rounded-md border p-2 text-left transition-all',
+                        isSel ? rc.solid : 'border-rule bg-ice hover:border-edge',
+                      )}
+                    >
+                      <div className="flex items-center gap-1.5 font-mono text-[13px] font-semibold">
+                        <span className={cx('h-2 w-2 rounded-full', isSel ? 'bg-white' : rc.dot)} />
+                        Room {r.code}
+                      </div>
+                      <div className={cx('font-mono text-[10px]', isSel ? 'text-white/80' : 'text-steel')}>
+                        {errCheck ? 'Unavailable' : 'Available'}
+                      </div>
+                    </button>
+                  )
+                })}
+              </div>
+            </div>
+          )}
+
           <div className="grid grid-cols-2 gap-3">
             <Field label="Start">
               <Select value={start} onChange={(ev) => setStart(ev.target.value)} className="font-mono">
@@ -79,25 +137,26 @@ export function BookingModal({ room, selection, onClose }: { room: Room; selecti
           <Field label="Purpose" hint={`${purpose.length}/160`}>
             <Textarea rows={3} maxLength={160} value={purpose} onChange={(ev) => setPurpose(ev.target.value)} placeholder="e.g. Weekly progress review with supervisor and team" />
           </Field>
+
+          {competingPending.length > 0 && (
+            <div className="border border-amber bg-amber-soft px-3.5 py-2.5 text-[13px] text-ink">
+              ⚡ {competingPending.length} other student request(s) are currently pending approval for this time window. You may still submit a competing request — the Manager will review all requests and approve one.
+            </div>
+          )}
+
           {(error || slotErr) && <div className="border-l-2 border-plum bg-plum/[0.06] px-3 py-2 text-[13px] font-medium text-plum">{error || slotErr}</div>}
         </div>
         <aside className="flex flex-col justify-between gap-6 border-t border-rule bg-ice p-6 md:border-t-0 md:border-l">
           <div>
-            <div className="mb-3 font-display text-[44px] leading-none font-w450 text-ink">{room.code}</div>
-            <LedgerRow k="Room" v={room.name} />
+            <div className="mb-3 font-display text-[44px] leading-none font-w450 text-ink">{activeRoom.code}</div>
+            <LedgerRow k="Room" v={activeRoom.name} />
             <LedgerRow k="Date" v={fmtDate(day)} mono />
             <LedgerRow k="Window" v={`${fmtTime(s)} → ${fmtTime(e)}`} mono />
             <LedgerRow k="Duration" v={dur > 0 ? fmtDuration(dur) : '—'} mono />
           </div>
           <div className="flex gap-2 text-[12px] leading-[1.5] text-graphite">
             <Info size={14} className="mt-0.5 shrink-0 text-accent" />
-            {room.autoApprove ? (
-              <span>
-                Room {room.code} is <Mono className="text-accent">AUTO-APPROVE</Mono>. Your booking is confirmed instantly.
-              </span>
-            ) : (
-              <span>Requests enter the manager approval queue. Once approved, collect the key with your Student ID.</span>
-            )}
+            <span>Requests enter the manager approval queue. Once approved, collect the key with your Student ID.</span>
           </div>
         </aside>
       </div>

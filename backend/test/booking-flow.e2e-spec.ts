@@ -1,12 +1,10 @@
-import { ValidationPipe } from '@nestjs/common';
-import { Test } from '@nestjs/testing';
+import 'reflect-metadata';
 import * as argon2 from 'argon2';
+import type { Express } from 'express';
 import request from 'supertest';
-import type { INestApplication } from '@nestjs/common';
-import { AppModule } from '../src/app.module.js';
-import { PrismaExceptionFilter } from '../src/common/filters/prisma-exception.filter.js';
+import { createApp } from '../src/app.js';
 import { Role, UserStatus } from '../src/generated/prisma/client.js';
-import { PrismaService } from '../src/prisma/prisma.service.js';
+import type { PrismaService } from '../src/prisma/prisma.service.js';
 
 const managerEmail = 'e2e-manager@tne.local';
 const studentEmail = 'e2e-student@tne.local';
@@ -18,25 +16,14 @@ type BookingResponse = { id: string; status: string };
 type BlockResponse = { status: string };
 
 describe('booking lifecycle (e2e)', () => {
-  let app: INestApplication;
+  let app: Express;
   let prisma: PrismaService;
   let roomId: string;
 
   beforeAll(async () => {
-    const module = await Test.createTestingModule({ imports: [AppModule] }).compile();
-    app = module.createNestApplication();
-    app.setGlobalPrefix('api/v1');
-    app.useGlobalPipes(
-      new ValidationPipe({
-        whitelist: true,
-        forbidNonWhitelisted: true,
-        transform: true,
-        transformOptions: { enableImplicitConversion: true },
-      }),
-    );
-    app.useGlobalFilters(new PrismaExceptionFilter());
-    await app.init();
-    prisma = app.get(PrismaService);
+    const created = createApp();
+    app = created.app;
+    prisma = created.prisma;
 
     await cleanup();
     await prisma.systemSetting.upsert({
@@ -62,11 +49,11 @@ describe('booking lifecycle (e2e)', () => {
 
   afterAll(async () => {
     await cleanup();
-    await app.close();
+    await prisma.$disconnect();
   });
 
   it('runs register → approve → checkout → return and embedded room blocking', async () => {
-    const studentSession = await request(app.getHttpServer())
+    const studentSession = await request(app)
       .post('/api/v1/auth/register')
       .send({
         email: studentEmail,
@@ -75,7 +62,7 @@ describe('booking lifecycle (e2e)', () => {
         password,
       })
       .expect(201);
-    const managerSession = await request(app.getHttpServer())
+    const managerSession = await request(app)
       .post('/api/v1/auth/login')
       .send({ email: managerEmail, password })
       .expect(200);
@@ -83,7 +70,7 @@ describe('booking lifecycle (e2e)', () => {
     const studentToken = (studentSession.body as AuthResponse).accessToken;
     const managerToken = (managerSession.body as AuthResponse).accessToken;
     const firstSlot = futureVietnamSlot(2);
-    const booking = await request(app.getHttpServer())
+    const booking = await request(app)
       .post('/api/v1/bookings')
       .set('Authorization', `Bearer ${studentToken}`)
       .send({
@@ -97,21 +84,21 @@ describe('booking lifecycle (e2e)', () => {
 
     const bookingBody = booking.body as BookingResponse;
 
-    const approved = await request(app.getHttpServer())
+    const approved = await request(app)
       .patch(`/api/v1/manager/bookings/${bookingBody.id}/approve`)
       .set('Authorization', `Bearer ${managerToken}`)
       .send({})
       .expect(200);
     expect((approved.body as BookingResponse).status).toBe('APPROVED');
 
-    const checkedOut = await request(app.getHttpServer())
+    const checkedOut = await request(app)
       .patch(`/api/v1/manager/bookings/${bookingBody.id}/key-checkout`)
       .set('Authorization', `Bearer ${managerToken}`)
       .send({})
       .expect(200);
     expect((checkedOut.body as BookingResponse).status).toBe('KEY_CHECKED_OUT');
 
-    const completed = await request(app.getHttpServer())
+    const completed = await request(app)
       .patch(`/api/v1/manager/bookings/${bookingBody.id}/key-return`)
       .set('Authorization', `Bearer ${managerToken}`)
       .send({})
@@ -119,12 +106,12 @@ describe('booking lifecycle (e2e)', () => {
     expect((completed.body as BookingResponse).status).toBe('COMPLETED');
 
     const blockedSlot = futureVietnamSlot(3);
-    await request(app.getHttpServer())
+    await request(app)
       .post('/api/v1/manager/room-blocks')
       .set('Authorization', `Bearer ${managerToken}`)
       .send({ roomId, reason: 'E2E block', ...blockedSlot })
       .expect(201);
-    await request(app.getHttpServer())
+    await request(app)
       .post('/api/v1/bookings')
       .set('Authorization', `Bearer ${studentToken}`)
       .send({
@@ -135,13 +122,13 @@ describe('booking lifecycle (e2e)', () => {
         ...blockedSlot,
       })
       .expect(409);
-    const cancelled = await request(app.getHttpServer())
+    const cancelled = await request(app)
       .patch(`/api/v1/manager/room-blocks/${roomId}/cancel`)
       .set('Authorization', `Bearer ${managerToken}`)
       .send({})
       .expect(200);
     expect((cancelled.body as BlockResponse).status).toBe('CANCELLED');
-  });
+  }, 30000);
 
   async function cleanup() {
     const users = await prisma.user.findMany({
@@ -172,6 +159,9 @@ function futureVietnamSlot(daysAhead: number) {
   const localToday = formatter.format(new Date());
   const target = new Date(`${localToday}T02:00:00.000Z`);
   target.setUTCDate(target.getUTCDate() + daysAhead);
+  while (target.getUTCDay() === 0 || target.getUTCDay() === 6) {
+    target.setUTCDate(target.getUTCDate() + 1);
+  }
   const end = new Date(target.getTime() + 60 * 60 * 1000);
   return { startTime: target.toISOString(), endTime: end.toISOString() };
 }

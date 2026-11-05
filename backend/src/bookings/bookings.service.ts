@@ -1,15 +1,18 @@
+import { randomBytes } from 'node:crypto';
 import {
   BadRequestException,
   ConflictException,
   ForbiddenException,
-  Injectable,
   NotFoundException,
-} from '@nestjs/common';
-import { randomBytes } from 'node:crypto';
+} from '../common/http-exceptions.js';
 import type { AuthenticatedUser } from '../common/interfaces/authenticated-user.interface.js';
 import { BookingStatus, Role, RoomBlockStatus, RoomStatus } from '../generated/prisma/client.js';
 import { PrismaService } from '../prisma/prisma.service.js';
-import { getZonedDayRange, validateBookingWindow } from './booking-policy.js';
+import {
+  getZonedDayRange,
+  validateBookingWindow,
+  validateStaffBookingWindow,
+} from './booking-policy.js';
 import type { CalendarQueryDto } from './dto/calendar-query.dto.js';
 import type { CreateBookingDto } from './dto/create-booking.dto.js';
 import type { ListBookingsDto } from './dto/list-bookings.dto.js';
@@ -43,11 +46,14 @@ type BookingUserRecord = {
   studentProfile: { studentCode: string } | null;
 };
 
-@Injectable()
 export class BookingsService {
   constructor(private readonly prisma: PrismaService) {}
 
-  async create(dto: CreateBookingDto, userId: string) {
+  async create(dto: CreateBookingDto, actor: AuthenticatedUser | string) {
+    const userId = typeof actor === 'string' ? actor : actor.id;
+    const actorRole = typeof actor === 'string' ? Role.USER : actor.role;
+    const isStaff = actorRole === Role.MANAGER || actorRole === Role.ADMIN;
+
     const startTime = new Date(dto.startTime);
     const endTime = new Date(dto.endTime);
 
@@ -68,32 +74,100 @@ export class BookingsService {
       }
 
       const settings = await tx.systemSetting.findUniqueOrThrow({ where: { id: 'default' } });
-      validateBookingWindow(startTime, endTime, settings);
-
-      const activeCount = await tx.booking.count({
-        where: {
-          userId,
-          status: { in: [...activeBookingStatuses] },
-          endTime: { gt: new Date() },
-        },
-      });
-      if (activeCount >= settings.maxActiveBookingsPerUser) {
-        throw new ConflictException(
-          `You can only have ${settings.maxActiveBookingsPerUser} active bookings`,
-        );
+      if (isStaff) {
+        validateStaffBookingWindow(startTime, endTime, settings);
+      } else {
+        validateBookingWindow(startTime, endTime, settings);
       }
 
-      const bookingConflict = await tx.booking.findFirst({
-        where: {
-          roomId: dto.roomId,
-          status: { in: [...activeBookingStatuses] },
-          startTime: { lt: endTime },
-          endTime: { gt: startTime },
-        },
-        select: { id: true },
-      });
-      if (bookingConflict) {
-        throw new ConflictException('This room is already reserved for that time range');
+      if (!isStaff) {
+        const activeCount = await tx.booking.count({
+          where: {
+            userId,
+            status: { in: [...activeBookingStatuses] },
+            endTime: { gt: new Date() },
+          },
+        });
+        if (activeCount >= settings.maxActiveBookingsPerUser) {
+          throw new ConflictException(
+            `You can only have ${settings.maxActiveBookingsPerUser} active bookings`,
+          );
+        }
+      }
+
+      if (isStaff) {
+        const firmConflict = await tx.booking.findFirst({
+          where: {
+            roomId: dto.roomId,
+            status: { in: [BookingStatus.APPROVED, BookingStatus.KEY_CHECKED_OUT] },
+            startTime: { lt: endTime },
+            endTime: { gt: startTime },
+          },
+          select: { id: true },
+        });
+        if (firmConflict) {
+          throw new ConflictException('This room is already reserved for that time range');
+        }
+
+        const overlappingPending = await tx.booking.findMany({
+          where: {
+            roomId: dto.roomId,
+            status: BookingStatus.PENDING,
+            startTime: { lt: endTime },
+            endTime: { gt: startTime },
+          },
+          select: { id: true },
+        });
+
+        if (overlappingPending.length > 0) {
+          const pendingIds = overlappingPending.map((b) => b.id);
+          const displacementNote = 'Slot assigned to an official room activity';
+          await tx.booking.updateMany({
+            where: { id: { in: pendingIds } },
+            data: {
+              status: BookingStatus.REJECTED,
+              reviewedById: userId,
+              reviewedAt: new Date(),
+              reviewNote: displacementNote,
+            },
+          });
+          await tx.bookingStatusHistory.createMany({
+            data: pendingIds.map((id) => ({
+              bookingId: id,
+              fromStatus: BookingStatus.PENDING,
+              toStatus: BookingStatus.REJECTED,
+              changedById: userId,
+              note: displacementNote,
+            })),
+          });
+        }
+      } else {
+        const firmConflict = await tx.booking.findFirst({
+          where: {
+            roomId: dto.roomId,
+            status: { in: [BookingStatus.APPROVED, BookingStatus.KEY_CHECKED_OUT] },
+            startTime: { lt: endTime },
+            endTime: { gt: startTime },
+          },
+          select: { id: true },
+        });
+        if (firmConflict) {
+          throw new ConflictException('This room is already reserved for that time range');
+        }
+
+        const ownPendingConflict = await tx.booking.findFirst({
+          where: {
+            roomId: dto.roomId,
+            userId,
+            status: BookingStatus.PENDING,
+            startTime: { lt: endTime },
+            endTime: { gt: startTime },
+          },
+          select: { id: true },
+        });
+        if (ownPendingConflict) {
+          throw new ConflictException('You already have a pending request for this time slot');
+        }
       }
 
       const isBlocked =
@@ -104,7 +178,13 @@ export class BookingsService {
         room.blockEndTime > startTime;
       if (isBlocked) throw new ConflictException('This room is blocked for that time range');
 
-      const initialStatus = room.autoApprove ? BookingStatus.APPROVED : BookingStatus.PENDING;
+      const initialStatus = isStaff ? BookingStatus.APPROVED : BookingStatus.PENDING;
+      const reviewNote = isStaff
+        ? 'Scheduled room activity / event assigned by Manager'
+        : undefined;
+      const reviewedById = isStaff ? userId : undefined;
+      const reviewedAt = isStaff ? new Date() : undefined;
+
       const created = await tx.booking.create({
         data: {
           roomId: dto.roomId,
@@ -116,12 +196,14 @@ export class BookingsService {
           startTime,
           endTime,
           status: initialStatus,
-          reviewNote: room.autoApprove ? 'Automatically approved by room policy' : undefined,
+          reviewNote,
+          reviewedById,
+          reviewedAt,
           history: {
             create: {
               toStatus: initialStatus,
               changedById: userId,
-              note: room.autoApprove ? 'Automatically approved by room policy' : undefined,
+              note: reviewNote,
             },
           },
         },
@@ -139,14 +221,19 @@ export class BookingsService {
     const from = new Date(query.from);
     const to = new Date(query.to);
     if (to <= from) throw new BadRequestException('to must be later than from');
-    if (to.getTime() - from.getTime() > 31 * 86_400_000) {
-      throw new BadRequestException('Calendar range cannot exceed 31 days');
+    if (to.getTime() - from.getTime() > 90 * 86_400_000) {
+      throw new BadRequestException('Calendar range cannot exceed 90 days');
     }
     const [bookings, blockedRooms] = await Promise.all([
       this.prisma.booking.findMany({
         where: {
           status: {
-            in: [BookingStatus.APPROVED, BookingStatus.KEY_CHECKED_OUT, BookingStatus.COMPLETED],
+            in: [
+              BookingStatus.PENDING,
+              BookingStatus.APPROVED,
+              BookingStatus.KEY_CHECKED_OUT,
+              BookingStatus.COMPLETED,
+            ],
           },
           roomId: query.roomId,
           startTime: { lt: to },
@@ -154,11 +241,28 @@ export class BookingsService {
         },
         select: {
           id: true,
+          roomId: true,
           title: true,
+          purpose: true,
+          userId: true,
+          reviewNote: true,
+          passCode: true,
+          createdAt: true,
+          keyCheckedOutAt: true,
+          keyReturnedAt: true,
           startTime: true,
           endTime: true,
           status: true,
           room: { select: { id: true, name: true } },
+          user: {
+            select: {
+              id: true,
+              fullName: true,
+              email: true,
+              role: true,
+              studentProfile: { select: { studentCode: true } },
+            },
+          },
         },
         orderBy: { startTime: 'asc' },
       }),
@@ -179,6 +283,13 @@ export class BookingsService {
         orderBy: { blockStartTime: 'asc' },
       }),
     ]);
+    const mappedBookings = bookings.map((b) => ({
+      ...b,
+      user: {
+        ...b.user,
+        studentCode: b.user.studentProfile?.studentCode ?? null,
+      },
+    }));
     const blocks = blockedRooms.map((room) => ({
       id: room.id,
       roomId: room.id,
@@ -187,7 +298,7 @@ export class BookingsService {
       endTime: room.blockEndTime,
       room: { id: room.id, name: room.name },
     }));
-    return { bookings, blocks };
+    return { bookings: mappedBookings, blocks };
   }
 
   async mine(userId: string, query: ListBookingsDto) {
@@ -276,8 +387,116 @@ export class BookingsService {
     };
   }
 
-  approve(id: string, actorId: string, note?: string) {
-    return this.transition(id, BookingStatus.PENDING, BookingStatus.APPROVED, actorId, note);
+  async approve(id: string, actorId: string, note?: string) {
+    return this.prisma.$transaction(async (tx) => {
+      const booking = await tx.booking.findUnique({
+        where: { id },
+      });
+      if (!booking) throw new NotFoundException('Booking not found');
+      if (booking.status !== BookingStatus.PENDING) {
+        throw new ConflictException('Booking is no longer pending');
+      }
+
+      const firmConflict = await tx.booking.findFirst({
+        where: {
+          roomId: booking.roomId,
+          id: { not: id },
+          status: { in: [BookingStatus.APPROVED, BookingStatus.KEY_CHECKED_OUT] },
+          startTime: { lt: booking.endTime },
+          endTime: { gt: booking.startTime },
+        },
+        select: { id: true },
+      });
+      if (firmConflict) {
+        throw new ConflictException('This room is already reserved for that time range');
+      }
+
+      const now = new Date();
+      await tx.booking.update({
+        where: { id },
+        data: {
+          status: BookingStatus.APPROVED,
+          reviewedById: actorId,
+          reviewedAt: now,
+          reviewNote: note?.trim(),
+        },
+      });
+
+      await tx.bookingStatusHistory.create({
+        data: {
+          bookingId: id,
+          fromStatus: BookingStatus.PENDING,
+          toStatus: BookingStatus.APPROVED,
+          changedById: actorId,
+          note: note?.trim(),
+        },
+      });
+
+      await tx.auditLog.create({
+        data: {
+          actorId,
+          action: 'BOOKING_APPROVED',
+          targetType: 'Booking',
+          targetId: id,
+          metadata: note ? { note: note.trim() } : undefined,
+        },
+      });
+
+      const overlappingPending = await tx.booking.findMany({
+        where: {
+          roomId: booking.roomId,
+          id: { not: id },
+          status: BookingStatus.PENDING,
+          startTime: { lt: booking.endTime },
+          endTime: { gt: booking.startTime },
+        },
+        select: { id: true },
+      });
+
+      if (overlappingPending.length > 0) {
+        const pendingIds = overlappingPending.map((b) => b.id);
+        const declineNote = 'Slot awarded to another approved reservation';
+        await tx.booking.updateMany({
+          where: { id: { in: pendingIds } },
+          data: {
+            status: BookingStatus.REJECTED,
+            reviewedById: actorId,
+            reviewedAt: now,
+            reviewNote: declineNote,
+          },
+        });
+        await tx.bookingStatusHistory.createMany({
+          data: pendingIds.map((pendingId) => ({
+            bookingId: pendingId,
+            fromStatus: BookingStatus.PENDING,
+            toStatus: BookingStatus.REJECTED,
+            changedById: actorId,
+            note: declineNote,
+          })),
+        });
+        for (const pendingId of pendingIds) {
+          await tx.auditLog.create({
+            data: {
+              actorId,
+              action: 'BOOKING_REJECTED',
+              targetType: 'Booking',
+              targetId: pendingId,
+              metadata: {
+                note: declineNote,
+                reason: 'AUTO_DECLINE_COMPETING_PENDING',
+                approvedBookingId: id,
+              },
+            },
+          });
+        }
+      }
+
+      const updated = await tx.booking.findUniqueOrThrow({
+        where: { id },
+        include: bookingInclude,
+      });
+      return this.toApiBooking(updated);
+    });
   }
 
   reject(id: string, actorId: string, note: string) {

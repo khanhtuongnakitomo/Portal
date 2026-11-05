@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { NotFoundException } from '../common/http-exceptions.js';
 import { RoomStatus } from '../generated/prisma/client.js';
 import { PrismaService } from '../prisma/prisma.service.js';
 import type { CreateRoomDto } from './dto/create-room.dto.js';
@@ -19,7 +19,6 @@ const publicRoomSelect = {
   blockStatus: true,
 } as const;
 
-@Injectable()
 export class RoomsService {
   constructor(private readonly prisma: PrismaService) {}
 

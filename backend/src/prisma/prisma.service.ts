@@ -1,17 +1,13 @@
-import { Injectable, OnApplicationShutdown } from '@nestjs/common';
-import { ConfigService } from '@nestjs/config';
+import 'dotenv/config';
 import { PrismaPg } from '@prisma/adapter-pg';
 import { PrismaClient } from '../generated/prisma/client.js';
 
-@Injectable()
-export class PrismaService extends PrismaClient implements OnApplicationShutdown {
-  constructor(config: ConfigService) {
-    const connectionString = config.getOrThrow<string>('DATABASE_URL');
+export class PrismaService extends PrismaClient {
+  constructor(connectionString = process.env.DATABASE_URL) {
+    if (!connectionString) {
+      throw new Error('DATABASE_URL is not defined');
+    }
     const adapter = new PrismaPg({ connectionString });
     super({ adapter });
-  }
-
-  async onApplicationShutdown() {
-    await this.$disconnect();
   }
 }
