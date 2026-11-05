@@ -207,11 +207,7 @@ async function main() {
   }
 
   // 3. Rooms (Strictly 3 official rooms, no auto-approve)
-  const officialRoomNames = [
-    'Seminar Hall 601',
-    'Studio Room 602',
-    'Lecture Theatre 605',
-  ];
+  const officialRoomNames = ['Seminar Hall 601', 'Studio Room 602', 'Lecture Theatre 605'];
 
   await prisma.bookingStatusHistory.deleteMany({});
   await prisma.booking.deleteMany({});
@@ -325,7 +321,7 @@ async function main() {
           purpose: 'Bi-weekly demo and sprint presentation with industry mentors',
           attendeeCount: 15,
           startTime: atWorkday(1, 9, 0), // Tuesday 09:00
-          endTime: atWorkday(1, 11, 0),   // Tuesday 11:00
+          endTime: atWorkday(1, 11, 0), // Tuesday 11:00
           status: BookingStatus.PENDING,
         },
         // 2. Competing PENDING booking 2 on Room 601 (exact same Tuesday 09:00-11:00 time slot!)
@@ -337,7 +333,7 @@ async function main() {
           purpose: 'Paper presentation on Transformer architectures and multimodal models',
           attendeeCount: 20,
           startTime: atWorkday(1, 9, 0), // Tuesday 09:00
-          endTime: atWorkday(1, 11, 0),   // Tuesday 11:00
+          endTime: atWorkday(1, 11, 0), // Tuesday 11:00
           status: BookingStatus.PENDING,
         },
         // 3. 1 APPROVED booking on Room 601 on another workday slot
@@ -349,7 +345,7 @@ async function main() {
           purpose: 'Scheduled room activity / event assigned by Manager',
           attendeeCount: 35,
           startTime: atWorkday(2, 8, 30), // Wednesday 08:30
-          endTime: atWorkday(2, 11, 30),  // Wednesday 11:30
+          endTime: atWorkday(2, 11, 30), // Wednesday 11:30
           status: BookingStatus.APPROVED,
           reviewedById: managerUser.id,
           reviewedAt: atWorkday(0, 8, 0),
@@ -364,7 +360,7 @@ async function main() {
           purpose: 'Weekly study circle on trees, graphs, and dynamic programming',
           attendeeCount: 10,
           startTime: atWorkday(3, 14, 0), // Thursday 14:00
-          endTime: atWorkday(3, 16, 0),   // Thursday 16:00
+          endTime: atWorkday(3, 16, 0), // Thursday 16:00
           status: BookingStatus.PENDING,
         },
         // 5. APPROVED booking on Room 605
@@ -376,7 +372,7 @@ async function main() {
           purpose: 'Weekly hardware sprint and chassis assembly for Robocon 2027',
           attendeeCount: 24,
           startTime: atWorkday(0, 10, 0), // Monday 10:00
-          endTime: atWorkday(0, 12, 0),   // Monday 12:00
+          endTime: atWorkday(0, 12, 0), // Monday 12:00
           status: BookingStatus.APPROVED,
           reviewedById: managerUser.id,
           reviewedAt: atWorkday(0, 8, 0),
@@ -396,7 +392,7 @@ async function main() {
         where: { id: r605.id },
         data: {
           blockStartTime: atWorkday(4, 8, 0), // Friday 08:00
-          blockEndTime: atWorkday(4, 12, 0),   // Friday 12:00
+          blockEndTime: atWorkday(4, 12, 0), // Friday 12:00
           blockReason: 'University Open Day - Campus Tour & Showcase',
           blockStatus: RoomBlockStatus.ACTIVE,
           blockCreatedById: managerUser.id,
