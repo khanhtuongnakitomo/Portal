@@ -4,6 +4,9 @@ import { useStore } from '@/lib/store'
 import { Button, Eyebrow, Field, Input, cx } from './ui'
 import { LogoMark, homeFor, type Route } from './Shell'
 import { BlurText, Reveal } from './effects'
+import { UtsLogo } from './UtsLogo'
+import { BrandLockup } from './BrandLockup'
+import { LanguageSwitcher } from './LanguageSwitcher'
 
 const demo = [
   { role: 'USER' as const, label: 'Student', email: 'student@tne.edu.vn', pw: 'Student123456!' },
@@ -14,7 +17,7 @@ const demo = [
 export function AuthScreen({ go }: { go: (r: Route) => void }) {
   const { loginAsync, registerAsync, users } = useStore()
   const [mode, setMode] = useState<'signin' | 'register'>('signin')
-  const [form, setForm] = useState({ fullName: '', email: '', password: '', studentCode: '' })
+  const [form, setForm] = useState({ fullName: '', email: '', password: '', hcmutId: '', utsId: '' })
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
   const set = (k: keyof typeof form) => (e: { target: { value: string } }) => setForm((f) => ({ ...f, [k]: e.target.value }))
@@ -32,7 +35,14 @@ export function AuthScreen({ go }: { go: (r: Route) => void }) {
           go(homeFor(res.user.role))
         }
       } else {
-        const res = await registerAsync(form)
+        const res = await registerAsync({
+          fullName: form.fullName,
+          email: form.email,
+          password: form.password,
+          hcmutId: form.hcmutId,
+          utsId: form.utsId,
+          studentCode: form.hcmutId,
+        })
         if (res.error) {
           setError(res.error)
         } else if (res.user) {
@@ -60,19 +70,28 @@ export function AuthScreen({ go }: { go: (r: Route) => void }) {
     }
   }
 
-  const codeTaken =
+  const hcmutTaken =
     mode === 'register' &&
-    form.studentCode.length >= 8 &&
-    users.some((u) => u.studentCode === form.studentCode.trim().toUpperCase())
+    form.hcmutId.trim().length >= 5 &&
+    users.some((u) => u.hcmutId === form.hcmutId.trim().toUpperCase() || u.studentCode === form.hcmutId.trim().toUpperCase())
+
+  const utsTaken =
+    mode === 'register' &&
+    form.utsId.trim().length >= 5 &&
+    users.some((u) => u.utsId === form.utsId.trim().toUpperCase())
+
+  const codeTaken = hcmutTaken || utsTaken
 
   return (
     <div className="relative flex min-h-[calc(100vh-40px)] items-center justify-center overflow-hidden px-6 py-16">
+      <div className="absolute top-4 right-6 z-20">
+        <LanguageSwitcher />
+      </div>
       <RailDiagram />
       <div className="relative z-10 w-full max-w-[440px]">
-        <div className="mb-8 flex flex-col items-center gap-4 text-center">
-          <div className="flex items-center gap-2.5 bg-paper px-2">
-            <LogoMark size={20} />
-            <span className="font-mono text-[14px] font-semibold">[UTS-TNE LEDGER]</span>
+        <div className="mb-8 flex flex-col items-center gap-3 text-center">
+          <div className="flex flex-col items-center gap-2 bg-paper px-5 py-3 rounded-md border border-rule/70 shadow-subtle">
+            <BrandLockup size="lg" />
           </div>
           <h1 className="bg-paper px-3 font-display text-[40px] leading-[1.1] font-w450 text-ink md:text-[52px]">
             <BlurText text="Rooms, keys, on the record." shine />
@@ -117,14 +136,24 @@ export function AuthScreen({ go }: { go: (r: Route) => void }) {
               />
             </Field>
             {mode === 'register' && (
-              <Field label="Student ID · studentCode" hint="unique · required" error={codeTaken ? 'This Student ID is already registered.' : null}>
-                <Input
-                  value={form.studentCode}
-                  onChange={(e) => setForm((f) => ({ ...f, studentCode: e.target.value.toUpperCase().slice(0, 8) }))}
-                  placeholder="SE184022"
-                  className="font-mono tracking-wider"
-                />
-              </Field>
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                <Field label="HCMUT Student ID" hint="required" error={hcmutTaken ? 'HCMUT ID already registered.' : null}>
+                  <Input
+                    value={form.hcmutId}
+                    onChange={(e) => setForm((f) => ({ ...f, hcmutId: e.target.value.toUpperCase().slice(0, 12) }))}
+                    placeholder="e.g. 2110123"
+                    className="font-mono tracking-wider"
+                  />
+                </Field>
+                <Field label="UTS Student ID" hint="required" error={utsTaken ? 'UTS ID already registered.' : null}>
+                  <Input
+                    value={form.utsId}
+                    onChange={(e) => setForm((f) => ({ ...f, utsId: e.target.value.toUpperCase().slice(0, 12) }))}
+                    placeholder="e.g. 14234567"
+                    className="font-mono tracking-wider"
+                  />
+                </Field>
+              </div>
             )}
             {error && <div className="border-l-2 border-plum bg-plum/[0.06] px-3 py-2 text-[13px] font-medium text-plum">{error}</div>}
             <Button type="submit" size="md" className="mt-2 w-full" disabled={codeTaken || loading}>

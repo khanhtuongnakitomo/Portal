@@ -1,5 +1,5 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
-import type { AuditLog, Booking, Role, Room, RoomBlock, Settings, User } from './types'
+import type { AuditLog, Booking, BookingMember, Role, Room, RoomBlock, Settings, User } from './types'
 import { makePassCode, seedAudit, seedBlocks, seedBookings, seedRooms, seedSettings, seedUsers, uid } from './seed'
 import { addDays, daysBetween, durationMin, isWeekend, overlaps, parseHM, startOfDay } from './time'
 import {
@@ -21,6 +21,7 @@ import {
   apiRegister,
   apiRejectBooking,
   apiReturnKey,
+  apiSendManagerEmailNotification,
   apiUpdateRoom,
   apiUpdateSettings,
   apiUpdateUserRole,
@@ -55,27 +56,34 @@ export interface Store {
   isLoading: boolean
   notify: (message: string, tone?: Toast['tone']) => void
   login: (email: string, password: string) => Result
-  register: (input: { fullName: string; email: string; password: string; studentCode: string }) => Result
+  register: (input: { fullName: string; email: string; password: string; studentCode?: string; hcmutId?: string; utsId?: string }) => Result
   logout: () => void
   previewAs: (role: Role) => void
-  createBooking: (input: { roomId: string; start: Date; end: Date; phone: string; title: string; purpose: string }) => Result
+  createBooking: (input: { roomId: string; start: Date; end: Date; phone: string; title: string; purpose: string; members?: string; memberList?: BookingMember[] }) => Result
   cancelBooking: (id: string) => void
   approveBooking: (id: string, note?: string) => void
   rejectBooking: (id: string, note: string) => Result
   checkoutKey: (id: string) => void
   returnKey: (id: string) => void
   createBlock: (input: { roomId: string; start: Date; end: Date; reason: string }) => Result
+  blockFacilityWindow: (input: {
+    roomIds: string[]
+    start: Date
+    end: Date
+    reason: string
+  }) => Result
   cancelBlock: (id: string) => void
   deleteBlock?: (id: string) => void
   saveRoom: (room: Room) => Result
   deleteRoom: (id: string) => void
   updateUserRole: (id: string, role: Role, studentCode?: string) => Result
+  updateProfile: (patch: { fullName: string; hcmutId?: string; utsId?: string }) => Result
   toggleUserStatus: (id: string) => void
   updateSettings: (s: Settings) => Result
   validateSlot: (roomId: string, start: Date, end: Date, ignoreBookingId?: string) => Result
   refreshData: () => Promise<void>
   loginAsync: (email: string, password: string) => Promise<{ error: string | null; user?: User }>
-  registerAsync: (input: { fullName: string; email: string; password: string; studentCode: string }) => Promise<{ error: string | null; user?: User }>
+  registerAsync: (input: { fullName: string; email: string; password: string; studentCode?: string; hcmutId?: string; utsId?: string }) => Promise<{ error: string | null; user?: User }>
   createManagerAccount: (input: { fullName: string; email: string; password: string }) => Promise<string | null>
   assignRoomSchedule: (input: {
     roomId: string
@@ -102,7 +110,7 @@ function loadLocal<T>(key: string, fallback: T): T {
 }
 
 function loadUsers(): User[] {
-  const saved = loadLocal<User[]>('tne_v6_users', [])
+  const saved = loadLocal<User[]>('tne_v7_users', [])
   if (!saved || saved.length === 0) return seedUsers
 
   const merged = saved.map((u) => {
@@ -115,8 +123,15 @@ function loadUsers(): User[] {
     const idx = merged.findIndex((u) => u.id === seed.id || u.email.toLowerCase() === seed.email.toLowerCase())
     if (idx === -1) {
       merged.push(seed)
-    } else if (seed.id === 'u_stu' || seed.id === 'u_mgr' || seed.id === 'u_adm') {
-      merged[idx] = { ...merged[idx], ...seed, role: seed.role }
+    } else {
+      merged[idx] = {
+        ...seed,
+        ...merged[idx],
+        role: seed.role,
+        hcmutId: merged[idx].hcmutId || seed.hcmutId,
+        utsId: merged[idx].utsId || seed.utsId,
+        studentCode: merged[idx].studentCode || seed.studentCode,
+      }
     }
   }
   return merged
@@ -137,9 +152,12 @@ function loadInitialUserId(users: User[]): string | null {
 export function StoreProvider({ children }: { children: ReactNode }) {
   const [users, setUsers] = useState<User[]>(loadUsers)
   const [rooms, setRooms] = useState<Room[]>(() => loadLocal('tne_v5_rooms', seedRooms))
-  const [bookings, setBookings] = useState<Booking[]>(() => loadLocal('tne_v5_bookings', seedBookings()))
+  const [bookings, setBookings] = useState<Booking[]>(() => loadLocal('tne_v10_bookings', seedBookings()))
   const [blocks, setBlocks] = useState<RoomBlock[]>(() => loadLocal('tne_v5_blocks', seedBlocks()))
-  const [settings, setSettings] = useState<Settings>(() => loadLocal('tne_v5_settings', seedSettings))
+  const [settings, setSettings] = useState<Settings>(() => {
+    const loaded = loadLocal('tne_v6_settings', seedSettings)
+    return { ...loaded, maxDurationMinutes: 120 }
+  })
   const [audit, setAudit] = useState<AuditLog[]>(() => loadLocal('tne_v5_audit', seedAudit()))
   const [currentUserId, setCurrentUserId] = useState<string | null>(() => loadInitialUserId(users))
   const [toasts, setToasts] = useState<Toast[]>([])
@@ -152,7 +170,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   // Sync to localStorage
   useEffect(() => {
     try {
-      localStorage.setItem('tne_v6_users', JSON.stringify(users))
+      localStorage.setItem('tne_v7_users', JSON.stringify(users))
     } catch {}
   }, [users])
 
@@ -164,7 +182,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     try {
-      localStorage.setItem('tne_v5_bookings', JSON.stringify(bookings))
+      localStorage.setItem('tne_v10_bookings', JSON.stringify(bookings))
     } catch {}
   }, [bookings])
 
@@ -176,7 +194,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     try {
-      localStorage.setItem('tne_v5_settings', JSON.stringify(settings))
+      localStorage.setItem('tne_v6_settings', JSON.stringify(settings))
     } catch {}
   }, [settings])
 
@@ -213,7 +231,6 @@ export function StoreProvider({ children }: { children: ReactNode }) {
 
   const validateSlot = useCallback(
     (roomId: string, start: Date, end: Date, ignoreBookingId?: string): Result => {
-      if (isWeekend(start) || isWeekend(end)) return 'Rooms are only available on workdays (Monday–Friday).'
       const room = rooms.find((r) => r.id === roomId)
       if (!room) return 'Room not found.'
       if (room.status !== 'AVAILABLE') return `Room ${room.code} is ${room.status.toLowerCase()}.`
@@ -227,8 +244,9 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       const eMin = end.getHours() * 60 + end.getMinutes() || 24 * 60
       if (sMin < open.h * 60 + open.m || eMin > close.h * 60 + close.m)
         return `Outside opening hours (${settings.openTime}–${settings.closeTime}).`
-      if (durationMin(start, end) > settings.maxDurationMinutes)
-        return `Exceeds maximum duration of ${settings.maxDurationMinutes} minutes.`
+      const maxDur = Math.min(120, settings.maxDurationMinutes || 120)
+      if (durationMin(start, end) > maxDur)
+        return `Maximum booking duration is 2 hours (${maxDur} minutes).`
 
       // Check if current user already has a PENDING booking on that room overlapping this slot
       const myPendingClash = bookings.find(
@@ -420,9 +438,10 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     },
 
     async registerAsync(input) {
-      const code = input.studentCode.trim().toUpperCase()
-      if (!input.fullName.trim() || !input.email.trim() || !input.password || !code) {
-        return { error: 'All fields are required.' }
+      const hcmut = (input.hcmutId ?? input.studentCode ?? '').trim().toUpperCase()
+      const uts = (input.utsId ?? '').trim().toUpperCase()
+      if (!input.fullName.trim() || !input.email.trim() || !input.password || !hcmut || !uts) {
+        return { error: 'All fields (including both HCMUT ID and UTS ID) are required.' }
       }
       if (!/^\S+@\S+\.\S+$/.test(input.email)) {
         return { error: 'Enter a valid email address.' }
@@ -430,21 +449,27 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       if (input.password.length < 6) {
         return { error: 'Password must be at least 6 characters.' }
       }
-      if (!/^[A-Z]{2}\d{6}$/.test(code)) {
-        return { error: 'Student ID format: two letters + six digits (e.g. SE123456).' }
+      if (hcmut.length < 5) {
+        return { error: 'Enter a valid HCMUT Student ID (e.g. 2110123).' }
       }
+      if (uts.length < 5) {
+        return { error: 'Enter a valid UTS Student ID (e.g. 14234567).' }
+      }
+
+      const combinedCode = `${hcmut} / ${uts}`
 
       // Try API register
       try {
-        const apiRes = await apiRegister(input)
+        const apiRes = await apiRegister({ ...input, studentCode: combinedCode, hcmutId: hcmut, utsId: uts })
         if ('token' in apiRes && apiRes.user) {
           setApiConnected(true)
-          setUsers((prev) => [...prev, apiRes.user])
-          setCurrentUserId(apiRes.user.id)
-          setStoredUser(apiRes.user)
-          log('USER_REGISTER', `user:${apiRes.user.id}`, { studentCode: code, role: 'USER', method: 'API' }, apiRes.user.id)
+          const enriched: User = { ...apiRes.user, hcmutId: hcmut, utsId: uts, studentCode: hcmut }
+          setUsers((prev) => [...prev, enriched])
+          setCurrentUserId(enriched.id)
+          setStoredUser(enriched)
+          log('USER_REGISTER', `user:${enriched.id}`, { studentCode: hcmut, hcmutId: hcmut, utsId: uts, role: 'USER', method: 'API' }, enriched.id)
           notify('Account created successfully.')
-          return { error: null, user: apiRes.user }
+          return { error: null, user: enriched }
         }
       } catch {}
 
@@ -452,8 +477,11 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       if (users.some((u) => u.email.toLowerCase() === input.email.trim().toLowerCase())) {
         return { error: 'Email is already registered.' }
       }
-      if (users.some((u) => u.studentCode === code)) {
-        return { error: `Student ID ${code} is already registered.` }
+      if (users.some((u) => u.hcmutId === hcmut || u.studentCode === hcmut)) {
+        return { error: `HCMUT Student ID ${hcmut} is already registered.` }
+      }
+      if (users.some((u) => u.utsId === uts)) {
+        return { error: `UTS Student ID ${uts} is already registered.` }
       }
 
       const u: User = {
@@ -462,7 +490,9 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         email: input.email.trim(),
         password: input.password,
         role: 'USER',
-        studentCode: code,
+        studentCode: hcmut,
+        hcmutId: hcmut,
+        utsId: uts,
         status: 'ACTIVE',
         createdAt: new Date().toISOString(),
       }
@@ -470,7 +500,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       setCurrentUserId(u.id)
       setStoredUser(u)
       setStoredToken(`local_token_${u.id}`)
-      log('USER_REGISTER', `user:${u.id}`, { studentCode: code, role: 'USER', method: 'LOCAL' }, u.id)
+      log('USER_REGISTER', `user:${u.id}`, { studentCode: hcmut, hcmutId: hcmut, utsId: uts, role: 'USER', method: 'LOCAL' }, u.id)
       notify('Account created successfully.')
       return { error: null, user: u }
     },
@@ -510,14 +540,17 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       return null
     },
 
-    register({ fullName, email, password, studentCode }) {
-      const code = studentCode.trim().toUpperCase()
-      if (!fullName.trim() || !email.trim() || !password || !code) return 'All fields are required.'
+    register({ fullName, email, password, studentCode, hcmutId, utsId }) {
+      const hcmut = (hcmutId ?? studentCode ?? '').trim().toUpperCase()
+      const uts = (utsId ?? '').trim().toUpperCase()
+      if (!fullName.trim() || !email.trim() || !password || !hcmut || !uts) return 'All fields are required.'
       if (!/^\S+@\S+\.\S+$/.test(email)) return 'Enter a valid email address.'
       if (password.length < 6) return 'Password must be at least 6 characters.'
-      if (!/^[A-Z]{2}\d{6}$/.test(code)) return 'Student ID format: two letters + six digits (e.g. SE123456).'
+      if (hcmut.length < 5) return 'Enter a valid HCMUT Student ID (e.g. 2110123).'
+      if (uts.length < 5) return 'Enter a valid UTS Student ID (e.g. 14234567).'
       if (users.some((u) => u.email.toLowerCase() === email.trim().toLowerCase())) return 'Email is already registered.'
-      if (users.some((u) => u.studentCode === code)) return `Student ID ${code} is already registered.`
+      if (users.some((u) => u.hcmutId === hcmut || u.studentCode === hcmut)) return `HCMUT Student ID ${hcmut} is already registered.`
+      if (users.some((u) => u.utsId === uts)) return `UTS Student ID ${uts} is already registered.`
 
       const u: User = {
         id: uid('u'),
@@ -525,7 +558,9 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         email: email.trim(),
         password,
         role: 'USER',
-        studentCode: code,
+        studentCode: hcmut,
+        hcmutId: hcmut,
+        utsId: uts,
         status: 'ACTIVE',
         createdAt: new Date().toISOString(),
       }
@@ -533,11 +568,11 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       setCurrentUserId(u.id)
       setStoredUser(u)
       setStoredToken(`local_token_${u.id}`)
-      log('USER_REGISTER', `user:${u.id}`, { studentCode: code, role: 'USER' }, u.id)
+      log('USER_REGISTER', `user:${u.id}`, { studentCode: hcmut, hcmutId: hcmut, utsId: uts, role: 'USER' }, u.id)
       notify('Account created.')
 
       // Fire async api register in background if reachable
-      apiRegister({ fullName, email, password, studentCode }).catch(() => {})
+      apiRegister({ fullName, email, password, studentCode: `${hcmut} / ${uts}`, hcmutId: hcmut, utsId: uts }).catch(() => {})
       return null
     },
 
@@ -626,8 +661,9 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       return null
     },
 
-    createBooking({ roomId, start, end, phone, title, purpose }) {
+    createBooking({ roomId, start, end, phone, title, purpose, members, memberList }) {
       if (!currentUser) return 'Not signed in.'
+      if (durationMin(start, end) > 120) return 'Maximum booking duration is 2 hours (120 minutes).'
       const err = validateSlot(roomId, start, end)
       if (err) return err
       const room = rooms.find((r) => r.id === roomId)!
@@ -636,6 +672,30 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       if (!purpose.trim()) return 'Purpose is required.'
       const active = bookings.filter((b) => b.userId === currentUser.id && ACTIVE_STATUSES.includes(b.status)).length
       if (active >= settings.maxActiveBookings) return `You already hold ${active} active bookings (limit ${settings.maxActiveBookings}).`
+
+      const validMemberList =
+        memberList?.filter(
+          (m) => m.hcmutId?.trim() || m.utsId?.trim() || m.studentId?.trim() || m.name?.trim(),
+        ) ?? []
+      if (validMemberList.length === 0 && (!members || !members.trim())) {
+        return 'At least 1 participating group member with student ID (HCMUT or UTS) is required.'
+      }
+
+      const formattedMembers = validMemberList.length > 0
+        ? validMemberList
+            .map((m, idx) => {
+              const displayName = m.name?.trim() || `Member #${idx + 1}`
+              const ids = [m.hcmutId ? `HCMUT: ${m.hcmutId}` : '', m.utsId ? `UTS: ${m.utsId}` : '']
+                .filter(Boolean)
+                .join(' · ')
+              return ids ? `${displayName} (${ids})` : `${displayName} (${m.studentId || 'Member'})`
+            })
+            .join(', ')
+        : members?.trim()
+
+      const memberIds = validMemberList.length > 0
+        ? (validMemberList.flatMap((m) => [m.hcmutId, m.utsId, m.studentId].filter(Boolean)) as string[])
+        : (members ? members.split(',').map((s) => s.trim()).filter(Boolean) : [])
 
       const booking: Booking = {
         id: uid('bk'),
@@ -646,20 +706,32 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         phone: phone.trim(),
         title: title.trim(),
         purpose: purpose.trim(),
+        members: formattedMembers,
+        memberIds: memberIds.length > 0 ? memberIds : undefined,
+        memberList: validMemberList.length > 0 ? validMemberList : undefined,
+        attendeeCount: 1 + (validMemberList.length > 0 ? validMemberList.length : memberIds.length),
         status: 'PENDING',
         passCode: makePassCode(room.code),
         createdAt: new Date().toISOString(),
       }
       setBookings((bs) => [...bs, booking])
-      log('BOOKING_CREATE', `booking:${booking.id}`, { room: room.code, status: 'PENDING', title: booking.title })
-      notify(`Request for Room ${room.code} sent to the manager approval queue.`)
+      log('BOOKING_CREATE', `booking:${booking.id}`, {
+        room: room.code,
+        status: 'PENDING',
+        title: booking.title,
+        members: booking.members ?? null,
+      })
+      notify('Booking request submitted successfully & notification email dispatched directly to Facilities Manager (manager@tne.edu.vn).')
+
+      // Dispatch notification email to manager
+      apiSendManagerEmailNotification(booking).catch(() => {})
 
       if (apiConnected) {
         apiCreateBooking({
           roomId,
           title: booking.title,
-          purpose: booking.purpose,
-          attendeeCount: 1,
+          purpose: booking.members ? `${booking.purpose} [Members: ${booking.members}]` : booking.purpose,
+          attendeeCount: booking.attendeeCount ?? 1,
           startTime: booking.start,
           endTime: booking.end,
         }).catch(() => {})
@@ -868,6 +940,71 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       return null
     },
 
+    blockFacilityWindow({ roomIds, start, end, reason }) {
+      if (!reason.trim()) return 'A reason is required.'
+      if (end <= start) return 'End must be after start.'
+      const cleanReason = reason.trim()
+      const newBlocks: RoomBlock[] = roomIds.map((roomId) => ({
+        id: uid('blk'),
+        roomId,
+        start: start.toISOString(),
+        end: end.toISOString(),
+        reason: cleanReason,
+        createdBy: actor,
+        active: true,
+      }))
+
+      // Find ALL displaced bookings (PENDING, APPROVED, KEY_CHECKED_OUT) across all targeted rooms
+      const displaced = bookings.filter(
+        (b) =>
+          roomIds.includes(b.roomId) &&
+          (b.status === 'PENDING' || b.status === 'APPROVED' || b.status === 'KEY_CHECKED_OUT') &&
+          overlaps(b.start, b.end, start, end),
+      )
+
+      if (displaced.length) {
+        setBookings((bs) =>
+          bs.map((b) =>
+            displaced.some((d) => d.id === b.id)
+              ? {
+                  ...b,
+                  status: 'REJECTED',
+                  note: `Cancelled due to facility lock: ${cleanReason}`,
+                }
+              : b,
+          ),
+        )
+      }
+
+      setBlocks((ks) => [...newBlocks, ...ks])
+      log('ROOM_BLOCK_CREATE', `rooms:${roomIds.join(',')}`, {
+        reason: cleanReason,
+        start: start.toISOString(),
+        end: end.toISOString(),
+        displaced: displaced.map((d) => d.id),
+      })
+
+      const msg = displaced.length
+        ? `${roomIds.length > 1 ? 'All rooms' : 'Room'} locked. ${displaced.length} pending reservation(s) cancelled.`
+        : `${roomIds.length > 1 ? 'All rooms' : 'Room'} locked.`
+      notify(msg)
+
+      if (apiConnected) {
+        roomIds.forEach((roomId) => {
+          apiCreateRoomBlock({
+            roomId,
+            startTime: start.toISOString(),
+            endTime: end.toISOString(),
+            reason: cleanReason,
+          }).catch(() => {})
+        })
+        displaced.forEach((d) => {
+          apiRejectBooking(d.id, `Cancelled due to facility lock: ${cleanReason}`).catch(() => {})
+        })
+      }
+      return null
+    },
+
     cancelBlock(id) {
       const blk = blocks.find((k) => k.id === id)
       setBlocks((ks) => ks.map((k) => (k.id === id ? { ...k, active: false } : k)))
@@ -934,6 +1071,36 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       if (apiConnected) {
         apiUpdateUserRole(id, role, code).catch(() => {})
       }
+      return null
+    },
+
+    updateProfile(patch) {
+      if (!currentUser) return 'Not authenticated.'
+      const name = patch.fullName.trim()
+      if (!name) return 'Full name cannot be empty.'
+
+      const hcmut = patch.hcmutId ? patch.hcmutId.trim().toUpperCase() : currentUser.hcmutId
+      const uts = patch.utsId ? patch.utsId.trim().toUpperCase() : currentUser.utsId
+
+      if (hcmut && users.some((x) => x.id !== currentUser.id && (x.hcmutId === hcmut || x.studentCode === hcmut))) {
+        return `HCMUT Student ID ${hcmut} is already registered to another account.`
+      }
+      if (uts && users.some((x) => x.id !== currentUser.id && x.utsId === uts)) {
+        return `UTS Student ID ${uts} is already registered to another account.`
+      }
+
+      const updatedUser: User = {
+        ...currentUser,
+        fullName: name,
+        hcmutId: hcmut,
+        utsId: uts,
+        studentCode: hcmut || currentUser.studentCode,
+      }
+
+      setUsers((us) => us.map((x) => (x.id === currentUser.id ? updatedUser : x)))
+      setStoredUser(updatedUser)
+      log('USER_PROFILE_UPDATE', `user:${currentUser.id}`, { fullName: name, hcmutId: hcmut, utsId: uts })
+      notify('Profile updated successfully.')
       return null
     },
 

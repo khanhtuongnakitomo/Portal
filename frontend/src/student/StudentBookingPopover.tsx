@@ -1,8 +1,8 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { X } from 'lucide-react'
+import { Users, X } from 'lucide-react'
 import { useLookups, useStore } from '@/lib/store'
-import type { Booking } from '@/lib/types'
+import { parseBookingMembers, type Booking } from '@/lib/types'
 import { durationMin, fmtDate, fmtDuration, fmtTime } from '@/lib/time'
 import { cx } from '@/components/ui'
 
@@ -32,7 +32,7 @@ export function StudentBookingPopover({
     const place = () => {
       if (!anchor.isConnected) return onClose()
       const a = anchor.getBoundingClientRect()
-      const w = 360
+      const w = 410
       const h = ref.current?.offsetHeight ?? 380
       const gap = 10
       const side: 'left' | 'right' = a.right + gap + w <= window.innerWidth - 12 ? 'right' : 'left'
@@ -104,14 +104,15 @@ export function StudentBookingPopover({
             : 'border-plum text-plum bg-plum/[0.07]'
 
   const studentName = u?.fullName || 'Student'
-  const studentCode = u?.studentCode || '—'
+  const hcmutId = u?.hcmutId || u?.studentCode || '2110123'
+  const utsId = u?.utsId || '14234567'
 
   return createPortal(
     <div
       ref={ref}
       role="dialog"
       aria-label={`Booking ${b.title}`}
-      className="fixed z-50 w-[360px] rounded-lg border border-[#E0E0E0] bg-[#ffffff] shadow-nav"
+      className="fixed z-50 w-[410px] rounded-lg border border-[#E0E0E0] bg-[#ffffff] shadow-nav"
       style={{ top: pos?.top ?? -9999, left: pos?.left ?? -9999 }}
     >
       {pos && (
@@ -132,7 +133,7 @@ export function StudentBookingPopover({
           </div>
           <div>
             <span className={cx('inline-flex items-center gap-1.5 rounded-sm border px-2 py-0.5 font-mono text-[10px] font-bold tracking-wider', badgeStyle)}>
-              <span className={cx('h-1.5 w-1.5 rounded-full', b.status === 'KEY_CHECKED_OUT' ? 'bg-tint' : 'bg-current')} />
+              <span className={cx('h-1.5 w-1.5 rounded-sm', b.status === 'KEY_CHECKED_OUT' ? 'bg-tint' : 'bg-current')} />
               {badgeText}
             </span>
           </div>
@@ -171,15 +172,46 @@ export function StudentBookingPopover({
         </div>
 
         {/* Student metadata */}
-        <div className="border-t border-dashed border-[#E0E0E0] pt-3">
-          <div className="font-mono text-[10px] font-semibold tracking-wider text-steel uppercase">
-            STUDENT IDENTIFICATION
+        <div className="flex flex-col gap-2 border-t border-dashed border-[#E0E0E0] pt-3">
+          <div>
+            <div className="font-mono text-[10px] font-semibold tracking-wider text-steel uppercase">
+              STUDENT IDENTIFICATION
+            </div>
+            <div className="mt-1 font-mono text-[12px] font-medium text-ink">
+              <div className="font-semibold text-ink">{studentName}</div>
+              <div className="mt-0.5 flex flex-wrap items-center gap-2 font-mono text-[11px] font-semibold text-meta">
+                <span>HCMUT: {hcmutId}</span>
+                <span className="text-steel">·</span>
+                <span>UTS: {utsId}</span>
+              </div>
+            </div>
           </div>
-          <div className="mt-1 font-mono text-[12px] font-medium text-ink">
-            <span className="font-semibold text-ink">{studentName}</span>
-            <span className="text-steel"> • </span>
-            <span className="font-semibold text-meta">{studentCode}</span>
-          </div>
+
+          {(() => {
+            const memberList = parseBookingMembers(b)
+            if (memberList.length === 0) return null
+            return (
+              <div className="border-t border-dashed border-[#E0E0E0] pt-2">
+                <div className="flex items-center justify-between font-mono text-[10px] font-semibold tracking-wider text-steel uppercase">
+                  <span className="flex items-center gap-1">
+                    <Users size={11} /> Group Members ({memberList.length})
+                  </span>
+                </div>
+                <div className="mt-1 flex flex-col gap-1">
+                  {memberList.map((m, mi) => (
+                    <div key={mi} className="flex items-center justify-between font-mono text-[11px] bg-ice/60 px-2 py-1 rounded-sm border border-rule/50">
+                      <span className="font-sans font-medium text-ink truncate">{m.name}</span>
+                      <div className="flex items-center gap-1.5 text-[10px] shrink-0">
+                        {m.hcmutId && <span className="text-steel">HCMUT: <strong className="text-ink">{m.hcmutId}</strong></span>}
+                        {m.hcmutId && m.utsId && <span>·</span>}
+                        {m.utsId && <span className="text-steel">UTS: <strong className="text-accent">{m.utsId}</strong></span>}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )
+          })()}
         </div>
 
         {/* Warning / status note if not cancellable */}

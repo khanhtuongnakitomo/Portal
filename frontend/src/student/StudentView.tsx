@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react'
 import { ArrowRight, ChevronLeft, ChevronRight } from 'lucide-react'
 import { ACTIVE_STATUSES, useStore } from '@/lib/store'
+import { useI18n } from '@/lib/i18n'
 import { addDays, fmtShort, startOfWeek } from '@/lib/time'
 import { Button, Eyebrow, Tag, cx } from '@/components/ui'
 import { NavItem, PageHeader, TopNav } from '@/components/Shell'
@@ -14,6 +15,7 @@ import { StudentBookingPopover } from './StudentBookingPopover'
 
 export function StudentView() {
   const { rooms, bookings, blocks, settings, currentUser, notify } = useStore()
+  const { t } = useI18n()
   const [roomId, setRoomId] = useState<string>('ALL')
   const [weekStart, setWeekStart] = useState(() => startOfWeek(firstBookableWeek(settings)))
   const [selection, setSelection] = useState<Selection | null>(null)
@@ -37,17 +39,17 @@ export function StudentView() {
   return (
     <>
       <TopNav>
-        <NavItem active>Book a room</NavItem>
+        <NavItem active>{t('nav.bookRoom')}</NavItem>
         <NavItem onClick={() => setDrawer(true)} badge={active.length}>
-          My bookings
+          {t('nav.myBookings')}
         </NavItem>
       </TopNav>
 
       <main className="mx-auto max-w-[1440px] px-6 pt-10">
         <PageHeader
-          eyebrow="STUDENT WORKSPACE · ROOM RESERVATION"
-          title="Reserve a room. Collect the key."
-          body="Choose a room tab, then drag across open slots in the weekly ledger. Bookings open two to seven days ahead; collect the physical key with your Student ID."
+          eyebrow={t('student.eyebrow')}
+          title={t('student.heroTitle')}
+          body={t('student.heroBody')}
           right={
             <Reveal stagger className="grid grid-cols-2 border-t border-l border-rule sm:grid-cols-4">
               {[
@@ -115,15 +117,15 @@ export function StudentView() {
                     This week
                   </Button>
                   <div className="ml-2 font-mono text-[13px] font-semibold text-ink">
-                    {fmtShort(weekStart)} — {fmtShort(addDays(weekStart, 4))} · MON–FRI
+                    {fmtShort(weekStart)} — {fmtShort(addDays(weekStart, 6))} · MON–SUN
                   </div>
                 </div>
                 <div className="flex flex-wrap items-center gap-3 text-[11px] text-graphite">
                   {isAllRooms && (
                     <>
-                      <Legend swatch="bg-blue-600" label="RM 601" />
-                      <Legend swatch="bg-emerald-600" label="RM 602" />
-                      <Legend swatch="bg-violet-600" label="RM 605" />
+                      <Legend swatch="bg-accent" label="RM 601" />
+                      <Legend swatch="bg-slate" label="RM 602" />
+                      <Legend swatch="bg-plum" label="RM 605" />
                       <span className="text-rule">|</span>
                     </>
                   )}
@@ -178,12 +180,12 @@ export function StudentView() {
               </h3>
               <div className="mt-4 grid grid-cols-2 gap-px border border-rule bg-rule">
                 <div className="bg-paper px-3 py-2">
-                  <div className="font-mono text-[10px] text-steel">APPROVAL</div>
-                  <div className="font-mono text-[13px] font-semibold text-accent">MANAGER</div>
+                  <div className="font-mono text-[10px] text-steel">{t('student.approval')}</div>
+                  <div className="font-mono text-[13px] font-semibold text-accent">{t('student.managerRole')}</div>
                 </div>
                 <div className="bg-paper px-3 py-2">
-                  <div className="font-mono text-[10px] text-steel">KEY DESK</div>
-                  <div className="font-mono text-[13px] font-semibold">LEVEL 1</div>
+                  <div className="font-mono text-[10px] text-steel">{t('student.keyPickup')}</div>
+                  <div className="font-mono text-[12px] font-semibold text-ink">{t('student.managerOffice')}</div>
                 </div>
               </div>
               <div className="mt-4 flex flex-wrap gap-1.5">
@@ -194,16 +196,16 @@ export function StudentView() {
             </div>
 
             <div className="flex flex-col gap-3 border-t border-ink pt-4">
-              <Eyebrow tone="ink">HOW IT WORKS</Eyebrow>
+              <Eyebrow tone="ink">{t('student.howItWorks')}</Eyebrow>
               {[
-                ['01', 'Drag across open slots on a highlighted day.'],
-                ['02', 'Confirm your contact details and purpose in the ledger entry.'],
-                ['03', 'Wait for Manager approval on your reservation.'],
-              ].map(([n, t]) => (
+                ['01', t('student.step1')],
+                ['02', t('student.step2')],
+                ['03', t('student.step3')],
+              ].map(([n, tVal]) => (
                 <div key={n} className="flex gap-3 border-b border-dashed border-rule pb-3 last:border-0">
                   <span className="font-mono text-[12px] font-semibold text-accent">{n}</span>
                   <span className="text-[14px] leading-[1.5] text-graphite">
-                    <ScrollRevealText text={t} />
+                    <ScrollRevealText text={tVal} />
                   </span>
                 </div>
               ))}
@@ -217,7 +219,14 @@ export function StudentView() {
                     All bookings <ArrowRight size={14} />
                   </button>
                 </div>
-                <DigitalPass booking={nextPass} room={rooms.find((r) => r.id === nextPass.roomId)} holder={currentUser.fullName} studentCode={currentUser.studentCode} />
+                <DigitalPass
+                  booking={nextPass}
+                  room={rooms.find((r) => r.id === nextPass.roomId)}
+                  holder={currentUser.fullName}
+                  studentCode={currentUser.studentCode}
+                  hcmutId={currentUser.hcmutId}
+                  utsId={currentUser.utsId}
+                />
               </div>
             ) : (
               <Button variant="outline" onClick={() => setDrawer(true)}>

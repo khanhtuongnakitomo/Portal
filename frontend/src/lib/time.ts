@@ -61,7 +61,7 @@ export function fmtStamp(d: Date | string) {
   return `${x.getFullYear()}-${pad(x.getMonth() + 1)}-${pad(x.getDate())} ${pad(x.getHours())}:${pad(x.getMinutes())}:${pad(x.getSeconds())}`
 }
 
-export function fmtRange(start: string, end: string) {
+export function fmtRange(start: string | Date, end: string | Date) {
   return `${fmtTime(start)}–${fmtTime(end)}`
 }
 
@@ -88,7 +88,11 @@ export function overlaps(aStart: string | Date, aEnd: string | Date, bStart: str
   return new Date(aStart) < new Date(bEnd) && new Date(bStart) < new Date(aEnd)
 }
 
-export function isWeekend(d: Date): boolean { const day = d.getDay(); return day === 0 || day === 6; }
+export function isWeekend(d: Date): boolean {
+  const day = d.getDay()
+  return day === 0 || day === 6
+}
 
-export function ensureWorkday(d: Date): Date { const x = new Date(d); const day = x.getDay(); if (day === 6) return addDays(x, 2); if (day === 0) return addDays(x, 1); return x;
+export function ensureWorkday(d: Date): Date {
+  return new Date(d)
 }

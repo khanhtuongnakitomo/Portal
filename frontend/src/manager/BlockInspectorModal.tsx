@@ -12,7 +12,7 @@ interface BlockInspectorModalProps {
 }
 
 export function BlockInspectorModal({ block, onClose }: BlockInspectorModalProps) {
-  const { cancelBlock, notify } = useStore()
+  const { blocks, cancelBlock, notify } = useStore()
   const { room, user } = useLookups()
 
   useEffect(() => {
@@ -26,15 +26,22 @@ export function BlockInspectorModal({ block, onClose }: BlockInspectorModalProps
 
   if (!block) return null
 
-  const r = room(block.roomId)
+  const isAll = block.roomId === 'ALL'
+  const r = !isAll ? room(block.roomId) : undefined
   const creator = user(block.createdBy)
   const s = new Date(block.start)
   const e = new Date(block.end)
   const dur = durationMin(s, e)
 
   const handleCancel = () => {
-    cancelBlock(block.id)
-    notify(`Room ${r?.code ?? ''} block cancelled. Slots released.`)
+    if (isAll) {
+      const matching = blocks.filter((b) => b.active && b.start === block.start && b.end === block.end)
+      matching.forEach((b) => cancelBlock(b.id))
+      notify('All room blocks cancelled. Slots released.')
+    } else {
+      cancelBlock(block.id)
+      notify(`Room ${r?.code ?? ''} block cancelled. Slots released.`)
+    }
     onClose()
   }
 
@@ -60,7 +67,7 @@ export function BlockInspectorModal({ block, onClose }: BlockInspectorModalProps
             type="button"
             onClick={onClose}
             aria-label="Close"
-            className="rounded-[4px] p-1.5 text-steel hover:bg-paper hover:text-ink"
+            className="rounded-[4px] p-1.5 text-steel hover:bg-paper hover:text-ink cursor-pointer"
           >
             <X size={18} />
           </button>
@@ -71,10 +78,10 @@ export function BlockInspectorModal({ block, onClose }: BlockInspectorModalProps
           <div className="flex items-center justify-between border-b border-rule/70 pb-3">
             <div className="flex items-center gap-2">
               <span className="font-mono text-[20px] font-bold text-ink">
-                RM {r?.code}
+                {isAll ? 'ALL ROOMS' : `RM ${r?.code}`}
               </span>
               <span className="font-mono text-[12px] text-steel">
-                · {r?.name} (Cap {r?.capacity})
+                · {isAll ? 'Rooms 601, 602, 605' : `${r?.name} (Cap ${r?.capacity})`}
               </span>
             </div>
             <span
@@ -83,7 +90,7 @@ export function BlockInspectorModal({ block, onClose }: BlockInspectorModalProps
                 block.active ? 'bg-plum text-paper' : 'bg-edge text-steel',
               )}
             >
-              {block.active ? 'ACTIVE BLOCK' : 'CANCELLED'}
+              {block.active ? (isAll ? 'ALL ROOMS LOCKED' : 'ACTIVE BLOCK') : 'CANCELLED'}
             </span>
           </div>
 

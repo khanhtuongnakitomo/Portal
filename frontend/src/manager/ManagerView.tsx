@@ -2,20 +2,23 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } fr
 import { createPortal } from 'react-dom'
 import {
   Ban,
-  Calendar,
   Check,
   ChevronDown,
   ChevronLeft,
   ChevronRight,
   ChevronUp,
-  LayoutGrid,
+  Clock,
+  KeyRound,
+  Mail,
   Phone,
   Plus,
   TriangleAlert,
+  Users,
   X,
 } from 'lucide-react'
 import { useLookups, useStore } from '@/lib/store'
-import type { Booking, RoomBlock } from '@/lib/types'
+import { useI18n } from '@/lib/i18n'
+import { parseBookingMembers, type Booking, type RoomBlock } from '@/lib/types'
 import {
   addDays,
   durationMin,
@@ -35,8 +38,8 @@ import { RoomTabs } from '@/components/RoomTabs'
 import { Reveal, SplitText } from '@/components/effects'
 import { WeekCalendar, extractEventBadge, isOfficialEvent } from '@/student/WeekCalendar'
 import { AssignActivityModal, type AssignModalInitial } from './AssignActivityModal'
-import { DayMatrixView } from './DayMatrixView'
 import { ApprovalBoard } from './ApprovalBoard'
+import { KeyCustodyDesk } from './KeyCustodyDesk'
 import { BlockInspectorModal } from './BlockInspectorModal'
 import { QUICK_REJECT_REASONS } from './types'
 
@@ -59,6 +62,7 @@ function getInitialWorkday(candidate?: Date) {
 
 export function ManagerView() {
   const { bookings, blocks } = useStore()
+  const { t, locale } = useI18n()
   const now = useNow()
 
   const pending = bookings.filter((b) => b.status === 'PENDING')
@@ -72,7 +76,7 @@ export function ManagerView() {
     <>
       <TopNav>
         <NavItem active badge={pending.length}>
-          Operations & Schedule
+          {locale === 'vi' ? 'Vận hành & Lịch học' : 'Operations & Schedule'}
         </NavItem>
       </TopNav>
 
@@ -80,8 +84,8 @@ export function ManagerView() {
         {/* Page Header */}
         <PageHeader
           eyebrow={`FACILITIES COMMAND · ${fmtDate(now)}`}
-          title="Operations desk"
-          body="Review booking requests with 1-click approvals, monitor the interactive hour occupancy grid & daily matrix, and assign room schedules for classes and university events."
+          title={t('manager.title')}
+          body={t('manager.subtitle')}
           right={
             <div className="flex flex-col items-end gap-3">
               <Reveal stagger className="grid grid-cols-2 border-t border-l border-rule sm:grid-cols-4">
@@ -112,24 +116,42 @@ export function ManagerView() {
   )
 }
 
-function ColumnHead({
-  n,
+function SectionTitleBlock({
+  eyebrow,
   title,
-  meta,
+  subtitle,
+  badge,
+  actions,
 }: {
-  n: string
+  eyebrow: string
   title: string
-  meta?: React.ReactNode
+  subtitle?: string
+  badge?: React.ReactNode
+  actions?: React.ReactNode
 }) {
   return (
-    <div className="flex flex-wrap items-end justify-between gap-4 border-b border-ink pb-3">
-      <div className="flex flex-col gap-2">
-        <Eyebrow>{n}</Eyebrow>
-        <h2 className="font-display text-section font-w450">
+    <div className="flex flex-wrap items-end justify-between gap-4 border-b-2 border-ink pb-3.5 select-none">
+      <div className="flex flex-col gap-1.5 max-w-[850px]">
+        <div className="flex items-center gap-2.5">
+          <Eyebrow className="!text-[12px] !font-bold !text-accent tracking-wider select-none">
+            {eyebrow}
+          </Eyebrow>
+          {badge}
+        </div>
+        <h2 className="font-display text-[26px] md:text-[32px] font-w450 text-ink leading-tight select-none">
           <SplitText key={title} text={title} />
         </h2>
+        {subtitle && (
+          <p className="font-sans text-[13px] md:text-[14px] text-graphite leading-relaxed select-none">
+            {subtitle}
+          </p>
+        )}
       </div>
-      {meta}
+      {actions && (
+        <div className="flex flex-wrap items-center gap-2">
+          {actions}
+        </div>
+      )}
     </div>
   )
 }
@@ -143,12 +165,13 @@ export interface OperationsWorkspaceProps {
 }
 
 export function OperationsWorkspace({
-  eyebrow = '01 / MASTER CALENDAR · ALL-ROOMS MATRIX & APPROVAL',
+  eyebrow = '01 / MASTER CALENDAR · ROOM SCHEDULE & APPROVAL',
   title = 'Room schedule & occupancy',
   hideHeader = false,
 }: OperationsWorkspaceProps = {}) {
   const { rooms, bookings, blocks, settings, currentUser, notify } = useStore()
   const { user, room: roomOf } = useLookups()
+  const { t, locale } = useI18n()
 
   const firstPending = useMemo(
     () => bookings.filter((b) => b.status === 'PENDING').sort((a, b) => +new Date(a.start) - +new Date(b.start))[0],
@@ -161,7 +184,6 @@ export function OperationsWorkspace({
   const [selectedDay, setSelectedDay] = useState<Date>(() =>
     getInitialWorkday(firstPending ? new Date(firstPending.start) : undefined),
   )
-  const [calendarViewMode, setCalendarViewMode] = useState<'week' | 'matrix'>('week')
   const [showApprovalBoard, setShowApprovalBoard] = useState(true)
 
   const [review, setReview] = useState<{ id: string; el: HTMLElement } | null>(null)
@@ -180,6 +202,8 @@ export function OperationsWorkspace({
   const isAllRooms = roomId === 'ALL'
   const room = isAllRooms ? rooms[0] : (rooms.find((r) => r.id === roomId) ?? rooms[0])
   const pending = bookings.filter((b) => b.status === 'PENDING').sort((a, b) => +new Date(a.start) - +new Date(b.start))
+  const keysOut = useMemo(() => bookings.filter((b) => b.status === 'KEY_CHECKED_OUT'), [bookings])
+  const overdueKeys = useMemo(() => keysOut.filter((b) => new Date() > new Date(b.end)), [keysOut])
   const weekEnd = addDays(weekStart, 5) // 5 Workdays (Mon–Fri)
   const pendingThisWeek = pending.filter(
     (b) => (isAllRooms || b.roomId === room?.id) && new Date(b.start) >= weekStart && new Date(b.start) < weekEnd,
@@ -207,111 +231,191 @@ export function OperationsWorkspace({
       setTimeout(() => setReview({ id: jumpTo, el }), 350)
     }
     setJumpTo(null)
-  }, [jumpTo, roomId, weekStart, calendarViewMode])
+  }, [jumpTo, roomId, weekStart])
 
   if (!room || !currentUser) return null
   const reviewing = review ? bookings.find((b) => b.id === review.id) : undefined
 
   return (
-    <section className="flex min-w-0 flex-col gap-5">
-      {/* Column Header & View Switcher */}
+    <section className="flex min-w-0 flex-col gap-8">
+      {/* Operations Quick Section Index */}
       {!hideHeader && (
-        <ColumnHead
-          n={eyebrow}
-          title={title}
-          meta={
-            <div className="flex flex-wrap items-center gap-2">
-              {/* View Switcher */}
-              <div className="flex items-center rounded-[4px] border border-rule bg-ice p-0.5">
-                <button
-                  type="button"
-                  onClick={() => setCalendarViewMode('week')}
-                  className={cx(
-                    'flex items-center gap-1.5 rounded-[3px] px-3 py-1.5 font-mono text-[12px] font-semibold transition-all',
-                    calendarViewMode === 'week'
-                      ? 'border border-ink bg-paper text-ink shadow-xs'
-                      : 'text-steel hover:text-ink',
-                  )}
-                >
-                  <Calendar size={13} />
-                  Week Grid · By Room
-                </button>
-
-                <button
-                  type="button"
-                  onClick={() => setCalendarViewMode('matrix')}
-                  className={cx(
-                    'flex items-center gap-1.5 rounded-[3px] px-3 py-1.5 font-mono text-[12px] font-semibold transition-all',
-                    calendarViewMode === 'matrix'
-                      ? 'border border-ink bg-paper text-ink shadow-xs'
-                      : 'text-steel hover:text-ink',
-                  )}
-                >
-                  <LayoutGrid size={13} />
-                  Day Matrix · All Rooms
-                </button>
-              </div>
-
-              {/* Toggle Approval Board */}
-              <Button
-                variant={showApprovalBoard ? 'dark' : 'outline'}
-                size="sm"
-                onClick={() => setShowApprovalBoard((v) => !v)}
-                className="gap-1.5"
+        <div className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-rule bg-ice/40 px-4 py-2.5 select-none shadow-2xs">
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="font-mono text-[11px] font-bold text-steel tracking-wider uppercase">
+              {t('manager.sectionsNav')}:
+            </span>
+            <div className="flex flex-wrap items-center gap-1.5 font-mono text-[12px]">
+              <a
+                href="#approval-deck-section"
+                className="inline-flex items-center gap-1.5 rounded-sm border border-rule bg-paper px-2.5 py-1 font-semibold text-graphite hover:border-ink hover:text-ink hover:bg-ice/30 transition-colors"
               >
-                <span>Approval Board ({pending.length})</span>
-                {showApprovalBoard ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
-              </Button>
+                <span className="text-steel font-bold">01</span>
+                <span>{locale === 'vi' ? 'Hàng đợi phê duyệt' : 'Approval Deck'}</span>
+                <span
+                  className={cx(
+                    'rounded-sm px-1.5 py-0.2 text-[10px] font-bold',
+                    pending.length > 0 ? 'bg-accent text-paper' : 'bg-rule text-steel',
+                  )}
+                >
+                  {pending.length}
+                </span>
+              </a>
 
-              {/* Primary Action */}
+              <a
+                href="#room-schedule-section"
+                className="inline-flex items-center gap-1.5 rounded-sm border border-rule bg-paper px-2.5 py-1 font-semibold text-graphite hover:border-ink hover:text-ink hover:bg-ice/30 transition-colors"
+              >
+                <span className="text-steel font-bold">02</span>
+                <span>{locale === 'vi' ? 'Thời khóa biểu phòng' : 'Room Schedule'}</span>
+              </a>
+
+              <a
+                href="#key-custody-section"
+                className={cx(
+                  'inline-flex items-center gap-1.5 rounded-sm border px-2.5 py-1 font-semibold transition-colors',
+                  overdueKeys.length > 0
+                    ? 'border-plum bg-plum/10 text-plum'
+                    : 'border-rule bg-paper text-graphite hover:border-ink hover:text-ink hover:bg-ice/30',
+                )}
+              >
+                <span className={cx('font-bold', overdueKeys.length > 0 ? 'text-plum' : 'text-steel')}>03</span>
+                <span>{locale === 'vi' ? 'Quản lý chìa khóa' : 'Key Custody'}</span>
+                <span
+                  className={cx(
+                    'rounded-sm px-1.5 py-0.2 text-[10px] font-bold',
+                    overdueKeys.length > 0 ? 'bg-plum text-paper' : 'bg-ink text-paper',
+                  )}
+                >
+                  {keysOut.length}
+                </span>
+              </a>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-2">
+            <a
+              href="mailto:manager@tne.edu.vn"
+              className="inline-flex items-center gap-1.5 rounded-[4px] border border-[#E0E0E0] bg-[#FFFFFF] px-2.5 py-1 font-mono text-[11px] font-semibold text-[#000000] hover:border-[#0F62FE] hover:text-[#0F62FE] transition-colors"
+              title="Direct Facilities Manager Desk Contact"
+            >
+              <Mail size={13} className="text-[#0F62FE]" />
+              <span>manager@tne.edu.vn</span>
+            </a>
+            <Button
+              variant="accent"
+              size="xs"
+              onClick={() => handleOpenAssign({ roomId: isAllRooms ? rooms[0]?.id ?? '' : room.id, date: selectedDay })}
+              className="gap-1 shadow-xs"
+            >
+              <Plus size={13} strokeWidth={2.5} /> {t('nav.assignActivity')}
+            </Button>
+          </div>
+        </div>
+      )}
+
+      {/* ───────────── SECTION 01: APPROVAL DECK ───────────── */}
+      <section id="approval-deck-section" className="scroll-mt-20 flex flex-col gap-4">
+        <SectionTitleBlock
+          eyebrow={t('manager.approvalSection.eyebrow')}
+          title={t('manager.approvalSection.title')}
+          subtitle={t('manager.approvalSection.subtitle')}
+          badge={
+            pending.length > 0 ? (
+              <span className="rounded-sm bg-accent px-2 py-0.5 font-mono text-[11px] font-bold text-paper">
+                {pending.length} {t('manager.approvalSection.pendingBadge')}
+              </span>
+            ) : (
+              <span className="rounded-sm border border-rule bg-paper px-2 py-0.5 font-mono text-[11px] font-semibold text-steel">
+                {t('manager.approvalSection.noPending')}
+              </span>
+            )
+          }
+          actions={
+            <Button
+              variant={showApprovalBoard ? 'outline' : 'dark'}
+              size="sm"
+              onClick={() => setShowApprovalBoard((v) => !v)}
+              className="gap-1.5"
+            >
+              <span>
+                {showApprovalBoard
+                  ? t('manager.approvalSection.collapseBtn')
+                  : t('manager.approvalSection.expandBtn')}
+              </span>
+              {showApprovalBoard ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+            </Button>
+          }
+        />
+
+        {showApprovalBoard ? (
+          <ApprovalBoard
+            pending={pending}
+            onInspect={(b) => {
+              if (!isAllRooms) {
+                setRoomId(b.roomId)
+              }
+              setWeekStart(startOfWeek(new Date(b.start)))
+              setSelectedDay(startOfDay(new Date(b.start)))
+              setReview(null)
+              setJumpTo(b.id)
+            }}
+          />
+        ) : (
+          <div
+            onClick={() => setShowApprovalBoard(true)}
+            className="flex cursor-pointer items-center justify-between rounded-lg border border-dashed border-rule bg-ice/20 px-4 py-3 font-mono text-[12px] text-steel hover:border-ink hover:text-ink transition-colors"
+          >
+            <div className="flex items-center gap-2">
+              <span className="h-2 w-2 rounded-full bg-accent" />
+              <span>
+                {locale === 'vi'
+                  ? `Hàng đợi đang được thu gọn · ${pending.length} yêu cầu chờ phê duyệt`
+                  : `Queue is currently collapsed · ${pending.length} pending request(s)`}
+              </span>
+            </div>
+            <span className="text-accent hover:underline flex items-center gap-1 font-semibold">
+              {locale === 'vi' ? 'Bấm để mở rộng' : 'Click to expand'} <ChevronDown size={14} />
+            </span>
+          </div>
+        )}
+      </section>
+
+      {/* ───────────── SECTION 02: ROOM SCHEDULE & CALENDAR ───────────── */}
+      <section id="room-schedule-section" className="scroll-mt-20 flex flex-col gap-4 pt-10 border-t-2 border-ink">
+        <SectionTitleBlock
+          eyebrow={eyebrow || t('manager.scheduleSection.eyebrow')}
+          title={title && title !== 'Room schedule & occupancy' ? title : t('manager.scheduleSection.title')}
+          subtitle={t('manager.scheduleSection.subtitle')}
+          actions={
+            <div className="flex flex-wrap items-center gap-2">
+              <a
+                href="#key-custody-section"
+                className={cx(
+                  'inline-flex items-center gap-1.5 rounded-[4px] border px-2.5 py-1.5 font-mono text-[11px] font-semibold transition-colors',
+                  overdueKeys.length > 0
+                    ? 'border-plum bg-plum/10 text-plum'
+                    : 'border-rule bg-paper text-graphite hover:border-ink hover:text-ink',
+                )}
+                title="Scroll down to Room Key Custody Desk"
+              >
+                <KeyRound size={13} className={overdueKeys.length > 0 ? 'text-plum' : 'text-accent'} />
+                <span>{t('nav.keyCustody')} ({keysOut.length}) ↓</span>
+              </a>
+
               <Button
                 variant="accent"
                 size="sm"
                 onClick={() => handleOpenAssign({ roomId: isAllRooms ? rooms[0]?.id ?? '' : room.id, date: selectedDay })}
                 className="gap-1.5 shadow-xs"
               >
-                <Plus size={14} strokeWidth={2.5} /> Assign Activity / Event
+                <Plus size={14} strokeWidth={2.5} /> {t('nav.assignActivity')}
               </Button>
             </div>
           }
         />
-      )}
 
-      {/* Pending Requests Carousel */}
-      <PendingQueueCarousel
-        pending={pending}
-        roomOf={roomOf}
-        user={user}
-        reviewId={review?.id}
-        onSelectItem={(b) => {
-          if (!isAllRooms) {
-            setRoomId(b.roomId)
-          }
-          setWeekStart(startOfWeek(new Date(b.start)))
-          setSelectedDay(startOfDay(new Date(b.start)))
-          setReview(null)
-          setJumpTo(b.id)
-        }}
-      />
-
-      {/* Collapsible / Expandable Approval Board */}
-      {showApprovalBoard && (
-        <ApprovalBoard
-          pending={pending}
-          onInspect={(b) => {
-            if (!isAllRooms) {
-              setRoomId(b.roomId)
-            }
-            setWeekStart(startOfWeek(new Date(b.start)))
-            setSelectedDay(startOfDay(new Date(b.start)))
-            setReview(null)
-            setJumpTo(b.id)
-          }}
-        />
-      )}
-
-      {/* View Mode 1: Week Grid by Room */}
-      {calendarViewMode === 'week' ? (
+        {/* Room Tabs & Calendar View */}
         <div>
           <RoomTabs
             rooms={rooms}
@@ -379,15 +483,15 @@ export function OperationsWorkspace({
                 {isAllRooms && (
                   <>
                     <div className="flex items-center gap-1.5">
-                      <span className="h-2.5 w-2.5 rounded-full bg-blue-600 shrink-0" />
+                      <span className="h-2 w-2 rounded-sm bg-accent shrink-0" />
                       <span className="font-semibold text-ink">RM 601</span>
                     </div>
                     <div className="flex items-center gap-1.5">
-                      <span className="h-2.5 w-2.5 rounded-full bg-emerald-600 shrink-0" />
+                      <span className="h-2 w-2 rounded-sm bg-slate shrink-0" />
                       <span className="font-semibold text-ink">RM 602</span>
                     </div>
                     <div className="flex items-center gap-1.5">
-                      <span className="h-2.5 w-2.5 rounded-full bg-violet-600 shrink-0" />
+                      <span className="h-2 w-2 rounded-sm bg-plum shrink-0" />
                       <span className="font-semibold text-ink">RM 605</span>
                     </div>
                     <span className="text-rule">|</span>
@@ -443,29 +547,60 @@ export function OperationsWorkspace({
             {/* Bottom Comfort Notice */}
             <div className="flex items-center justify-between border-t border-rule px-4 py-2.5 font-mono text-[11px] text-steel">
               <div className="flex items-center gap-2">
-                <span className="h-2 w-2 rounded-full bg-accent" />
+                <span className="h-2 w-2 rounded-sm bg-accent" />
                 DRAG OR CLICK ANY OPEN HOUR SLOT TO ASSIGN ROOM ACTIVITY · CLICK ANY BLOCK OR EVENT TO INSPECT / MANAGE
               </div>
-              <button
-                type="button"
-                onClick={() => setCalendarViewMode('matrix')}
-                className="font-bold text-accent hover:underline"
+              <a
+                href="#key-custody-section"
+                className="font-mono text-[11px] font-bold text-accent hover:underline flex items-center gap-1"
               >
-                Switch to All-Rooms Day Matrix →
-              </button>
+                {t('nav.keyCustody')} ({keysOut.length}) ↓
+              </a>
             </div>
           </div>
         </div>
-      ) : (
-        /* View Mode 2: Day Matrix Across All Rooms */
-        <DayMatrixView
-          selectedDay={selectedDay}
-          onChangeDay={setSelectedDay}
-          onAssignSlot={(init) => handleOpenAssign(init)}
-          onBookingClick={(b, el) => setReview(review?.id === b.id ? null : { id: b.id, el })}
-          onBlockClick={(blk) => setInspectedBlock(blk)}
+      </section>
+
+      {/* ───────────── SECTION 03: ROOM KEY CUSTODY DESK ───────────── */}
+      <section id="key-custody-section" className="scroll-mt-20 flex flex-col gap-4 pt-10 border-t-2 border-ink">
+        <SectionTitleBlock
+          eyebrow={t('manager.keySection.eyebrow')}
+          title={t('manager.keySection.title')}
+          subtitle={t('manager.keySection.subtitle')}
+          badge={
+            overdueKeys.length > 0 ? (
+              <span className="rounded-sm bg-plum px-2 py-0.5 font-mono text-[11px] font-bold text-paper animate-pulse">
+                {overdueKeys.length} {t('common.overdue').toUpperCase()}
+              </span>
+            ) : undefined
+          }
+          actions={
+            <div className="flex flex-wrap items-center gap-2 font-mono text-[11px]">
+              <span className="rounded-[4px] border border-rule bg-paper px-2.5 py-1 text-graphite">
+                <strong className="text-ink">{keysOut.length}</strong> {locale === 'vi' ? 'Đang mượn' : 'Out'}
+              </span>
+              <span className="rounded-[4px] border border-rule bg-paper px-2.5 py-1 text-graphite">
+                <strong className="text-ink">{bookings.filter((b) => b.status === 'APPROVED').length}</strong> {locale === 'vi' ? 'Chờ lấy' : 'Ready'}
+              </span>
+              <span className="rounded-[4px] border border-rule bg-paper px-2.5 py-1 text-graphite">
+                <strong className="text-ink">{bookings.filter((b) => b.status === 'COMPLETED' && b.returnedAt).length}</strong> {locale === 'vi' ? 'Đã trả' : 'Returned'}
+              </span>
+            </div>
+          }
         />
-      )}
+
+        <KeyCustodyDesk
+          onInspect={(b) => {
+            if (!isAllRooms) {
+              setRoomId(b.roomId)
+            }
+            setWeekStart(startOfWeek(new Date(b.start)))
+            setSelectedDay(startOfDay(new Date(b.start)))
+            setReview(null)
+            setJumpTo(b.id)
+          }}
+        />
+      </section>
 
       {/* Review & Details Popover anchored to calendar/matrix block */}
       {review && reviewing && (
@@ -507,227 +642,6 @@ function Legend({ swatch, label }: { swatch: string; label: string }) {
   )
 }
 
-/* ───────────── Pending Queue Carousel ───────────── */
-
-interface PendingQueueCarouselProps {
-  pending: Booking[]
-  roomOf: (id: string) => ReturnType<ReturnType<typeof useLookups>['room']>
-  user: (id: string) => ReturnType<ReturnType<typeof useLookups>['user']>
-  reviewId?: string
-  onSelectItem?: (item: Booking) => void
-}
-
-function PendingQueueCarousel({
-  pending,
-  roomOf,
-  user,
-  reviewId,
-  onSelectItem,
-}: PendingQueueCarouselProps) {
-  const scrollRef = useRef<HTMLDivElement>(null)
-  const [canScrollPrev, setCanScrollPrev] = useState(false)
-  const [canScrollNext, setCanScrollNext] = useState(false)
-  const [isDragging, setIsDragging] = useState(false)
-
-  const isDownRef = useRef(false)
-  const startXRef = useRef(0)
-  const scrollLeftRef = useRef(0)
-  const hasDraggedRef = useRef(false)
-
-  const updateScrollState = useCallback(() => {
-    const el = scrollRef.current
-    if (!el) {
-      setCanScrollPrev(false)
-      setCanScrollNext(false)
-      return
-    }
-    const atStart = el.scrollLeft <= 2
-    const atEnd = el.scrollLeft + el.clientWidth >= el.scrollWidth - 2
-    setCanScrollPrev(!atStart)
-    setCanScrollNext(!atEnd)
-  }, [])
-
-  useEffect(() => {
-    updateScrollState()
-    const el = scrollRef.current
-    if (!el) return
-
-    const handleScroll = () => updateScrollState()
-    el.addEventListener('scroll', handleScroll, { passive: true })
-
-    const ro = new ResizeObserver(() => updateScrollState())
-    ro.observe(el)
-
-    return () => {
-      el.removeEventListener('scroll', handleScroll)
-      ro.disconnect()
-    }
-  }, [pending.length, updateScrollState])
-
-  useEffect(() => {
-    const el = scrollRef.current
-    if (!el) return
-
-    const onMouseMove = (e: MouseEvent) => {
-      if (!isDownRef.current) return
-      const x = e.pageX - el.offsetLeft
-      const walk = (x - startXRef.current) * 1.3
-      if (Math.abs(x - startXRef.current) > 5) {
-        hasDraggedRef.current = true
-      }
-      el.scrollLeft = scrollLeftRef.current - walk
-    }
-
-    const onMouseUp = () => {
-      if (!isDownRef.current) return
-      isDownRef.current = false
-      setIsDragging(false)
-      if (hasDraggedRef.current) {
-        setTimeout(() => {
-          hasDraggedRef.current = false
-        }, 50)
-      }
-    }
-
-    window.addEventListener('mousemove', onMouseMove)
-    window.addEventListener('mouseup', onMouseUp)
-    return () => {
-      window.removeEventListener('mousemove', onMouseMove)
-      window.removeEventListener('mouseup', onMouseUp)
-    }
-  }, [])
-
-  const handleMouseDown = (e: React.MouseEvent<HTMLDivElement>) => {
-    if (e.button !== 0) return
-    const el = scrollRef.current
-    if (!el) return
-    isDownRef.current = true
-    hasDraggedRef.current = false
-    startXRef.current = e.pageX - el.offsetLeft
-    scrollLeftRef.current = el.scrollLeft
-    setIsDragging(true)
-  }
-
-  const handlePrev = () => {
-    const el = scrollRef.current
-    if (!el) return
-    el.scrollBy({ left: -220, behavior: 'smooth' })
-  }
-
-  const handleNext = () => {
-    const el = scrollRef.current
-    if (!el) return
-    el.scrollBy({ left: 220, behavior: 'smooth' })
-  }
-
-  return (
-    <div className="flex items-center gap-3">
-      {/* Badge & Carousel Controls */}
-      <div className="flex shrink-0 items-center gap-2">
-        <span className="inline-flex items-center gap-1.5 rounded-[4px] border border-[#E0E0E0] bg-[#ffffff] px-2.5 py-1.5 font-mono text-[11px] font-bold tracking-wider text-ink shadow-xs select-none">
-          <span className="h-1.5 w-1.5 rounded-full bg-[#0F62FE]" />
-          [ • PENDING QUEUE • {pending.length} ]
-        </span>
-        <div className="flex items-center gap-1">
-          <button
-            type="button"
-            aria-label="Previous pending requests"
-            disabled={!canScrollPrev}
-            onClick={handlePrev}
-            className={cx(
-              'flex h-[28px] w-[28px] shrink-0 items-center justify-center rounded-[2px] border border-[#E0E0E0] bg-[#FFFFFF] text-[#000000] transition-colors duration-150',
-              canScrollPrev
-                ? 'cursor-pointer hover:border-[#0F62FE] hover:text-[#0F62FE]'
-                : 'cursor-not-allowed opacity-35',
-            )}
-          >
-            <ChevronLeft size={14} strokeWidth={2.2} />
-          </button>
-          <button
-            type="button"
-            aria-label="Next pending requests"
-            disabled={!canScrollNext}
-            onClick={handleNext}
-            className={cx(
-              'flex h-[28px] w-[28px] shrink-0 items-center justify-center rounded-[2px] border border-[#E0E0E0] bg-[#FFFFFF] text-[#000000] transition-colors duration-150',
-              canScrollNext
-                ? 'cursor-pointer hover:border-[#0F62FE] hover:text-[#0F62FE]'
-                : 'cursor-not-allowed opacity-35',
-            )}
-          >
-            <ChevronRight size={14} strokeWidth={2.2} />
-          </button>
-        </div>
-      </div>
-
-      {/* Reel container */}
-      <div
-        ref={scrollRef}
-        onMouseDown={handleMouseDown}
-        className={cx(
-          'no-scrollbar flex flex-1 items-center gap-3 overflow-x-auto py-1',
-          isDragging ? 'cursor-grabbing select-none' : 'cursor-grab',
-        )}
-        style={{ scrollbarWidth: 'none', msOverflowStyle: 'none' }}
-      >
-        {pending.length === 0 && (
-          <span className="inline-flex items-center rounded-[4px] border border-[#E0E0E0] bg-[#F4F5F7] px-3.5 py-2 font-mono text-[11px] text-steel select-none">
-            QUEUE CLEAR · ALL REQUESTS PROCESSED
-          </span>
-        )}
-        {pending.map((b) => {
-          const u = user(b.userId)
-          const r = roomOf(b.roomId)
-          const isSelected = reviewId === b.id
-          return (
-            <button
-              type="button"
-              key={b.id}
-              onDragStart={(e) => e.preventDefault()}
-              onClick={(e) => {
-                if (hasDraggedRef.current) {
-                  e.preventDefault()
-                  e.stopPropagation()
-                  return
-                }
-                onSelectItem?.(b)
-              }}
-              className={cx(
-                'flex shrink-0 select-none flex-col gap-1 rounded-[4px] border border-[#E0E0E0] border-l-[3px] border-l-[#0F62FE] bg-[#F4F5F7] px-3.5 py-2 text-left transition-colors duration-150',
-                isDragging
-                  ? 'cursor-grabbing'
-                  : 'cursor-grab hover:border-[#000000] hover:border-l-[#0F62FE] hover:bg-[#FFFFFF]',
-                isSelected && 'border-[#000000] border-l-[#0F62FE] bg-[#FFFFFF] shadow-xs ring-1 ring-ink',
-              )}
-            >
-              {/* Top row */}
-              <div className="flex items-center justify-between gap-3">
-                <span className="font-sans text-[13px] font-semibold text-[#000000]">
-                  RM {r?.code ?? '—'}
-                </span>
-                <span className="font-mono text-[12px] font-normal text-[#424242] whitespace-nowrap">
-                  {fmtShort(b.start)} • {fmtTime(b.start)}
-                </span>
-              </div>
-
-              {/* Bottom row */}
-              <div className="flex items-center gap-1.5">
-                <span className="font-mono text-[12px] font-semibold text-[#0F62FE]">
-                  {u?.studentCode ?? '—'}
-                </span>
-                <span className="text-[11px] text-[#424242]">•</span>
-                <span className="truncate max-w-[130px] font-sans text-[12px] font-normal text-[#424242]">
-                  {u?.fullName ?? 'Student'}
-                </span>
-              </div>
-            </button>
-          )
-        })}
-      </div>
-    </div>
-  )
-}
-
 /* ───────────── Anchored Review Popover ───────────── */
 
 function ReviewPopover({
@@ -741,8 +655,9 @@ function ReviewPopover({
   onClose: () => void
   onSwitchBooking?: (id: string) => void
 }) {
-  const { approveBooking, rejectBooking, cancelBooking, bookings, blocks, notify } = useStore()
+  const { approveBooking, rejectBooking, cancelBooking, checkoutKey, returnKey, bookings, blocks, notify } = useStore()
   const { user, room } = useLookups()
+  const { t, locale } = useI18n()
   const ref = useRef<HTMLDivElement>(null)
   const [pos, setPos] = useState<{ top: number; left: number; side: 'left' | 'right'; arrowTop: number } | null>(null)
   const [note, setNote] = useState('')
@@ -784,8 +699,8 @@ function ReviewPopover({
     const place = () => {
       if (!anchor.isConnected) return onClose()
       const a = anchor.getBoundingClientRect()
-      const w = 380
-      const h = ref.current?.offsetHeight ?? 440
+      const w = 470
+      const h = ref.current?.offsetHeight ?? 480
       const gap = 10
       const side: 'left' | 'right' = a.right + gap + w <= window.innerWidth - 12 ? 'right' : 'left'
       const left = side === 'right' ? a.right + gap : Math.max(12, a.left - gap - w)
@@ -825,7 +740,7 @@ function ReviewPopover({
       ref={ref}
       role="dialog"
       aria-label={`Review booking ${b.id}`}
-      className="fixed z-50 w-[380px] rounded-lg border border-ink bg-paper shadow-nav"
+      className="fixed z-50 w-[470px] max-h-[calc(100vh-28px)] overflow-y-auto rounded-lg border border-ink bg-paper shadow-nav"
       style={{ top: pos?.top ?? -9999, left: pos?.left ?? -9999 }}
     >
       {pos && (
@@ -870,7 +785,7 @@ function ReviewPopover({
         <div className="border-b border-rule bg-plum/[0.04] p-3.5">
           <div className="flex items-center justify-between">
             <span className="flex items-center gap-1.5 font-mono text-[11px] font-bold text-plum">
-              <span>⚡</span> {competingGroup.length} COMPETING REQUESTS FOR THIS WINDOW
+              <TriangleAlert size={12} /> {competingGroup.length} COMPETING REQUESTS FOR THIS WINDOW
             </span>
             <span className="font-mono text-[9px] text-steel">CLICK TO SWITCH</span>
           </div>
@@ -880,9 +795,10 @@ function ReviewPopover({
           </p>
 
           <div className="mt-2 flex flex-col gap-1.5">
-            {competingGroup.map((other) => {
+            {competingGroup.map((other, idx) => {
               const isCurrent = other.id === b.id
               const otherUser = user(other.userId)
+              const isFirst = idx === 0
               return (
                 <button
                   key={other.id}
@@ -891,24 +807,40 @@ function ReviewPopover({
                     if (!isCurrent) onSwitchBooking?.(other.id)
                   }}
                   className={cx(
-                    'flex items-center justify-between gap-2 rounded-[3px] px-2.5 py-1.5 text-left text-[11px] transition-colors',
+                    'flex items-center justify-between gap-2.5 rounded-[4px] px-3 py-2 text-left text-[11px] transition-colors',
                     isCurrent
                       ? 'border border-ink bg-ink text-paper font-semibold shadow-xs'
                       : 'border border-rule bg-paper text-ink hover:border-accent hover:bg-tint/30',
                   )}
                 >
-                  <div className="flex items-center gap-2 truncate">
-                    <span className={cx('font-mono font-bold', isCurrent ? 'text-tint' : 'text-accent')}>
+                  <div className="flex items-center gap-2.5 min-w-0">
+                    <span
+                      className={cx(
+                        'shrink-0 rounded-[2px] px-1.5 py-0.5 font-mono text-[9px] font-bold tracking-tight',
+                        isFirst
+                          ? (isCurrent ? 'bg-emerald-400 text-ink' : 'bg-emerald-600 text-white')
+                          : (isCurrent ? 'bg-white/20 text-white' : 'bg-ice text-steel border border-rule'),
+                      )}
+                    >
+                      {isFirst ? '1ST TO SUBMIT' : `QUEUE #${idx + 1}`}
+                    </span>
+                    <span className={cx('shrink-0 font-mono font-bold', isCurrent ? 'text-tint' : 'text-accent')}>
                       {otherUser?.studentCode ?? '—'}
                     </span>
-                    <span className="truncate">{otherUser?.fullName}</span>
+                    <span className="truncate font-medium">{otherUser?.fullName}</span>
                   </div>
 
                   <div className="flex items-center gap-2 shrink-0 font-mono text-[10px]">
-                    <span>{fmtRange(other.start, other.end)}</span>
-                    {isCurrent && (
-                      <span className="rounded-[2px] bg-paper px-1 font-mono text-[9px] font-bold text-ink">
+                    <span className={cx(isFirst ? 'font-bold' : 'opacity-80')}>
+                      Req: {fmtTime(other.createdAt)}
+                    </span>
+                    {isCurrent ? (
+                      <span className="rounded-[2px] bg-paper px-1.5 py-0.5 font-mono text-[9px] font-bold text-ink">
                         CURRENT
+                      </span>
+                    ) : (
+                      <span className="rounded-[2px] border border-rule bg-ice px-1.5 py-0.5 font-mono text-[9px] text-steel">
+                        SWITCH
                       </span>
                     )}
                   </div>
@@ -940,8 +872,54 @@ function ReviewPopover({
           </div>
           <div className="text-right">
             <div className="font-mono text-[10px] text-steel">STUDENT ID</div>
-            <div className="font-mono text-[14px] font-semibold text-meta">{u?.studentCode ?? '—'}</div>
+            <div className="font-mono text-[13px] font-semibold text-meta">
+              {u?.hcmutId || u?.utsId ? `HCMUT: ${u.hcmutId ?? '—'} · UTS: ${u.utsId ?? '—'}` : (u?.studentCode ?? '—')}
+            </div>
           </div>
+          {/* Participating Group Members Roster */}
+          {(() => {
+            const memberList = parseBookingMembers(b)
+            if (memberList.length === 0) return null
+            return (
+              <div className="col-span-2 flex flex-col gap-1.5 border-t border-dashed border-edge pt-2.5">
+                <div className="flex items-center justify-between font-mono text-[10px]">
+                  <span className="flex items-center gap-1.5 font-bold text-steel uppercase tracking-wider">
+                    <Users size={12} /> Group Members ({memberList.length})
+                  </span>
+                  <span className="text-steel font-semibold">
+                    Total Attendees: {b.attendeeCount ?? memberList.length + 1}
+                  </span>
+                </div>
+                <div className="rounded-md border border-rule bg-paper divide-y divide-rule/60 overflow-hidden">
+                  {memberList.map((m, idx) => (
+                    <div key={idx} className="flex items-center justify-between gap-2 px-3 py-1.5 text-[12px]">
+                      <span className="font-medium text-ink flex items-center gap-2 truncate">
+                        <span className="font-mono text-[10px] text-steel shrink-0">#{idx + 1}</span>
+                        <span className="truncate">{m.name}</span>
+                      </span>
+                      <div className="flex items-center gap-1.5 shrink-0">
+                        {m.hcmutId && (
+                          <span className="font-mono text-[10px] font-bold text-accent bg-tint/40 px-1.5 py-0.5 rounded-sm border border-accent/20">
+                            HCMUT: {m.hcmutId}
+                          </span>
+                        )}
+                        {m.utsId && (
+                          <span className="font-mono text-[10px] font-bold text-ink bg-stone-100 px-1.5 py-0.5 rounded-sm border border-rule">
+                            UTS: {m.utsId}
+                          </span>
+                        )}
+                        {!m.hcmutId && !m.utsId && m.studentId && (
+                          <span className="font-mono text-[11px] font-bold text-accent bg-tint/40 px-1.5 py-0.5 rounded-sm border border-accent/20">
+                            {m.studentId}
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )
+          })()}
           {b.phone && (
             <div className="col-span-2 flex flex-col gap-1 border-t border-dashed border-edge pt-2 text-[12px] text-graphite">
               <span className="flex items-center gap-2">
@@ -950,6 +928,32 @@ function ReviewPopover({
               </span>
             </div>
           )}
+          {/* Submission Timestamp & Priority Queue Position */}
+          <div className="col-span-2 flex flex-wrap items-center justify-between gap-2 border-t border-dashed border-edge pt-2.5 text-[12px]">
+            <div className="flex items-center gap-1.5 font-mono text-[10px] text-steel">
+              <Clock size={12} />
+              <span className="font-semibold tracking-wider">SUBMITTED AT</span>
+            </div>
+            <div className="flex items-center gap-2 font-mono">
+              <span className="text-[12px] font-bold text-ink">
+                {fmtDate(b.createdAt)} · {fmtTime(b.createdAt)}
+              </span>
+              {competingGroup.length > 1 && (
+                <span
+                  className={cx(
+                    'rounded-[2px] px-2 py-0.5 text-[10px] font-bold tracking-tight shrink-0',
+                    competingGroup[0].id === b.id
+                      ? 'bg-emerald-600 text-white shadow-xs'
+                      : 'bg-plum/15 text-plum border border-plum/30',
+                  )}
+                >
+                  {competingGroup[0].id === b.id
+                    ? '1ST TO SUBMIT (PRIORITY)'
+                    : `#${competingGroup.findIndex((x) => x.id === b.id) + 1} OF ${competingGroup.length} (SUBMITTED LATER)`}
+                </span>
+              )}
+            </div>
+          </div>
         </div>
 
         {/* Purpose */}
@@ -957,6 +961,65 @@ function ReviewPopover({
           <div className="font-mono text-[10px] text-steel">PURPOSE / SESSION NOTES</div>
           <p className="mt-0.5 text-[13px] leading-[1.5] text-graphite">{b.purpose}</p>
         </div>
+
+        {/* Trạng thái bàn giao chìa khóa phòng */}
+        {b.status === 'KEY_CHECKED_OUT' && (
+          <div className="rounded-md border border-ink bg-paper p-3 shadow-xs">
+            <div className="flex items-center justify-between border-b border-rule pb-2">
+              <div className="flex items-center gap-1.5 font-mono text-[11px] font-bold text-accent">
+                <KeyRound size={13} />
+                <span>{t('key.notReturned').toUpperCase()}</span>
+              </div>
+              {new Date() > new Date(b.end) ? (
+                <span className="flex items-center gap-1 rounded-sm bg-plum px-1.5 py-0.5 font-mono text-[10px] font-bold text-paper animate-pulse">
+                  <TriangleAlert size={10} /> {t('key.overdueBadge')}
+                </span>
+              ) : (
+                <span className="font-mono text-[10px] text-steel">
+                  {locale === 'vi' ? 'Hạn trả: trước' : 'Return due by'} {fmtTime(b.end)}
+                </span>
+              )}
+            </div>
+            <div className="mt-2 grid grid-cols-2 gap-2 text-[11px] font-mono">
+              <div>
+                <span className="text-steel">{t('key.issuedAt')}: </span>
+                <span className="font-bold text-ink">{b.checkedOutAt ? fmtTime(b.checkedOutAt) : 'Logged'}</span>
+              </div>
+              <div>
+                <span className="text-steel">{locale === 'vi' ? 'Người giữ chìa' : 'Key Holder'}: </span>
+                <span className="font-bold text-ink truncate">{u?.fullName}</span>
+              </div>
+              <div className="col-span-2 text-[11px] text-graphite font-sans">
+                {locale === 'vi' ? 'Sinh viên đã nhận chìa khóa vật lý tại phòng Manager và chưa trả lại. Bấm nút bên dưới khi sinh viên mang chìa trả.' : 'Student collected physical key at Manager Office and has not returned it yet. Confirm below once returned.'}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {b.status === 'COMPLETED' && (
+          <div className="rounded-md border border-emerald-600/30 bg-emerald-50/50 p-2.5 text-[11px] font-mono">
+            <div className="flex items-center gap-1.5 font-bold text-emerald-800">
+              <Check size={13} />
+              <span>{t('key.returned').toUpperCase()}</span>
+            </div>
+            <div className="mt-1 flex items-center justify-between text-graphite text-[10px]">
+              <span>{t('key.returnedAt')}: {b.returnedAt ? `${fmtDate(b.returnedAt)} · ${fmtTime(b.returnedAt)}` : 'On record'}</span>
+              <span className="text-emerald-700 font-semibold">{locale === 'vi' ? 'Đã thu hồi chìa' : 'Custody Cleared'}</span>
+            </div>
+          </div>
+        )}
+
+        {b.status === 'APPROVED' && (
+          <div className="rounded-md border border-rule bg-ice/40 p-2.5 text-[11px] font-mono">
+            <div className="flex items-center justify-between text-[11px]">
+              <span className="flex items-center gap-1.5 font-semibold text-graphite">
+                <KeyRound size={12} className="text-steel" />
+                <span>{locale === 'vi' ? 'Chìa khóa tại phòng Manager' : 'Key at Manager Office'}</span>
+              </span>
+              <span className="text-accent font-bold text-[10px]">{t('key.notIssued')}</span>
+            </div>
+          </div>
+        )}
 
         {/* Review Note & Quick Chips */}
         {isPending ? (
@@ -1013,10 +1076,10 @@ function ReviewPopover({
 
       {/* Footer Actions */}
       {isPending ? (
-        <div className="grid grid-cols-2 gap-2 border-t border-rule px-5 py-3 bg-ice/40">
+        <div className="flex items-center justify-end gap-3 border-t border-rule px-5 py-3 bg-ice/40">
           <Button
             variant="outline"
-            className="hover:!bg-plum hover:!text-paper hover:!shadow-none"
+            className="shrink-0 gap-1.5 px-4 text-[13px] hover:!bg-plum hover:!text-paper hover:!shadow-none"
             onClick={() => {
               const err = rejectBooking(b.id, note)
               if (err) setError(err)
@@ -1028,6 +1091,7 @@ function ReviewPopover({
 
           <Button
             variant="dark"
+            className="flex-1 gap-1.5 justify-center px-4 font-semibold text-[13px]"
             onClick={() => {
               approveBooking(b.id, note)
               onClose()
@@ -1035,31 +1099,66 @@ function ReviewPopover({
           >
             <Check size={14} />{' '}
             {competingGroup.length > 1
-              ? `Approve & Decline ${competingGroup.length - 1} Other${competingGroup.length - 1 > 1 ? 's' : ''}`
-              : 'Approve Now'}
+              ? `Approve & Decline Other (${competingGroup.length - 1})`
+              : 'Approve Request'}
+          </Button>
+        </div>
+      ) : b.status === 'KEY_CHECKED_OUT' ? (
+        <div className="flex items-center justify-between gap-2 border-t border-rule px-5 py-3 bg-ice/40">
+          <Button
+            variant="dark"
+            className="gap-1.5 font-semibold text-[12px] !bg-emerald-600 hover:!bg-emerald-700 text-white"
+            onClick={() => {
+              returnKey(b.id)
+              notify(locale === 'vi' ? `Đã nhận lại chìa khóa phòng RM ${r?.code ?? ''} từ sinh viên ${u?.fullName ?? ''}. Hoàn tất buổi mượn.` : `Key for Room ${r?.code ?? ''} confirmed returned by ${u?.fullName ?? 'Student'}.`)
+              onClose()
+            }}
+          >
+            <Check size={14} /> {t('key.confirmReturnBtn')}
+          </Button>
+          <Button variant="outline" size="xs" onClick={onClose}>
+            {t('common.close')}
+          </Button>
+        </div>
+      ) : b.status === 'APPROVED' ? (
+        <div className="flex items-center justify-between gap-2 border-t border-rule px-5 py-3 bg-ice/40">
+          <div className="flex items-center gap-2">
+            <Button
+              variant="dark"
+              size="xs"
+              className="gap-1.5 font-semibold text-[12px] !bg-accent hover:!bg-[#0043CE] text-white"
+              onClick={() => {
+                checkoutKey(b.id)
+                notify(locale === 'vi' ? `Đã đưa chìa khóa phòng RM ${r?.code ?? ''} cho sinh viên ${u?.fullName ?? ''}.` : `Key for Room ${r?.code ?? ''} issued to ${u?.fullName ?? 'Student'}.`)
+                onClose()
+              }}
+            >
+              <KeyRound size={13} /> {t('key.issueKeyBtn')}
+            </Button>
+            {isEvent && (
+              <Button
+                variant="plum"
+                size="xs"
+                onClick={() => {
+                  cancelBooking(b.id)
+                  notify('Scheduled event cancelled. Slots released.')
+                  onClose()
+                }}
+                className="gap-1"
+              >
+                <Ban size={12} /> Cancel Event
+              </Button>
+            )}
+          </div>
+          <Button variant="outline" size="xs" onClick={onClose}>
+            Close
           </Button>
         </div>
       ) : (
         <div className="flex items-center justify-between gap-2 border-t border-rule px-5 py-3 bg-ice/40">
-          {/* Allow manager/admin to cancel official scheduled events */}
-          {isEvent && (b.status === 'APPROVED' || b.status === 'PENDING') ? (
-            <Button
-              variant="plum"
-              size="xs"
-              onClick={() => {
-                cancelBooking(b.id)
-                notify('Scheduled event cancelled. Slots released.')
-                onClose()
-              }}
-              className="gap-1"
-            >
-              <Ban size={12} /> Cancel Event
-            </Button>
-          ) : (
-            <span className="font-mono text-[11px] text-steel">
-              {b.status === 'APPROVED' ? 'APPROVED RESERVATION' : 'ENTRY RECORD'}
-            </span>
-          )}
+          <span className="font-mono text-[11px] text-steel">
+            {b.status === 'COMPLETED' ? 'SESSION COMPLETED · KEY RETURNED' : 'ENTRY RECORD'}
+          </span>
 
           <Button variant="outline" size="xs" onClick={onClose}>
             Close

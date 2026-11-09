@@ -1,8 +1,9 @@
 import { useMemo, useRef, useState, type PointerEvent } from 'react'
-import { ACTIVE_STATUSES } from '@/lib/store'
+import { ACTIVE_STATUSES, useStore } from '@/lib/store'
 import type { Booking, Room, RoomBlock, Settings } from '@/lib/types'
-import { addDays, at, daysBetween, fmtDuration, fmtTime, overlaps, parseHM, sameDay, startOfDay } from '@/lib/time'
+import { addDays, at, daysBetween, durationMin, fmtDuration, fmtTime, overlaps, parseHM, sameDay, startOfDay } from '@/lib/time'
 import { cx } from '@/components/ui'
+import { ConfirmBlockDayModal } from '@/manager/ConfirmBlockDayModal'
 
 const SLOT = 30
 export const ROW_H = 28 // 28px per 30-min slot = 56px per hour for maximum comfort
@@ -141,32 +142,32 @@ export function getRoomColor(code?: string): RoomColorStyle {
     return {
       code: '602',
       label: 'Room 602',
-      dot: 'bg-emerald-600',
-      badge: 'bg-emerald-600 text-white',
-      solid: 'border-emerald-700 bg-emerald-600 text-white',
-      event: 'border-2 border-emerald-600 bg-emerald-500/12 text-emerald-950',
-      pending: 'border-2 border-dashed border-emerald-600 bg-emerald-500/12 text-emerald-950 hover:bg-emerald-500/20',
+      dot: 'bg-slate',
+      badge: 'bg-slate text-white',
+      solid: 'border-slate bg-slate text-white',
+      event: 'border-2 border-slate bg-ice text-slate',
+      pending: 'border-2 border-dashed border-slate bg-ice text-slate hover:bg-reserved',
     }
   }
   if (code === '605') {
     return {
       code: '605',
       label: 'Room 605',
-      dot: 'bg-violet-600',
-      badge: 'bg-violet-600 text-white',
-      solid: 'border-violet-700 bg-violet-600 text-white',
-      event: 'border-2 border-violet-600 bg-violet-500/12 text-violet-950',
-      pending: 'border-2 border-dashed border-violet-600 bg-violet-500/12 text-violet-950 hover:bg-violet-500/20',
+      dot: 'bg-plum',
+      badge: 'bg-plum text-white',
+      solid: 'border-plum bg-plum text-white',
+      event: 'border-2 border-plum bg-plum/[0.08] text-plum',
+      pending: 'border-2 border-dashed border-plum bg-plum/[0.08] text-plum hover:bg-plum/[0.15]',
     }
   }
   return {
     code: '601',
     label: 'Room 601',
-    dot: 'bg-blue-600',
-    badge: 'bg-blue-600 text-white',
-    solid: 'border-blue-700 bg-blue-600 text-white',
-    event: 'border-2 border-blue-600 bg-blue-500/12 text-blue-950',
-    pending: 'border-2 border-dashed border-blue-600 bg-blue-500/12 text-blue-950 hover:bg-blue-500/20',
+    dot: 'bg-accent',
+    badge: 'bg-accent text-white',
+    solid: 'border-accent bg-accent text-white',
+    event: 'border-2 border-accent bg-tint/60 text-ink-blue',
+    pending: 'border-2 border-dashed border-accent bg-tint/30 text-ink-blue hover:bg-tint/50',
   }
 }
 
@@ -206,6 +207,8 @@ export function WeekCalendar({
   allRooms?: boolean
   rooms?: Room[]
 }) {
+  const { createBlock, blockFacilityWindow, cancelBlock } = useStore()
+  const [blockConfirmDay, setBlockConfirmDay] = useState<{ date: Date; dayIndex: number } | null>(null)
   const manager = mode === 'manager'
   const now = new Date()
   const open = parseHM(settings.openTime)
@@ -213,10 +216,10 @@ export function WeekCalendar({
   const startMin = open.h * 60 + open.m
   const endMin = close.h * 60 + close.m
   const slots = Math.max(1, Math.ceil((endMin - startMin) / SLOT))
-  const maxSlots = Math.max(1, Math.floor(settings.maxDurationMinutes / SLOT))
+  const maxSlots = Math.min(4, Math.max(1, Math.floor((settings.maxDurationMinutes || 120) / SLOT)))
 
-  // Workdays-only grid: Strictly 5 days (Monday to Friday)
-  const days = Array.from({ length: 5 }, (_, i) => addDays(weekStart, i))
+  // Full 7-day grid: Monday to Sunday
+  const days = Array.from({ length: 7 }, (_, i) => addDays(weekStart, i))
   const roomOpen = allRooms ? (rooms?.some((r) => r.status === 'AVAILABLE') ?? true) : room.status === 'AVAILABLE'
 
   const roomById = useMemo(() => {
@@ -226,6 +229,46 @@ export function WeekCalendar({
     return m
   }, [room, rooms])
 
+  // Full day block detection per day
+  const fullDayBlocksByDay = useMemo(() => {
+    return days.map((d) => {
+      const dayOpen = at(d, open.h, open.m)
+      const dayClose = at(d, close.h, close.m)
+      const fBlocks = blocks.filter((k) => {
+        if (!k.active) return false
+        if (!allRooms && k.roomId !== room.id) return false
+        if (!sameDay(new Date(k.start), d)) return false
+        return new Date(k.start) <= dayOpen && new Date(k.end) >= dayClose
+      })
+      const isBlocked = allRooms
+        ? rooms && rooms.length > 0
+          ? rooms.every((r) => fBlocks.some((b) => b.roomId === r.id))
+          : fBlocks.length > 0
+        : fBlocks.length > 0
+      return { isBlocked, fBlocks, dayOpen, dayClose }
+    })
+  }, [days, open.h, open.m, close.h, close.m, blocks, allRooms, room.id, rooms])
+
+  const executeBlockDay = (reason: string) => {
+    if (!blockConfirmDay) return
+    const info = fullDayBlocksByDay[blockConfirmDay.dayIndex]
+    if (!info) return
+    const targetRoomIds = allRooms && rooms && rooms.length > 0 ? rooms.map((r) => r.id) : [room.id]
+    blockFacilityWindow({
+      roomIds: targetRoomIds,
+      start: info.dayOpen,
+      end: info.dayClose,
+      reason,
+    })
+    setBlockConfirmDay(null)
+  }
+
+  const handleUnblockDay = (di: number) => {
+    const info = fullDayBlocksByDay[di]
+    if (!info) return
+    info.fBlocks.forEach((fb) => cancelBlock(fb.id))
+  }
+
   const dayState = (d: Date): 'past' | 'today' | 'locked' | 'bookable' | 'beyond' => {
     const lead = daysBetween(now, d)
     if (lead < 0) return 'past'
@@ -234,9 +277,96 @@ export function WeekCalendar({
     if (lead > settings.maxAdvanceDays) return 'beyond'
     return 'bookable'
   }
-  const canBook = (d: Date) => !manager && roomOpen && dayState(d) === 'bookable'
+  const canBook = (d: Date, di?: number) => {
+    if (manager || !roomOpen || dayState(d) !== 'bookable') return false
+    const idx = di !== undefined ? di : days.findIndex((day) => sameDay(day, d))
+    if (idx >= 0 && fullDayBlocksByDay[idx]?.isBlocked) return false
+    return true
+  }
 
   const slotDate = (d: Date, s: number) => at(d, 0, startMin + s * SLOT)
+
+  // Accurate competing requests detection per booking
+  const competingInfoMap = useMemo(() => {
+    const map = new Map<
+      string,
+      {
+        isCompeting: boolean
+        competingCount: number
+        rank: number
+        isEarliest: boolean
+        submittedTime: string
+        timeDiffMin: number
+        hasClashWithApproved: boolean
+      }
+    >()
+
+    for (const b of bookings) {
+      if (b.status !== 'PENDING') {
+        map.set(b.id, {
+          isCompeting: false,
+          competingCount: 1,
+          rank: 1,
+          isEarliest: true,
+          submittedTime: fmtTime(b.createdAt),
+          timeDiffMin: 0,
+          hasClashWithApproved: false,
+        })
+        continue
+      }
+
+      // Find other PENDING bookings in the SAME room overlapping in time
+      const competingList = bookings
+        .filter(
+          (other) =>
+            other.roomId === b.roomId &&
+            other.status === 'PENDING' &&
+            overlaps(new Date(b.start), new Date(b.end), new Date(other.start), new Date(other.end)),
+        )
+        .sort((x, y) => new Date(x.createdAt).getTime() - new Date(y.createdAt).getTime())
+
+      const hasClashWithApproved =
+        bookings.some(
+          (x) =>
+            x.id !== b.id &&
+            x.roomId === b.roomId &&
+            ['APPROVED', 'KEY_CHECKED_OUT'].includes(x.status) &&
+            overlaps(new Date(b.start), new Date(b.end), new Date(x.start), new Date(x.end)),
+        ) ||
+        blocks.some(
+          (k) =>
+            k.active &&
+            k.roomId === b.roomId &&
+            overlaps(new Date(b.start), new Date(b.end), new Date(k.start), new Date(k.end)),
+        )
+
+      if (competingList.length >= 2) {
+        const rank = competingList.findIndex((x) => x.id === b.id) + 1
+        const isEarliest = rank === 1
+        const timeDiffMin = durationMin(competingList[0].createdAt, b.createdAt)
+        map.set(b.id, {
+          isCompeting: true,
+          competingCount: competingList.length,
+          rank,
+          isEarliest,
+          submittedTime: fmtTime(b.createdAt),
+          timeDiffMin,
+          hasClashWithApproved,
+        })
+      } else {
+        map.set(b.id, {
+          isCompeting: false,
+          competingCount: 1,
+          rank: 1,
+          isEarliest: true,
+          submittedTime: fmtTime(b.createdAt),
+          timeDiffMin: 0,
+          hasClashWithApproved,
+        })
+      }
+    }
+    return map
+  }, [bookings, blocks])
 
   const eventsByDay = useMemo(
     () =>
@@ -257,12 +387,44 @@ export function WeekCalendar({
             }
           }
         }
-        for (const k of blocks) {
-          if (k.active && (allRooms || k.roomId === room.id) && sameDay(new Date(k.start), d)) {
+        if (allRooms) {
+          const dayBlocks = blocks.filter((k) => k.active && sameDay(new Date(k.start), d))
+          const seenTimeWindows = new Set<string>()
+          for (const k of dayBlocks) {
             const kStart = new Date(k.start)
             const kEnd = new Date(k.end)
             if (overlaps(kStart, kEnd, dayOpen, dayClose)) {
-              evs.push({ kind: 'block', id: k.id, start: kStart, end: kEnd, block: k })
+              const windowKey = `${k.start}_${k.end}`
+              const matchingBlocks = dayBlocks.filter((b) => b.start === k.start && b.end === k.end)
+              if (matchingBlocks.length >= 2) {
+                // Multi-room block for the exact same window: collapse into 1 unified column!
+                if (!seenTimeWindows.has(windowKey)) {
+                  seenTimeWindows.add(windowKey)
+                  evs.push({
+                    kind: 'block',
+                    id: k.id,
+                    start: kStart,
+                    end: kEnd,
+                    block: {
+                      ...k,
+                      roomId: 'ALL',
+                      reason: k.reason || 'Full-day facility lock by Manager',
+                    },
+                  })
+                }
+              } else {
+                evs.push({ kind: 'block', id: k.id, start: kStart, end: kEnd, block: k })
+              }
+            }
+          }
+        } else {
+          for (const k of blocks) {
+            if (k.active && k.roomId === room.id && sameDay(new Date(k.start), d)) {
+              const kStart = new Date(k.start)
+              const kEnd = new Date(k.end)
+              if (overlaps(kStart, kEnd, dayOpen, dayClose)) {
+                evs.push({ kind: 'block', id: k.id, start: kStart, end: kEnd, block: k })
+              }
             }
           }
         }
@@ -321,41 +483,6 @@ export function WeekCalendar({
     })
   }
 
-  // Calculate day-by-day occupancy stats for headers
-  const totalRoomCount = allRooms && rooms && rooms.length > 0 ? rooms.length : 1
-  const dayOccupancyStats = useMemo(() => {
-    const totalSpanHours = ((slots * SLOT) / 60) * totalRoomCount
-    return days.map((_, di) => {
-      let occSlots = 0
-      if (allRooms && rooms && rooms.length > 0) {
-        for (const rm of rooms) {
-          for (let s = 0; s < slots; s++) {
-            const a = slotDate(days[di], s)
-            const b = slotDate(days[di], s + 1)
-            const isOcc = eventsByDay[di].some((e) => {
-              const eRoomId = e.kind === 'booking' ? e.booking.roomId : e.block.roomId
-              if (eRoomId !== rm.id) return false
-              if (!overlaps(e.start, e.end, a, b)) return false
-              if (e.kind === 'block') return true
-              const st = e.booking.status
-              return st === 'APPROVED' || st === 'KEY_CHECKED_OUT' || (e.own && st === 'PENDING')
-            })
-            if (isOcc) occSlots++
-          }
-        }
-      } else {
-        for (let s = 0; s < slots; s++) {
-          if (occupied(di, s)) occSlots++
-        }
-      }
-      const busyH = Math.round((occSlots * SLOT * 10) / 60) / 10
-      const freeH = Math.max(0, Math.round((totalSpanHours - busyH) * 10) / 10)
-      const pct = Math.min(100, Math.round((busyH / totalSpanHours) * 100))
-      return { busyH, freeH, pct }
-    })
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [eventsByDay, slots, allRooms, rooms])
-
   const [drag, setDrag] = useState<{ day: number; anchor: number; cur: number } | null>(null)
   const dragRef = useRef(drag)
   dragRef.current = drag
@@ -382,11 +509,16 @@ export function WeekCalendar({
     if (e.button !== 0) return
     const d = days[di]
     const st = dayState(d)
+    const isDayFullBlocked = fullDayBlocksByDay[di]?.isBlocked
 
     // Manager mode allows selecting open slots on today or future days
     if (manager) {
       if (st === 'past') {
         onReject('Past dates cannot be assigned.')
+        return
+      }
+      if (isDayFullBlocked) {
+        onReject('This day is fully blocked by Manager.')
         return
       }
       const s = slotFromEvent(e)
@@ -397,7 +529,11 @@ export function WeekCalendar({
     }
 
     // Student mode
-    if (!canBook(d)) {
+    if (isDayFullBlocked) {
+      onReject('This date is fully locked by Facilities Management.')
+      return
+    }
+    if (!canBook(d, di)) {
       onReject(
         !roomOpen
           ? allRooms
@@ -451,76 +587,75 @@ export function WeekCalendar({
 
   return (
     <div className="select-none" data-cursor-zone>
-      {/* Day header (5 Workdays: Mon - Fri) */}
-      <div className="grid grid-cols-[68px_repeat(5,minmax(0,1fr))] border-b border-ink">
-        <div className="flex flex-col justify-end px-2.5 pb-2.5 font-mono text-[10px] text-steel">
+      {/* Day header (7 Days: Mon - Sun) */}
+      <div className="grid grid-cols-[68px_repeat(7,minmax(0,1fr))] border-b border-ink">
+        <div className="flex flex-col justify-end px-2 pb-2 font-mono text-[10px] text-steel">
           <span className="font-semibold text-ink">TIME</span>
           <span>{settings.timezone.split(' ')[1]?.replace(/[()]/g, '') ?? 'UTC'}</span>
         </div>
         {days.map((d, di) => {
           const st = dayState(d)
           const pendingN = manager ? eventsByDay[di].filter((e) => e.kind === 'booking' && e.booking.status === 'PENDING').length : 0
-          const occ = dayOccupancyStats[di]
           return (
-            <div key={d.toISOString()} className={cx('flex flex-col gap-1 border-l border-rule px-2.5 pt-3 pb-2.5', st === 'today' && 'bg-ice')}>
+            <div key={d.toISOString()} className={cx('flex flex-col gap-0.5 border-l border-rule px-2 py-2', st === 'today' && 'bg-ice')}>
               <div className="flex items-center justify-between gap-1">
                 <span className={cx('font-mono text-[11px] font-semibold', st === 'bookable' || (manager && st !== 'past') ? 'text-accent' : 'text-steel')}>
                   {['SUN', 'MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT'][d.getDay()]}
                 </span>
-                {st === 'today' && <span className="rounded-sm bg-ink px-1 font-mono text-[9px] leading-[1.6] text-paper">TODAY</span>}
-                {!manager && st === 'bookable' && roomOpen && <span className="h-1.5 w-1.5 bg-accent" title="Bookable" />}
+                {st === 'today' && <span className="rounded-sm bg-ink px-1 font-mono text-[9px] leading-[1.5] text-paper">TODAY</span>}
+                {!manager && st === 'bookable' && roomOpen && <span className="h-1.5 w-1.5 bg-accent rounded-sm" title="Bookable" />}
                 {manager && pendingN > 0 && (
-                  <span className="rounded-sm border border-dashed border-plum bg-plum/[0.08] px-1 font-mono text-[9px] font-bold leading-[1.5] text-plum">
+                  <span className="rounded-sm border border-dashed border-plum bg-plum/[0.08] px-1 font-mono text-[9px] font-bold leading-[1.4] text-plum">
                     {pendingN} PEND
                   </span>
                 )}
               </div>
-              <div className={cx('font-display text-[26px] leading-none font-w450', st === 'past' ? 'text-steel/60' : 'text-ink')}>
+              <div className={cx('font-display text-[22px] leading-none font-w450', st === 'past' ? 'text-steel/60' : 'text-ink')}>
                 {String(d.getDate()).padStart(2, '0')}
               </div>
-              <div className="flex items-center justify-between font-mono text-[10px] text-steel">
-                <span>
-                  {manager
-                    ? st === 'past'
-                      ? 'ARCHIVED'
-                      : st === 'today'
-                        ? 'LIVE'
-                        : `T+${daysBetween(now, d)}`
-                    : st === 'past'
-                      ? 'CLOSED'
-                      : st === 'today'
-                        ? 'IN USE'
-                        : st === 'locked'
-                          ? `T-${daysBetween(now, d)} · LOCKED`
-                          : st === 'beyond'
-                            ? 'NOT OPEN'
-                            : `T-${daysBetween(now, d)} · OPEN`}
-                </span>
-              </div>
 
-              {/* Occupancy Indicator Bar & Counter */}
-              <div className="mt-1 flex flex-col gap-1 border-t border-rule/70 pt-1.5">
-                <div className="flex items-center justify-between font-mono text-[9px] text-steel">
-                  <span className={cx(occ.busyH > 0 && 'font-semibold text-ink')}>{occ.busyH}h BUSY</span>
-                  <span>{occ.freeH}h FREE</span>
+              {/* Quick Block Full Day Actions for Manager */}
+              {manager && st !== 'past' && (
+                <div className="mt-1 flex flex-col gap-1 border-t border-rule/60 pt-1">
+                  {fullDayBlocksByDay[di]?.isBlocked ? (
+                    <div className="flex flex-col gap-1">
+                      <span className="w-fit rounded-sm bg-[#543B4E] px-1.5 py-0.5 font-mono text-[9px] font-bold tracking-wider text-paper uppercase">
+                        [ FULL DAY LOCKED ]
+                      </span>
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          handleUnblockDay(di)
+                        }}
+                        className="w-full text-center rounded-sm border border-[#543B4E]/60 bg-paper py-0.5 font-mono text-xs font-bold text-[#543B4E] transition-colors hover:bg-[#543B4E] hover:text-paper cursor-pointer"
+                        title="Unlock full day"
+                      >
+                        [ UNBLOCK ]
+                      </button>
+                    </div>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation()
+                        setBlockConfirmDay({ date: d, dayIndex: di })
+                      }}
+                      className="w-full text-center rounded-sm border border-[#E0E0E0] bg-paper py-0.5 font-mono text-xs font-semibold text-steel transition-colors hover:border-[#543B4E] hover:text-[#543B4E] cursor-pointer"
+                      title="Quick block entire day (08:00 - 17:00)"
+                    >
+                      [ + BLOCK DAY ]
+                    </button>
+                  )}
                 </div>
-                <div className="h-1.5 w-full overflow-hidden rounded-[1px] bg-rule">
-                  <div
-                    className={cx(
-                      'h-full transition-all duration-300',
-                      occ.pct > 75 ? 'bg-plum' : occ.pct > 0 ? 'bg-accent' : 'bg-transparent',
-                    )}
-                    style={{ width: `${occ.pct}%` }}
-                  />
-                </div>
-              </div>
+              )}
             </div>
           )
         })}
       </div>
 
-      {/* Grid (5 Workdays: Mon - Fri) */}
-      <div className="grid grid-cols-[68px_repeat(5,minmax(0,1fr))]">
+      {/* Grid (7 Days: Mon - Sun) */}
+      <div className="grid grid-cols-[68px_repeat(7,minmax(0,1fr))]">
         {/* Time axis */}
         <div className="relative border-r border-rule bg-paper/50" style={{ height: gridH }}>
           {hours.map((m) => (
@@ -540,7 +675,8 @@ export function WeekCalendar({
         {/* Day columns */}
         {days.map((d, di) => {
           const st = dayState(d)
-          const enabled = canBook(d)
+          const isDayFullBlocked = fullDayBlocksByDay[di]?.isBlocked
+          const enabled = canBook(d, di)
           const managerInteractive = manager && st !== 'past'
           return (
             <div
@@ -548,8 +684,16 @@ export function WeekCalendar({
               className={cx(
                 'relative border-l border-rule overflow-hidden',
                 manager
-                  ? (st === 'past' ? 'hatch cursor-not-allowed bg-paper' : 'cursor-crosshair bg-paper hover:bg-tint/[0.04]')
-                  : (enabled ? 'cursor-crosshair bg-ice' : 'hatch cursor-not-allowed'),
+                  ? (st === 'past'
+                      ? 'hatch cursor-not-allowed bg-paper'
+                      : isDayFullBlocked
+                        ? 'hatch-slate cursor-not-allowed'
+                        : 'cursor-crosshair bg-paper hover:bg-tint/[0.04]')
+                  : (isDayFullBlocked
+                      ? 'hatch-slate cursor-not-allowed'
+                      : enabled
+                        ? 'cursor-crosshair bg-ice'
+                        : 'hatch cursor-not-allowed'),
                 st === 'today' && 'bg-ice/40',
               )}
               style={{ height: gridH }}
@@ -598,6 +742,7 @@ export function WeekCalendar({
                     active={activeId === ev.id}
                     roomCode={evRoomCode}
                     allRooms={allRooms}
+                    competingInfo={ev.kind === 'booking' ? competingInfoMap.get(ev.booking.id) : undefined}
                   />
                 )
               })}
@@ -605,7 +750,7 @@ export function WeekCalendar({
               {/* Now line */}
               {sameDay(d, now) && isNowWithinOfficeHours && (
                 <div className="pointer-events-none absolute inset-x-0 z-20 flex items-center" style={{ top: Math.min(gridH, Math.max(0, nowTop)) }}>
-                  <span className="-ml-[3px] h-2 w-2 rounded-full bg-accent ring-2 ring-paper" />
+                  <span className="-ml-[3px] h-2 w-2 rounded-sm bg-accent ring-2 ring-paper" />
                   <span className="h-[2px] flex-1 bg-accent" />
                 </div>
               )}
@@ -631,6 +776,20 @@ export function WeekCalendar({
           )
         })}
       </div>
+
+      {/* Confirm Block Day Modal */}
+      {blockConfirmDay && (
+        <ConfirmBlockDayModal
+          isOpen
+          onClose={() => setBlockConfirmDay(null)}
+          date={blockConfirmDay.date}
+          dayIndex={blockConfirmDay.dayIndex}
+          allRooms={!!allRooms}
+          room={room}
+          rooms={rooms ?? []}
+          onConfirm={executeBlockDay}
+        />
+      )}
     </div>
   )
 }
@@ -648,6 +807,8 @@ function EventBlock({
   onSelectSlot,
   active,
   roomCode,
+  allRooms,
+  competingInfo,
 }: {
   ev: Ev
   top: number
@@ -662,6 +823,15 @@ function EventBlock({
   active?: boolean
   roomCode?: string
   allRooms?: boolean
+  competingInfo?: {
+    isCompeting: boolean
+    competingCount: number
+    rank: number
+    isEarliest: boolean
+    submittedTime: string
+    timeDiffMin: number
+    hasClashWithApproved: boolean
+  }
 }) {
   const compact = height < 46
   const rc = getRoomColor(roomCode)
@@ -695,7 +865,11 @@ function EventBlock({
       >
         <div className="flex items-center justify-between gap-1 font-mono text-[10px] font-bold tracking-[0.04em]">
           <span className="flex items-center gap-1.5 truncate">
-            {roomCode && (
+            {ev.block.roomId === 'ALL' ? (
+              <span className="rounded-[2px] bg-paper text-ink px-1.5 py-0.2 font-mono text-[9px] font-bold tracking-tight">
+                ALL ROOMS (601·602·605)
+              </span>
+            ) : roomCode && (
               <span className={cx('rounded-[2px] px-1 py-0.2 font-mono text-[9px] font-bold tracking-tight', rc.badge)}>
                 RM {roomCode}
               </span>
@@ -748,13 +922,21 @@ function EventBlock({
         style={laneStyle}
         onPointerDown={(e) => e.stopPropagation()}
         onClick={(e) => onClick?.(b, e.currentTarget)}
-        title={`${isEvent ? '[SCHEDULED EVENT] ' : ''}[RM ${roomCode}] ${u?.name ?? ''} · ${b.title} · ${b.status}${totalLanes > 1 ? ` (${totalLanes} competing)` : ''}`}
+        title={`${isEvent ? '[SCHEDULED EVENT] ' : ''}[RM ${roomCode}] ${u?.name ?? ''} · ${b.title} · ${b.status}${
+          competingInfo?.isCompeting
+            ? ` (COMPETING ${competingInfo.rank}/${competingInfo.competingCount} - ${
+                competingInfo.isEarliest
+                  ? `FIRST TO REQUEST at ${competingInfo.submittedTime}`
+                  : `Submitted at ${competingInfo.submittedTime}, +${competingInfo.timeDiffMin}m later`
+              })`
+            : ''
+        }`}
       >
         {isEvent ? (
           <>
             <span className="flex w-full items-center justify-between gap-1 font-mono text-[10px] font-bold">
               <span className="flex items-center gap-1 truncate">
-                <span className={cx('rounded-[2px] px-1 py-0.2 font-mono text-[9px] font-bold tracking-tight', rc.badge)}>
+                <span className={cx('shrink-0 rounded-[2px] px-1 py-0.2 font-mono text-[9px] font-bold tracking-tight', rc.badge)}>
                   RM {roomCode}
                 </span>
                 <span className="inline-flex items-center gap-1 rounded-[2px] bg-ink px-1 py-0.2 text-[9px] text-paper">
@@ -782,10 +964,10 @@ function EventBlock({
         ) : (
           <>
             <div className="flex w-full items-center justify-between gap-1 font-mono text-[10px] leading-[1.3] font-bold">
-              <div className="flex items-center gap-1 truncate">
+              <div className="flex items-center gap-1 min-w-0">
                 <span
                   className={cx(
-                    'rounded-[2px] px-1 py-0.2 font-mono text-[9px] font-bold tracking-tight',
+                    'shrink-0 rounded-[2px] px-1 py-0.2 font-mono text-[9px] font-bold tracking-tight',
                     isApproved ? 'border border-white/50 bg-white/20 text-white' : rc.badge,
                   )}
                 >
@@ -793,16 +975,22 @@ function EventBlock({
                 </span>
                 <span className="truncate">{u?.code ?? '—'}</span>
               </div>
-              {totalLanes > 1 && isPending ? (
-                <span className="rounded-[2px] bg-plum/20 px-1 py-0.2 font-mono text-[9px] font-bold text-plum whitespace-nowrap">
-                  ⚡ {lane + 1}/{totalLanes}
-                </span>
-              ) : (
-                <span className="shrink-0 font-bold opacity-85">
-                  {isPending ? 'PEND' : isKeyOut ? 'KEY' : isApproved ? 'OK' : 'DONE'}
-                </span>
-              )}
+              <span className={cx(
+                'shrink-0 font-bold opacity-85',
+                competingInfo?.hasClashWithApproved && isPending && 'text-plum font-extrabold',
+              )}>
+                {competingInfo?.hasClashWithApproved && isPending
+                  ? 'CLASH'
+                  : isPending
+                    ? 'PEND'
+                    : isKeyOut
+                      ? 'KEY'
+                      : isApproved
+                        ? 'OK'
+                        : 'DONE'}
+              </span>
             </div>
+
             {!compact && <span className="w-full truncate text-[11px] leading-[1.25] font-semibold">{u?.name}</span>}
             {height > 60 && <span className="line-clamp-2 w-full text-[10px] leading-[1.2] font-normal opacity-90">{b.title}</span>}
             {height > 84 && (
@@ -919,7 +1107,7 @@ function EventBlock({
               RM {roomCode}
             </span>
             <span className="truncate">
-              PENDING · {totalLanes > 1 ? `${totalLanes} REQ` : 'OPEN'}
+              {competingInfo?.isCompeting ? `PENDING (${competingInfo.competingCount} REQS)` : 'PENDING'}
             </span>
           </div>
           <span className="shrink-0 text-[9px] opacity-80">

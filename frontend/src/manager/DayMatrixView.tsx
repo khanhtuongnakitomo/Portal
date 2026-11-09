@@ -16,26 +16,11 @@ interface DayMatrixViewProps {
 }
 
 function getPrevWorkday(d: Date): Date {
-  const dow = d.getDay()
-  if (dow === 1) return addDays(d, -3) // Mon -> Fri
-  if (dow === 0) return addDays(d, -2) // Sun -> Fri
-  if (dow === 6) return addDays(d, -1) // Sat -> Fri
   return addDays(d, -1)
 }
 
 function getNextWorkday(d: Date): Date {
-  const dow = d.getDay()
-  if (dow === 5) return addDays(d, 3) // Fri -> Mon
-  if (dow === 6) return addDays(d, 2) // Sat -> Mon
-  if (dow === 0) return addDays(d, 1) // Sun -> Mon
   return addDays(d, 1)
-}
-
-function snapToWorkday(d: Date): Date {
-  const dow = d.getDay()
-  if (dow === 6) return addDays(d, 2)
-  if (dow === 0) return addDays(d, 1)
-  return d
 }
 
 const HOURS = [8, 9, 10, 11, 12, 13, 14, 15, 16] // 08:00 to 17:00 (9 hours)
@@ -57,14 +42,6 @@ export function DayMatrixView({
   const isToday = sameDay(selectedDay, now)
   const isPast = startOfDay(selectedDay) < startOfDay(now)
 
-  // Auto-snap weekends to workdays
-  useEffect(() => {
-    const dow = selectedDay.getDay()
-    if (dow === 0 || dow === 6) {
-      onChangeDay(snapToWorkday(selectedDay))
-    }
-  }, [selectedDay, onChangeDay])
-
   // Filter bookings and blocks for the selected day
   const dayBookings = useMemo(() => {
     return bookings.filter(
@@ -78,30 +55,16 @@ export function DayMatrixView({
     return blocks.filter((k) => k.active && sameDay(new Date(k.start), selectedDay))
   }, [blocks, selectedDay])
 
-  // Compute occupancy per room for this day
+  // Compute pending count per room for this day
   const roomOccupancyStats = useMemo(() => {
-    const stats: Record<string, { busyHours: number; pct: number; pendingCount: number }> = {}
+    const stats: Record<string, { pendingCount: number }> = {}
     for (const r of rooms) {
       const rBookings = dayBookings.filter((b) => b.roomId === r.id)
-      const rBlocks = dayBlocks.filter((k) => k.roomId === r.id)
       const pendingCount = rBookings.filter((b) => b.status === 'PENDING').length
-
-      let busyHours = 0
-      for (const h of HOURS) {
-        const slotStart = at(selectedDay, h, 0)
-        const slotEnd = at(selectedDay, h + 1, 0)
-        const hasBk = rBookings.some((b) => overlaps(new Date(b.start), new Date(b.end), slotStart, slotEnd))
-        const hasBlk = rBlocks.some((k) => overlaps(new Date(k.start), new Date(k.end), slotStart, slotEnd))
-        if (hasBk || hasBlk) busyHours++
-      }
-      stats[r.id] = {
-        busyHours,
-        pct: Math.min(100, Math.round((busyHours / HOURS.length) * 100)),
-        pendingCount,
-      }
+      stats[r.id] = { pendingCount }
     }
     return stats
-  }, [rooms, dayBookings, dayBlocks, selectedDay])
+  }, [rooms, dayBookings])
 
   return (
     <div className="flex flex-col rounded-lg border border-ink bg-paper">
@@ -133,7 +96,7 @@ export function DayMatrixView({
             variant={isToday ? 'dark' : 'outline'}
             size="xs"
             className="!rounded-md"
-            onClick={() => onChangeDay(snapToWorkday(startOfDay(now)))}
+            onClick={() => onChangeDay(startOfDay(now))}
           >
             Today
           </Button>
@@ -197,7 +160,7 @@ export function DayMatrixView({
           </div>
 
           {rooms.map((r) => {
-            const st = roomOccupancyStats[r.id] ?? { busyHours: 0, pct: 0, pendingCount: 0 }
+            const st = roomOccupancyStats[r.id] ?? { pendingCount: 0 }
             return (
               <div key={r.id} className="sticky top-0 z-20 flex flex-col gap-1 border-b border-ink bg-ice px-3.5 py-3">
                 <div className="flex items-center justify-between">
@@ -213,23 +176,6 @@ export function DayMatrixView({
                 </div>
 
                 <div className="truncate text-[11px] text-graphite">{r.name}</div>
-
-                {/* Room Occupancy Bar for this Day */}
-                <div className="mt-1 flex flex-col gap-1">
-                  <div className="flex items-center justify-between font-mono text-[9px] text-steel">
-                    <span>{st.busyHours}h / {HOURS.length}h</span>
-                    <span>{st.pct}% OCCUPIED</span>
-                  </div>
-                  <div className="h-1.5 w-full overflow-hidden rounded-[1px] bg-rule">
-                    <div
-                      className={cx(
-                        'h-full transition-all duration-300',
-                        st.pct > 75 ? 'bg-plum' : st.pct > 0 ? 'bg-accent' : 'bg-transparent',
-                      )}
-                      style={{ width: `${st.pct}%` }}
-                    />
-                  </div>
-                </div>
               </div>
             )
           })}
@@ -272,7 +218,7 @@ export function DayMatrixView({
                       >
                         <div className="flex items-center justify-between font-mono text-[10px] font-bold">
                           <span className="flex items-center gap-1">
-                            <span className="h-1.5 w-1.5 rounded-full bg-paper" />
+                            <span className="h-1.5 w-1.5 rounded-sm bg-paper" />
                             ROOM BLOCK
                           </span>
                           <span className="text-white/70">
@@ -348,9 +294,16 @@ export function DayMatrixView({
                               {badge?.cleanTitle || booking.title}
                             </span>
                             {!isEvent && (
-                              <span className="truncate text-[11px] opacity-80">
-                                {u?.fullName}
-                              </span>
+                              <div className="flex flex-col">
+                                <span className="truncate text-[11px] opacity-80">
+                                  {u?.fullName}
+                                </span>
+                                {booking.members && (
+                                  <span className="truncate font-mono text-[9px] text-accent font-semibold">
+                                    Mbrs: {booking.members}
+                                  </span>
+                                )}
+                              </div>
                             )}
                           </div>
 
@@ -368,13 +321,17 @@ export function DayMatrixView({
                     }
 
                     // Multiple competing requests overlapping this room & hour slot
+                    const sortedBks = [...bks].sort(
+                      (x, y) => new Date(x.createdAt).getTime() - new Date(y.createdAt).getTime(),
+                    )
+
                     return (
                       <div key={r.id} className="flex flex-col gap-1.5 border-b border-rule bg-ice/30 p-1.5">
                         <div className="flex items-center justify-between font-mono text-[9px] font-bold text-plum">
-                          <span>⚡ {bks.length} COMPETING REQS</span>
+                          <span>{sortedBks.length} COMPETING REQS</span>
                           <span>CLICK TO REVIEW</span>
                         </div>
-                        {bks.map((booking, idx) => {
+                        {sortedBks.map((booking, idx) => {
                           const u = user(booking.userId)
                           const isPending = booking.status === 'PENDING'
                           const isApproved = booking.status === 'APPROVED'
@@ -394,20 +351,37 @@ export function DayMatrixView({
                                       ? 'border-accent bg-accent text-paper'
                                       : 'border-rule bg-paper text-graphite',
                               )}
-                              title={`${booking.title} · ${booking.status} (Click to inspect / resolve)`}
+                              title={`${booking.title} · ${booking.status} · Requested: ${fmtTime(booking.createdAt)} (Click to inspect / resolve)`}
                             >
                               <div className="flex items-center justify-between gap-1 font-mono text-[9px] font-bold">
-                                <span className="truncate">
-                                  {isPending ? `⚡ #${idx + 1} · ` : ''}
-                                  {u?.studentCode ?? 'STUDENT'}
+                                <span className="flex items-center gap-1 truncate">
+                                  {isPending && (
+                                    <span
+                                      className={cx(
+                                        'rounded-[2px] px-1 py-0.2 text-[8px] font-bold shrink-0',
+                                        idx === 0
+                                          ? 'bg-emerald-600 text-white shadow-xs'
+                                          : 'bg-plum/20 text-plum border border-plum/30',
+                                      )}
+                                      title={idx === 0 ? `1st to book: ${fmtTime(booking.createdAt)}` : `Submitted at ${fmtTime(booking.createdAt)}`}
+                                    >
+                                      {idx === 0 ? '1ST' : `#${idx + 1}`}
+                                    </span>
+                                  )}
+                                  <span className="truncate">{u?.studentCode ?? 'STUDENT'}</span>
                                 </span>
-                                <span className="opacity-80">
-                                  {fmtTime(booking.start)}–{fmtTime(booking.end)}
+                                <span className="shrink-0 text-steel font-normal">
+                                  Req: {fmtTime(booking.createdAt)}
                                 </span>
                               </div>
                               <div className="truncate text-[10px] font-medium opacity-90">
                                 {u?.fullName}
                               </div>
+                              {booking.members && (
+                                <div className="truncate font-mono text-[9px] text-accent font-semibold">
+                                  Mbrs: {booking.members}
+                                </div>
+                              )}
                             </div>
                           )
                         })}

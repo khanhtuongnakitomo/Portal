@@ -4,15 +4,20 @@ import { useStore } from '@/lib/store'
 import type { Role } from '@/lib/types'
 import { Button, Eyebrow, Mono, cx } from './ui'
 import { BlurText, ScrollRevealText, SplitText } from './effects'
+import { UtsLogo } from './UtsLogo'
+import { BrandLockup } from './BrandLockup'
+import { ProfileMenu } from './ProfileMenu'
+import { LanguageSwitcher } from './LanguageSwitcher'
+import { useI18n } from '@/lib/i18n'
 
-export type Route = '/auth' | '/student' | '/manager' | '/admin'
+export type Route = '/auth' | '/student' | '/manager' | '/admin' | '/profile'
 export const homeFor = (role: Role): Route => (role === 'USER' ? '/student' : role === 'MANAGER' ? '/manager' : '/admin')
-export const routeRole: Record<Exclude<Route, '/auth'>, Role> = { '/student': 'USER', '/manager': 'MANAGER', '/admin': 'ADMIN' }
+export const routeRole: Partial<Record<Route, Role>> = { '/student': 'USER', '/manager': 'MANAGER', '/admin': 'ADMIN' }
 
 export function useHashRoute(): [Route, (r: Route) => void] {
   const read = () => {
     const h = window.location.hash.replace('#', '') as Route
-    return (['/auth', '/student', '/manager', '/admin'] as Route[]).includes(h) ? h : '/student'
+    return (['/auth', '/student', '/manager', '/admin', '/profile'] as Route[]).includes(h) ? h : '/student'
   }
   const [route, setRoute] = useState<Route>(read)
   useEffect(() => {
@@ -35,7 +40,7 @@ export function LogoMark({ size = 18, className }: { size?: number; className?: 
 }
 
 const roles: { role: Role | null; label: string; who: string }[] = [
-  { role: 'USER', label: 'USER', who: 'Student · SE184022' },
+  { role: 'USER', label: 'USER', who: 'Student · HCMUT: 2110123 · UTS: 14234567' },
   { role: 'MANAGER', label: 'MANAGER', who: 'Facilities · Duc Tran' },
   { role: 'ADMIN', label: 'ADMIN', who: 'System · Giang Pham' },
   { role: null, label: 'SIGNED OUT', who: 'Auth screen' },
@@ -44,10 +49,10 @@ const roles: { role: Role | null; label: string; who: string }[] = [
 export function RoleSwitcher({ go }: { go: (r: Route) => void }) {
   const { currentUser, previewAs, logout, apiConnected } = useStore()
   return (
-    <div className="bg-forest text-paper">
-      <div className="mx-auto flex max-w-[1440px] flex-wrap items-center justify-between gap-x-4 gap-y-2 px-6 py-2">
+    <div className="bg-forest text-paper select-none role-switcher">
+      <div className="mx-auto flex max-w-[1440px] flex-wrap items-center justify-between gap-x-4 gap-y-2 px-6 py-2 select-none">
         <div className="flex items-center gap-2.5 font-mono text-[12px] text-white/75">
-          <span className={cx('h-2 w-2 rounded-full', apiConnected ? 'bg-tint animate-pulse' : 'bg-steel')} />
+          <span className={cx('h-2 w-2 rounded-sm', apiConnected ? 'bg-tint animate-pulse' : 'bg-steel')} />
           <span>{apiConnected ? 'API LIVE SYNC' : 'HYBRID STORAGE'} · ROLE PREVIEW</span>
         </div>
         <div className="flex flex-wrap gap-1">
@@ -83,66 +88,84 @@ export function RoleSwitcher({ go }: { go: (r: Route) => void }) {
 }
 
 export function TopNav({ children }: { children?: ReactNode }) {
-  const { currentUser, logout } = useStore()
+  const { currentUser } = useStore()
+  const { locale } = useI18n()
   if (!currentUser) return null
-  const idCode = currentUser.studentCode && currentUser.role === 'USER' ? currentUser.studentCode : `STAFF-${currentUser.id.slice(2).toUpperCase()}`
+
+  const title =
+    locale === 'vi'
+      ? 'Hệ thống đặt phòng dành cho TNE - UTS'
+      : 'Room Booking System for TNE - UTS'
+
   return (
-    <header className="sticky top-0 z-40 border-b border-rule bg-paper/95 shadow-nav backdrop-blur">
-      <div className="mx-auto flex h-14 max-w-[1440px] items-center gap-6 px-6">
-        <a href={`#${homeFor(currentUser.role)}`} className="flex items-center gap-2.5 text-ink">
-          <LogoMark />
-          <span className="font-mono text-[14px] font-semibold tracking-tight">[UTS-TNE LEDGER]</span>
+    <header className="sticky top-0 z-40 border-b border-rule bg-paper/95 shadow-nav backdrop-blur select-none">
+      <div className="mx-auto flex h-14 max-w-[1440px] items-center gap-3 lg:gap-5 px-4 sm:px-6 select-none">
+        <a href={`#${homeFor(currentUser.role)}`} className="shrink-0 focus:outline-none select-none flex items-center" title={title}>
+          <BrandLockup size="md" />
         </a>
-        <div className="hidden h-5 w-px bg-rule md:block" />
-        <nav className="hidden flex-1 items-center gap-1 md:flex">{children}</nav>
-        <div className="ml-auto flex items-center gap-3">
-          <div className="hidden text-right sm:block">
-            <div className="text-[13px] font-medium leading-tight text-ink">{currentUser.fullName}</div>
-            <div className="text-[11px] leading-tight text-steel">{currentUser.role === 'USER' ? 'Student' : currentUser.role === 'MANAGER' ? 'Facilities Manager' : 'System Administrator'}</div>
-          </div>
-          <span className="rounded-md px-2 py-1 font-mono text-[13px] font-semibold text-ink shadow-subtle">{idCode}</span>
-          <Button
-            variant="outline"
-            onClick={() => {
-              logout()
-              window.location.hash = '/auth'
-            }}
-            className="!rounded-md !px-2 !py-1"
-            aria-label="Log out"
-          >
-            <LogOut size={14} strokeWidth={1.75} />
-            <span className="hidden text-[13px] lg:inline">Log out</span>
-          </Button>
+        <div className="hidden h-5 w-px bg-rule md:block shrink-0" />
+        <nav className="hidden flex-1 items-center gap-1 md:flex select-none min-w-0 overflow-x-auto no-scrollbar">{children}</nav>
+        <div className="ml-auto flex items-center gap-2.5 sm:gap-3 select-none shrink-0">
+          <LanguageSwitcher />
+          <ProfileMenu />
         </div>
       </div>
     </header>
   )
 }
 
-export function NavItem({ active, children, onClick, badge }: { active?: boolean; children: ReactNode; onClick?: () => void; badge?: number }) {
+export function NavItem({
+  active,
+  children,
+  onClick,
+  badge,
+  icon,
+}: {
+  active?: boolean
+  children: ReactNode
+  onClick?: () => void
+  badge?: number | string
+  icon?: ReactNode
+}) {
   return (
     <button
+      type="button"
       onClick={onClick}
       className={cx(
-        'relative flex items-center gap-2 rounded-md px-2.5 py-1.5 text-[14px] font-semibold transition-colors',
-        active ? 'text-ink shadow-subtle' : 'text-graphite hover:bg-ice hover:text-ink',
+        'group relative flex items-center gap-2 rounded-md px-3 py-1.5 font-mono text-[12.5px] font-medium transition-all cursor-pointer select-none whitespace-nowrap',
+        active
+          ? 'border border-ink bg-paper text-ink shadow-xs font-semibold'
+          : 'border border-transparent text-graphite hover:border-rule hover:bg-paper/70 hover:text-ink',
       )}
     >
-      {active && <span className="h-1.5 w-1.5 bg-accent" />}
-      {children}
-      {badge ? <span className="rounded-sm bg-ink px-1 font-mono text-[10px] leading-[1.5] text-paper">{badge}</span> : null}
+      {icon && (
+        <span className={cx('transition-colors', active ? 'text-accent' : 'text-steel group-hover:text-ink')}>
+          {icon}
+        </span>
+      )}
+      {active && !icon && (
+        <span className="h-1.5 w-1.5 rounded-full bg-accent animate-pulse" />
+      )}
+      <span>{children}</span>
+      {badge !== undefined && Number(badge) > 0 ? (
+        <span className="rounded-sm bg-accent px-1.5 py-0.2 font-mono text-[10px] font-bold text-paper shadow-2xs">
+          {badge}
+        </span>
+      ) : badge !== undefined && typeof badge === 'string' ? (
+        <span className="font-mono text-[10.5px] text-steel">({badge})</span>
+      ) : null}
     </button>
   )
 }
 
 export function PageHeader({ eyebrow, title, body, right }: { eyebrow: string; title: string; body?: string; right?: ReactNode }) {
   return (
-    <div className="flex flex-wrap items-end justify-between gap-6 border-b border-rule pb-8">
+    <div className="flex flex-wrap items-end justify-between gap-6 border-b border-rule pb-8 select-none page-header">
       <div className="flex max-w-[720px] flex-col gap-3">
-        <Eyebrow>
+        <Eyebrow className="select-none">
           <SplitText key={eyebrow} text={eyebrow} stagger={30} />
         </Eyebrow>
-        <h1 className="font-display text-[34px] leading-[1.15] font-w450 text-ink md:text-major">
+        <h1 className="font-display text-[34px] leading-[1.15] font-w450 text-ink md:text-major select-none">
           <BlurText key={title} text={title} shine />
         </h1>
         {body && (
@@ -180,20 +203,40 @@ export function AccessDenied({ need, go }: { need: Role; go: (r: Route) => void 
 }
 
 export function Footer() {
+  const { locale } = useI18n()
+  const title =
+    locale === 'vi'
+      ? 'Hệ thống đặt phòng dành cho TNE - UTS'
+      : 'Room Booking System for TNE - UTS'
+
   const cols = [
-    { t: 'Rooms', l: ['Seminar Hall 601', 'Studio Room 602', 'Lecture Theatre 605'] },
-    { t: 'Policy', l: ['Booking window 2–7 days', 'Key custody rules', 'Event priority'] },
-    { t: 'Support', l: ['Facilities desk · Level 1', 'it-support@uts-tne.edu.vn', 'Ext. 6021'] },
+    {
+      t: locale === 'vi' ? 'Phòng học' : 'Rooms',
+      l: ['Seminar Hall 601', 'Studio Room 602', 'Lecture Theatre 605'],
+    },
+    {
+      t: locale === 'vi' ? 'Quy định' : 'Policy',
+      l: [
+        locale === 'vi' ? 'Đặt trước 2–7 ngày' : 'Booking window 2–7 days',
+        locale === 'vi' ? 'Nhận/trả chìa tại phòng Manager' : 'Key custody rules',
+        locale === 'vi' ? 'Ưu tiên sự kiện học thuật' : 'Event priority',
+      ],
+    },
+    {
+      t: locale === 'vi' ? 'Hỗ trợ' : 'Support',
+      l: ['Facilities desk · Level 1', 'it-support@uts-tne.edu.vn', 'Ext. 6021'],
+    },
   ]
   return (
-    <footer className="mt-16 bg-forest text-paper">
+    <footer className="mt-16 bg-forest text-paper select-none">
       <div className="mx-auto max-w-[1440px] px-6 py-12">
         <div className="flex flex-wrap items-end justify-between gap-6 border-b border-white/20 pb-8">
-          <div className="flex items-center gap-3">
-            <LogoMark size={22} className="text-paper" />
+          <div className="flex items-center gap-4">
+            <UtsLogo variant="dark" className="h-10 w-auto" />
             <div>
-              <div className="font-mono text-[14px] font-semibold">[UTS-TNE LEDGER]</div>
-              <div className="text-[14px] font-normal text-white/75">Room booking & key custody for UTS Transnational Education.</div>
+              <div className="font-display text-[15px] font-bold text-paper tracking-tight">
+                {title}
+              </div>
             </div>
           </div>
           <div className="font-mono text-[12px] text-white/75">BUILD 2.4.1 · NODE AP-SE-1 · ALL SYSTEMS NOMINAL</div>
@@ -210,9 +253,11 @@ export function Footer() {
             </div>
           ))}
           <div className="flex flex-col gap-2">
-            <div className="text-[14px] font-semibold">Campus</div>
-            <div className="text-[14px] font-normal text-white/75">Level 6, TNE Building</div>
-            <div className="text-[14px] font-normal text-white/75">© {new Date().getFullYear()} UTS-TNE</div>
+            <div className="text-[14px] font-semibold">{locale === 'vi' ? 'Cơ sở' : 'Campus'}</div>
+            <div className="text-[14px] font-normal text-white/75">Level 6, TNE Building · UTS × HCMUT</div>
+            <div className="text-[14px] font-normal text-white/75">
+              © {new Date().getFullYear()} {title}
+            </div>
           </div>
         </div>
       </div>

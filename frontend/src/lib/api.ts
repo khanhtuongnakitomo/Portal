@@ -190,13 +190,27 @@ export function mapBackendUserToFrontend(raw: any): User {
         : lowerEmail.startsWith('manager@') || lowerEmail.includes('d.tran@')
           ? 'MANAGER'
           : 'USER'
+  const rawCode = raw.studentCode ?? raw.studentProfile?.studentCode ?? undefined
+  let hcmutId: string | undefined = raw.hcmutId
+  let utsId: string | undefined = raw.utsId
+  if (!hcmutId && rawCode) {
+    if (String(rawCode).includes('/')) {
+      const parts = String(rawCode).split('/').map((s) => s.trim())
+      hcmutId = parts[0]
+      utsId = parts[1] || utsId
+    } else {
+      hcmutId = String(rawCode)
+    }
+  }
   return {
     id: String(raw.id),
     fullName: String(raw.fullName || raw.name || ''),
     email,
     password: '',
     role,
-    studentCode: raw.studentCode ?? raw.studentProfile?.studentCode ?? undefined,
+    studentCode: rawCode,
+    hcmutId,
+    utsId,
     status: raw.status === 'SUSPENDED' ? 'SUSPENDED' : 'ACTIVE',
     createdAt: raw.createdAt ? new Date(raw.createdAt).toISOString() : new Date().toISOString(),
   }
@@ -223,6 +237,8 @@ export function mapBackendBookingToFrontend(raw: any): Booking {
     category: raw.category,
     attendeeCount: raw.attendeeCount ? Number(raw.attendeeCount) : undefined,
     isEvent: Boolean(raw.isEvent),
+    members: raw.members,
+    memberIds: Array.isArray(raw.memberIds) ? raw.memberIds : undefined,
   }
 }
 
@@ -245,7 +261,7 @@ export function mapBackendSettingsToFrontend(raw: any): Settings {
     timezone: String(raw.timezone || 'Asia/Ho_Chi_Minh (UTC+07:00)'),
     openTime: String(raw.openTime || '08:00').trim().slice(0, 5),
     closeTime: String(raw.closeTime || '17:00').trim().slice(0, 5),
-    maxDurationMinutes: Number(raw.maxDurationMinutes || 240),
+    maxDurationMinutes: 120,
     minAdvanceDays: Number(raw.minAdvanceDays ?? 2),
     maxAdvanceDays: Number(raw.maxAdvanceDays || 7),
     maxActiveBookings: Number(raw.maxActiveBookingsPerUser ?? raw.maxActiveBookings ?? 5),
@@ -285,22 +301,33 @@ export async function apiRegister(input: {
   fullName: string
   email: string
   password: string
-  studentCode: string
+  studentCode?: string
+  hcmutId?: string
+  utsId?: string
 }): Promise<{ user: User; token: string } | { error: string }> {
+  const hcmut = (input.hcmutId || input.studentCode || '').trim().toUpperCase()
+  const uts = (input.utsId || '').trim().toUpperCase()
+  const combinedCode = uts ? `${hcmut} / ${uts}` : hcmut
   const res = await apiFetch<{ accessToken?: string; token?: string; user: any }>('/auth/register', {
     method: 'POST',
     body: JSON.stringify({
       fullName: input.fullName.trim(),
       email: input.email.trim(),
       password: input.password,
-      studentCode: input.studentCode.trim().toUpperCase(),
+      studentCode: combinedCode,
+      hcmutId: hcmut,
+      utsId: uts,
     }),
   })
   if (!res.ok || !res.data) {
     return { error: res.error || 'Registration failed' }
   }
   const token = res.data.accessToken || res.data.token || ''
-  const user = mapBackendUserToFrontend(res.data.user)
+  const user: User = {
+    ...mapBackendUserToFrontend(res.data.user),
+    hcmutId: hcmut || undefined,
+    utsId: uts || undefined,
+  }
   setStoredToken(token)
   setStoredUser(user)
   return { user, token }
@@ -604,4 +631,18 @@ export async function apiGetAuditLogs(query?: { action?: string; targetType?: st
   if (!res.ok || !res.data) return []
   const items = Array.isArray(res.data) ? res.data : (res.data.items ?? [])
   return items.map(mapBackendAuditToFrontend)
+}
+
+
+export async function apiSendManagerEmailNotification(booking: Booking): Promise<boolean> {
+  const res = await apiFetch<any>('/manager/notifications/email', {
+    method: 'POST',
+    body: JSON.stringify({
+      bookingId: booking.id,
+      recipient: 'manager@tne.edu.vn',
+      subject: `[TNE-PORTAL] New Booking Request: Room ${booking.roomId}`,
+      booking,
+    }),
+  })
+  return res.ok
 }

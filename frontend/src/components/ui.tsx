@@ -51,7 +51,7 @@ export function Button({
 }
 
 const fieldBase =
-  'w-full rounded-none border border-edge bg-paper px-3 py-2 text-[14px] font-medium text-ink placeholder:text-steel placeholder:font-normal outline-none transition-shadow focus:border-ink focus:shadow-subtle disabled:bg-ice disabled:text-steel'
+  'w-full rounded-md border border-edge bg-paper px-3 py-2 text-[14px] font-medium text-ink placeholder:text-steel placeholder:font-normal outline-none transition-shadow focus:border-ink focus:shadow-subtle disabled:bg-ice disabled:text-steel'
 
 export function Input({ className, ...rest }: InputHTMLAttributes<HTMLInputElement>) {
   return <input className={cx(fieldBase, className)} {...rest} />
@@ -76,12 +76,15 @@ export function Select({ className, children, ...rest }: SelectHTMLAttributes<HT
   )
 }
 
-export function Field({ label, hint, error, children, className }: { label: string; hint?: ReactNode; error?: string | null; children: ReactNode; className?: string }) {
+export function Field({ label, hint, action, error, children, className }: { label: string; hint?: ReactNode; action?: ReactNode; error?: string | null; children: ReactNode; className?: string }) {
   return (
     <label className={cx('flex flex-col gap-1.5', className)}>
       <span className="flex items-baseline justify-between gap-2">
         <span className="text-[13px] font-semibold text-ink">{label}</span>
-        {hint && <span className="font-mono text-[11px] font-semibold text-steel">{hint}</span>}
+        <span className="flex items-center gap-2">
+          {hint && <span className="font-mono text-[11px] font-semibold text-steel">{hint}</span>}
+          {action}
+        </span>
       </span>
       {children}
       {error && <span className="text-[12px] font-semibold text-plum">{error}</span>}
@@ -139,14 +142,18 @@ export function Modal({
   title,
   eyebrow,
   children,
+  footer,
   width = 'max-w-[560px]',
+  className,
 }: {
   open: boolean
   onClose: () => void
   title: string
   eyebrow?: string
   children: ReactNode
+  footer?: ReactNode
   width?: string
+  className?: string
 }) {
   useEffect(() => {
     if (!open) return
@@ -154,21 +161,50 @@ export function Modal({
     window.addEventListener('keydown', h)
     return () => window.removeEventListener('keydown', h)
   }, [open, onClose])
+
   if (!open) return null
+
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-      <div className="absolute inset-0 bg-ink/30 backdrop-blur-[1px]" onClick={onClose} />
-      <div role="dialog" aria-modal="true" className={cx('relative w-full overflow-hidden rounded-lg border border-ink bg-paper shadow-nav', width)}>
-        <div className="flex items-start justify-between border-b border-rule px-6 pt-5 pb-4">
-          <div className="flex flex-col gap-2">
-            {eyebrow && <Eyebrow>{eyebrow}</Eyebrow>}
-            <h2 className="font-display text-feature font-w450 text-ink">{title}</h2>
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-2.5 sm:p-4 md:p-6 overflow-hidden">
+      {/* Backdrop */}
+      <div className="fixed inset-0 bg-ink/40 backdrop-blur-[2px] transition-opacity" onClick={onClose} />
+
+      {/* Dialog container */}
+      <div
+        role="dialog"
+        aria-modal="true"
+        className={cx(
+          'relative w-full my-auto flex max-h-[calc(100vh-1.5rem)] sm:max-h-[calc(100vh-3rem)] flex-col overflow-hidden rounded-lg border border-ink bg-paper shadow-2xl z-10',
+          width,
+          className,
+        )}
+      >
+        {/* Header */}
+        <div className="flex shrink-0 items-start justify-between border-b border-rule bg-paper px-5 sm:px-6 pt-4 sm:pt-5 pb-3.5 sm:pb-4 select-none z-10">
+          <div className="flex flex-col gap-1 sm:gap-2">
+            {eyebrow && <Eyebrow className="select-none">{eyebrow}</Eyebrow>}
+            <h2 className="font-display text-[20px] sm:text-feature font-w450 text-ink select-none">{title}</h2>
           </div>
-          <button onClick={onClose} aria-label="Close" className="-mr-2 rounded-md p-1.5 text-steel hover:bg-ice hover:text-ink">
+          <button
+            onClick={onClose}
+            aria-label="Close"
+            className="-mr-1.5 sm:-mr-2 rounded-md p-1.5 text-steel hover:bg-ice hover:text-ink cursor-pointer transition-colors"
+          >
             <X size={18} strokeWidth={1.5} />
           </button>
         </div>
-        {children}
+
+        {/* Scrollable Content Body */}
+        <div className="flex-1 overflow-y-auto overscroll-contain">
+          {children}
+        </div>
+
+        {/* Optional Pinned/Sticky Footer */}
+        {footer && (
+          <div className="shrink-0 border-t border-rule bg-paper px-5 sm:px-6 py-3.5 sm:py-4 z-10">
+            {footer}
+          </div>
+        )}
       </div>
     </div>
   )

@@ -524,7 +524,7 @@ export function AssignActivityModal({
             <div className="flex flex-col gap-2">
               {overlappingBookings.length === 0 && overlappingBlocks.length === 0 ? (
                 <div className="flex items-center gap-2 rounded-[4px] border border-[#0F62FE]/30 bg-tint/20 px-3.5 py-2.5 text-[12px] text-ink">
-                  <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-accent text-paper">
+                  <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-sm bg-accent text-paper">
                     <Check size={12} strokeWidth={2.5} />
                   </span>
                   <div className="flex flex-col">

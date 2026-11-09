@@ -64,6 +64,56 @@
     background: var(--color-tint);
     color: var(--color-ink);
   }
+  /* Unselectable navigation bar elements and headings/titles to prevent accidental scanning and copying */
+  header,
+  header *,
+  nav,
+  nav *,
+  h1,
+  h2,
+  h3,
+  h4,
+  h5,
+  h6,
+  .brand-lockup,
+  .brand-lockup *,
+  .nav-item,
+  .page-header,
+  .page-header h1,
+  .page-header .eyebrow,
+  .eyebrow,
+  [role="tablist"],
+  [role="tab"],
+  .role-switcher,
+  .role-switcher * {
+    -webkit-user-select: none !important;
+    -moz-user-select: none !important;
+    -ms-user-select: none !important;
+    user-select: none !important;
+  }
+
+  h1,
+  h2,
+  h3,
+  h4,
+  h5,
+  h6 {
+    cursor: default;
+  }
+
+  /* Keep actual data inputs, form fields, pre/code blocks, and text copy areas selectable */
+  input,
+  textarea,
+  pre,
+  code,
+  .selectable,
+  [data-selectable="true"] {
+    -webkit-user-select: text !important;
+    -moz-user-select: text !important;
+    -ms-user-select: text !important;
+    user-select: text !important;
+  }
+
 }
 
 /* Faint graph-paper canvas */
@@ -226,6 +276,8 @@
 .aurora-layer {
   position: absolute;
   inset: -20%;
+  will-change: transform;
+  transform: translateZ(0);
 }
 .aurora-blob {
   position: absolute;
@@ -274,6 +326,8 @@
 
 /* Graph-paper grid drawn above the aurora (transparent fill) — #E0E0E0, 1px, 24px */
 .graph-grid {
+  will-change: transform;
+  transform: translateZ(0);
   background-image:
     linear-gradient(rgb(224 224 224 / 0.55) 1px, transparent 1px),
     linear-gradient(90deg, rgb(224 224 224 / 0.55) 1px, transparent 1px);

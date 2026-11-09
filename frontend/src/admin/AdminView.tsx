@@ -1,6 +1,8 @@
 import { Fragment, useEffect, useMemo, useState } from 'react'
 import {
   ArrowRight,
+  Building2,
+  Calendar,
   ChevronDown,
   ChevronRight,
   Download,
@@ -9,6 +11,7 @@ import {
   Plus,
   Search,
   ShieldCheck,
+  Sliders,
   Trash2,
   UserCheck,
   UserPlus,
@@ -47,27 +50,64 @@ export function AdminView() {
   const studentCount = useMemo(() => users.filter((u) => u.role === 'USER').length, [users])
   const managerCount = useMemo(() => users.filter((u) => u.role === 'MANAGER').length, [users])
 
-  const tabs: { id: AdminTab; n: string; label: string; count?: number; badge?: number }[] = [
-    { id: 'schedule', n: '01', label: 'Schedule & Approvals', badge: pending.length },
-    { id: 'users', n: '02', label: 'Accounts (Students & Managers)', count: users.length },
-    { id: 'rooms', n: '03', label: 'Rooms (601, 602, 605)', count: rooms.length },
-    { id: 'settings', n: '04', label: 'System settings' },
-    { id: 'audit', n: '05', label: 'Audit logs', count: audit.length },
+  const tabs = [
+    {
+      id: 'schedule' as AdminTab,
+      n: '01',
+      label: 'Schedule & Approvals',
+      shortLabel: 'Schedule',
+      badge: pending.length,
+      icon: <Calendar size={14} />,
+    },
+    {
+      id: 'users' as AdminTab,
+      n: '02',
+      label: 'User Accounts',
+      shortLabel: 'Accounts',
+      count: users.length,
+      icon: <Users size={14} />,
+    },
+    {
+      id: 'rooms' as AdminTab,
+      n: '03',
+      label: 'Room Inventory',
+      shortLabel: 'Rooms',
+      count: rooms.length,
+      icon: <Building2 size={14} />,
+    },
+    {
+      id: 'settings' as AdminTab,
+      n: '04',
+      label: 'System Settings',
+      shortLabel: 'Settings',
+      icon: <Sliders size={14} />,
+    },
+    {
+      id: 'audit' as AdminTab,
+      n: '05',
+      label: 'Audit Ledger',
+      shortLabel: 'Audit',
+      count: audit.length,
+      icon: <ShieldCheck size={14} />,
+    },
   ]
 
   return (
     <>
       <TopNav>
-        {tabs.map((t) => (
-          <NavItem
-            key={t.id}
-            active={tab === t.id}
-            onClick={() => setTab(t.id)}
-            badge={t.badge && t.badge > 0 ? t.badge : undefined}
-          >
-            {t.label}
-          </NavItem>
-        ))}
+        <div className="flex items-center gap-1 rounded-md border border-rule/70 bg-ice/50 p-1 overflow-x-auto no-scrollbar max-w-full shrink">
+          {tabs.map((t) => (
+            <NavItem
+              key={t.id}
+              active={tab === t.id}
+              onClick={() => setTab(t.id)}
+              badge={t.badge && t.badge > 0 ? t.badge : undefined}
+              icon={t.icon}
+            >
+              {t.label}
+            </NavItem>
+          ))}
+        </div>
       </TopNav>
 
       <main className="mx-auto max-w-[1440px] px-6 pt-10 pb-24">
@@ -115,33 +155,6 @@ export function AdminView() {
             </div>
           }
         />
-
-        {/* View Switcher Strip */}
-        <div className="mt-8 flex items-center gap-1 overflow-x-auto border-b border-rule pb-3 scrollbar-none">
-          {tabs.map((t) => (
-            <button
-              key={t.id}
-              type="button"
-              onClick={() => setTab(t.id)}
-              className={cx(
-                'flex shrink-0 items-center gap-2 rounded-md px-3.5 py-2 font-mono text-[12px] font-semibold transition-all',
-                tab === t.id
-                  ? 'border border-ink bg-paper text-ink shadow-xs'
-                  : 'text-steel hover:bg-ice hover:text-ink',
-              )}
-            >
-              <span className={tab === t.id ? 'text-accent' : 'text-steel'}>{t.n}</span>
-              <span className="font-sans font-semibold text-[13px]">{t.label}</span>
-              {t.badge !== undefined && t.badge > 0 ? (
-                <span className="rounded-full bg-accent px-1.5 py-0.2 font-mono text-[10px] font-bold text-paper">
-                  {t.badge}
-                </span>
-              ) : t.count !== undefined ? (
-                <span className="font-mono text-[11px] text-steel">({t.count})</span>
-              ) : null}
-            </button>
-          ))}
-        </div>
 
         {/* Active Panel View */}
         <div className="mt-8">
@@ -297,7 +310,7 @@ function UsersPanel() {
                 : 'text-steel hover:bg-ice hover:text-ink',
             )}
           >
-            <span className="h-1.5 w-1.5 rounded-full bg-accent" />
+            <span className="h-1.5 w-1.5 rounded-sm bg-accent" />
             STUDENTS · USER ({studentCount})
           </button>
 
@@ -311,7 +324,7 @@ function UsersPanel() {
                 : 'text-steel hover:bg-ice hover:text-ink',
             )}
           >
-            <span className="h-1.5 w-1.5 rounded-full bg-white" />
+            <span className="h-1.5 w-1.5 rounded-sm bg-white" />
             MANAGERS · STAFF ({managerCount})
           </button>
 
@@ -622,7 +635,7 @@ function UserRow({ u, self, onToggle }: { u: User; self: boolean; onToggle: () =
             )}
             title={self ? 'You cannot change your own status' : u.status === 'ACTIVE' ? 'Suspend account' : 'Reactivate account'}
           >
-            <span className={cx('h-1.5 w-1.5 rounded-full', u.status === 'ACTIVE' ? 'bg-accent' : 'bg-plum')} />
+            <span className={cx('h-1.5 w-1.5 rounded-sm', u.status === 'ACTIVE' ? 'bg-accent' : 'bg-plum')} />
             {u.status}
           </button>
         </td>
@@ -709,7 +722,7 @@ function RoomsPanel() {
       {/* Auto-Approve Policy Notice */}
       <div className="mb-4 flex items-center justify-between rounded-md border border-rule bg-ice px-4 py-2.5 font-mono text-[11px] text-steel">
         <span className="flex items-center gap-2">
-          <span className="h-2 w-2 rounded-full bg-accent" />
+          <span className="h-2 w-2 rounded-sm bg-accent" />
           ALL BOOKINGS GO THROUGH FACILITY MANAGER / ADMIN APPROVAL · NO AUTO-APPROVE
         </span>
         <span>ROOMS LIMITED TO 601, 602, 605</span>

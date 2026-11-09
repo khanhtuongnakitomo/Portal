@@ -39,7 +39,9 @@ export function MyBookingsDrawer({ open, onClose }: { open: boolean; onClose: ()
       >
         <div className="flex items-start justify-between border-b border-rule px-6 pt-6 pb-5">
           <div className="flex flex-col gap-2">
-            <Eyebrow>LEDGER · {currentUser?.studentCode}</Eyebrow>
+            <Eyebrow>
+              LEDGER · HCMUT: {currentUser?.hcmutId || currentUser?.studentCode || '2110123'} · UTS: {currentUser?.utsId || '14234567'}
+            </Eyebrow>
             <h2 className="font-display text-section font-w450">
               <BlurText text="My bookings" />
             </h2>
@@ -68,7 +70,14 @@ export function MyBookingsDrawer({ open, onClose }: { open: boolean; onClose: ()
               {list.map((b) => (
                 <BookingEntry key={b.id} b={b} onCancel={() => cancelBooking(b.id)} roomName={room(b.roomId)?.name} roomCode={room(b.roomId)?.code}>
                   {(b.status === 'APPROVED' || b.status === 'KEY_CHECKED_OUT') && currentUser && (
-                    <DigitalPass booking={b} room={room(b.roomId)} holder={currentUser.fullName} studentCode={currentUser.studentCode} />
+                    <DigitalPass
+                      booking={b}
+                      room={room(b.roomId)}
+                      holder={currentUser.fullName}
+                      studentCode={currentUser.studentCode}
+                      hcmutId={currentUser.hcmutId}
+                      utsId={currentUser.utsId}
+                    />
                   )}
                 </BookingEntry>
               ))}
@@ -100,6 +109,11 @@ function BookingEntry({ b, onCancel, roomName, roomCode, children }: { b: Bookin
           </div>
           <div className="text-[14px] font-medium text-ink">{b.title}</div>
           {b.purpose !== b.title && <div className="text-[13px] text-graphite">{b.purpose}</div>}
+          {b.members && (
+            <div className="font-mono text-[11px] text-meta">
+              MEMBERS · {b.members}
+            </div>
+          )}
           <div className="text-[12px] text-steel">
             {roomName} · <span className="font-mono">{b.phone}</span> · <span className="font-mono">{b.id}</span>
           </div>
