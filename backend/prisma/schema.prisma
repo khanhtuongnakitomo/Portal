@@ -49,6 +49,21 @@ enum RoomBlockStatus {
   @@schema("app")
 }
 
+enum NotificationEventType {
+  BOOKING_CREATED
+
+  @@schema("app")
+}
+
+enum NotificationStatus {
+  PENDING
+  PROCESSING
+  SENT
+  FAILED
+
+  @@schema("app")
+}
+
 model User {
   id                  String                 @id @default(uuid()) @db.Uuid
   email               String                 @unique @db.VarChar(255)
@@ -70,6 +85,7 @@ model User {
   statusHistory       BookingStatusHistory[] @relation("HistoryActor")
   auditLogs           AuditLog[]             @relation("AuditActor")
   settingsUpdates     SystemSetting[]        @relation("SettingUpdater")
+  emailNotifications  NotificationOutbox[]   @relation("NotificationRecipient")
 
   @@index([role, status])
   @@map("users")
@@ -157,6 +173,7 @@ model Booking {
   keyCheckedOutBy   User?                  @relation("KeyCheckoutManager", fields: [keyCheckedOutById], references: [id], onDelete: SetNull)
   keyReturnedBy     User?                  @relation("KeyReturnManager", fields: [keyReturnedById], references: [id], onDelete: SetNull)
   history           BookingStatusHistory[]
+  notifications     NotificationOutbox[]
 
   @@index([userId, status, startTime])
   @@index([roomId, startTime, endTime])
@@ -183,6 +200,33 @@ model BookingStatusHistory {
   @@index([bookingId, createdAt])
   @@index([changedById])
   @@map("booking_status_history")
+  @@schema("app")
+}
+
+model NotificationOutbox {
+  id                String                @id @default(uuid()) @db.Uuid
+  eventType         NotificationEventType @map("event_type")
+  bookingId         String                @map("booking_id") @db.Uuid
+  recipientUserId   String?               @map("recipient_user_id") @db.Uuid
+  recipientEmail    String                @map("recipient_email") @db.VarChar(255)
+  payload           Json
+  status            NotificationStatus    @default(PENDING)
+  attempts          Int                   @default(0)
+  nextAttemptAt     DateTime              @default(now()) @map("next_attempt_at") @db.Timestamptz(3)
+  lockedAt          DateTime?             @map("locked_at") @db.Timestamptz(3)
+  providerMessageId String?               @map("provider_message_id") @db.VarChar(255)
+  lastError         String?               @map("last_error") @db.VarChar(2000)
+  dedupeKey         String                @unique @map("dedupe_key") @db.VarChar(255)
+  createdAt         DateTime              @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt         DateTime              @updatedAt @map("updated_at") @db.Timestamptz(3)
+  sentAt            DateTime?             @map("sent_at") @db.Timestamptz(3)
+  booking           Booking               @relation(fields: [bookingId], references: [id], onDelete: Cascade)
+  recipient         User?                 @relation("NotificationRecipient", fields: [recipientUserId], references: [id], onDelete: SetNull)
+
+  @@index([status, nextAttemptAt, createdAt])
+  @@index([bookingId])
+  @@index([recipientUserId])
+  @@map("notification_outbox")
   @@schema("app")
 }
 

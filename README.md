@@ -18,7 +18,7 @@ Chi tiết toàn bộ triết lý thiết kế **Modern Treasury**, bảng màu 
 ## 📁 Repository Layout
 
 ```text
-backend/                 NestJS REST API + Prisma + PostgreSQL
+backend/                 Express REST API + Prisma + PostgreSQL
 frontend/                React 19 + TypeScript + Tailwind CSS v4 Frontend
 docs/API_HANDOFF.md      Hợp đồng API và luồng tích hợp frontend
 docs/TNE_PORTAL_ERD.dbml ERD chi tiết để import vào dbdiagram.io
@@ -27,6 +27,8 @@ DESIGN.md                Tài liệu Design System & Style Guide chi tiết
 ```
 
 ---
+
+Backend hiện đã triển khai ERD v2, Resend email outbox cho manager, migration nâng cấp dữ liệu, unit test, PostgreSQL E2E test và CI GitHub Actions.
 
 ## 🏛️ Vai trò người dùng (Roles)
 
@@ -67,7 +69,6 @@ pnpm db:seed
 pnpm start:dev
 ```
 
-Swagger API documentation tại: `http://localhost:3000/api/v1/docs`.  
 Hướng dẫn backend chi tiết: [backend/README.md](backend/README.md).
 
 ---
@@ -77,4 +78,6 @@ Hướng dẫn backend chi tiết: [backend/README.md](backend/README.md).
 - **Icons:** `lucide-react`
 - **Typography:** IBM Plex Mono, Inter, Manrope
 - **Motion:** React Bits-inspired restrained animations (`BlurText`, `SplitText`, `Reveal`, `ScrollRevealText`, `ShinyText`)
-- **Backend:** NestJS, Prisma ORM, PostgreSQL, Docker
+- **Backend:** Express 5, Prisma ORM, PostgreSQL, Docker, Resend
+
+Backend bám theo product overview ban đầu của Portal: room schedule, approval queue, email booking mới cho manager, digital pass, key tracker, overdue alerts, room blocking và fair-use limits.

@@ -3,7 +3,12 @@ import * as argon2 from 'argon2';
 import type { Express } from 'express';
 import request from 'supertest';
 import { createApp } from '../src/app.js';
-import { Role, UserStatus } from '../src/generated/prisma/client.js';
+import {
+  NotificationEventType,
+  NotificationStatus,
+  Role,
+  UserStatus,
+} from '../src/generated/prisma/client.js';
 import type { PrismaService } from '../src/prisma/prisma.service.js';
 
 const managerEmail = 'e2e-manager@tne.local';
@@ -48,8 +53,11 @@ describe('booking lifecycle (e2e)', () => {
   });
 
   afterAll(async () => {
-    await cleanup();
-    await prisma.$disconnect();
+    try {
+      await cleanup();
+    } finally {
+      await prisma.$disconnect();
+    }
   });
 
   it('runs register → approve → checkout → return and embedded room blocking', async () => {
@@ -83,6 +91,12 @@ describe('booking lifecycle (e2e)', () => {
       .expect(201);
 
     const bookingBody = booking.body as BookingResponse;
+    const notification = await prisma.notificationOutbox.findFirstOrThrow({
+      where: { bookingId: bookingBody.id, recipientEmail: managerEmail },
+    });
+    expect(notification.eventType).toBe(NotificationEventType.BOOKING_CREATED);
+    expect(notification.status).toBe(NotificationStatus.PENDING);
+    expect(notification.attempts).toBe(0);
 
     const approved = await request(app)
       .patch(`/api/v1/manager/bookings/${bookingBody.id}/approve`)

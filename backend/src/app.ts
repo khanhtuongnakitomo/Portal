@@ -17,6 +17,7 @@ import { validateDto, validateUuid } from './common/validate.js';
 import { Role } from './generated/prisma/client.js';
 import { createAuthMiddleware } from './middleware/auth.middleware.js';
 import { errorMiddleware } from './middleware/error.middleware.js';
+import { NotificationsService } from './notifications/notifications.service.js';
 import { PrismaService } from './prisma/prisma.service.js';
 import { CreateRoomBlockDto } from './room-blocks/dto/create-room-block.dto.js';
 import { ListRoomBlocksDto } from './room-blocks/dto/list-room-blocks.dto.js';
@@ -46,7 +47,7 @@ export function createApp(customPrisma?: PrismaService): { app: Express; prisma:
   const authService = new AuthService(prisma);
   const usersService = new UsersService(prisma);
   const roomsService = new RoomsService(prisma);
-  const bookingsService = new BookingsService(prisma);
+  const bookingsService = new BookingsService(prisma, new NotificationsService());
   const roomBlocksService = new RoomBlocksService(prisma);
   const settingsService = new SettingsService(prisma);
   const auditService = new AuditService(prisma);

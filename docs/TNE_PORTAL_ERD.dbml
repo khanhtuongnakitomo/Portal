@@ -8,10 +8,11 @@ Project TNE_Portal {
     - users là superclass; student_profiles, manager_profiles và admin_profiles là subclasses.
     - Bỏ refresh_tokens và key_pickup_window_minutes.
     - Booking chỉ còn một status cho toàn bộ vòng đời booking + chìa khóa.
+    - notification_outbox lưu email booking mới gửi manager qua Resend.
 
     Nguồn chuẩn: backend/prisma/schema.prisma và migration 20261103000000_apply_erd_v2.
 
-    Tất cả bảng nghiệp vụ nằm trong schema riêng `app`; frontend chỉ gọi NestJS API.
+    Tất cả bảng nghiệp vụ nằm trong schema riêng `app`; frontend chỉ gọi Express API.
     Schema `app` không được expose qua Supabase Data API cho anon/authenticated.
 
     Ràng buộc PostgreSQL không thể biểu diễn trực tiếp bằng DBML:
@@ -51,6 +52,17 @@ Enum app.BookingStatus {
   CANCELLED [note: 'Đã hủy; không giữ slot']
   KEY_CHECKED_OUT [note: 'Đã giao chìa; booking đang diễn ra và vẫn giữ slot']
   COMPLETED [note: 'Đã nhận lại chìa và hoàn tất']
+}
+
+Enum app.NotificationEventType {
+  BOOKING_CREATED [note: 'Booking PENDING mới cần manager xem và duyệt']
+}
+
+Enum app.NotificationStatus {
+  PENDING [note: 'Sẵn sàng hoặc đang chờ thời điểm retry']
+  PROCESSING [note: 'Worker đã claim row để gửi']
+  SENT [note: 'Resend đã nhận email thành công']
+  FAILED [note: 'Đã hết số lần retry']
 }
 
 Table app.users {
@@ -203,6 +215,42 @@ Table app.booking_status_history {
   Note: 'Lịch sử bất biến tương đối của toàn bộ vòng đời booking, bao gồm giao và trả chìa.'
 }
 
+Table app.notification_outbox {
+  id uuid [pk, not null]
+  event_type app.NotificationEventType [not null]
+  booking_id uuid [not null]
+  recipient_user_id uuid [note: 'Manager nhận email; có thể null nếu tài khoản bị xóa sau khi enqueue']
+  recipient_email varchar(255) [not null, note: 'Snapshot địa chỉ nhận tại thời điểm booking được tạo']
+  payload jsonb [not null, note: 'Snapshot dữ liệu booking dùng để render email; không chứa passCode']
+  status app.NotificationStatus [not null, default: 'PENDING']
+  attempts integer [not null, default: 0]
+  next_attempt_at timestamptz(3) [not null, default: `CURRENT_TIMESTAMP`]
+  locked_at timestamptz(3)
+  provider_message_id varchar(255) [note: 'Resend message id khi gửi thành công']
+  last_error varchar(2000)
+  dedupe_key varchar(255) [not null, note: 'Cũng được gửi tới Resend làm idempotency key']
+  created_at timestamptz(3) [not null, default: `CURRENT_TIMESTAMP`]
+  updated_at timestamptz(3) [not null, note: 'Prisma @updatedAt quản lý']
+  sent_at timestamptz(3)
+
+  indexes {
+    dedupe_key [unique, name: 'notification_outbox_dedupe_key_key']
+    (status, next_attempt_at, created_at) [name: 'notification_outbox_status_next_attempt_at_created_at_idx']
+    booking_id [name: 'notification_outbox_booking_id_idx']
+    recipient_user_id [name: 'notification_outbox_recipient_user_id_idx']
+  }
+
+  checks {
+    `attempts >= 0` [name: 'notification_outbox_attempts_check']
+    `status <> 'SENT' OR sent_at IS NOT NULL` [name: 'notification_outbox_sent_at_check']
+  }
+
+  Note: '''
+    Transactional outbox cho email. Booking và notification được commit cùng transaction; worker claim bằng
+    FOR UPDATE SKIP LOCKED, retry exponential và dùng dedupe_key để chống gửi trùng qua Resend.
+  '''
+}
+
 Table app.audit_logs {
   id uuid [pk, not null, note: 'UUID do Prisma tạo']
   actor_id uuid [note: 'Null nếu actor đã bị xóa hoặc sự kiện hệ thống']
@@ -261,6 +309,9 @@ Ref booking_key_return_manager: app.users.id < app.bookings.key_returned_by_id [
 Ref booking_history_booking: app.bookings.id < app.booking_status_history.booking_id [delete: cascade, update: cascade]
 Ref booking_history_actor: app.users.id < app.booking_status_history.changed_by_id [delete: restrict, update: cascade]
 
+Ref notification_booking: app.bookings.id < app.notification_outbox.booking_id [delete: cascade, update: cascade]
+Ref notification_recipient: app.users.id < app.notification_outbox.recipient_user_id [delete: set null, update: cascade]
+
 Ref audit_actor: app.users.id < app.audit_logs.actor_id [delete: set null, update: cascade]
 Ref setting_updater: app.users.id < app.system_settings.updated_by_id [delete: set null, update: cascade]
 
@@ -275,6 +326,7 @@ TableGroup booking_core {
   app.rooms
   app.bookings
   app.booking_status_history
+  app.notification_outbox
 }
 
 TableGroup administration {

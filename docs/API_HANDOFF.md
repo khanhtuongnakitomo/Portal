@@ -1,6 +1,6 @@
 # Frontend API handoff
 
-Tài liệu này dành cho team design/frontend. Hợp đồng chính xác nhất là Swagger tại `http://localhost:3000/api/v1/docs`.
+Tài liệu này dành cho team design/frontend và mô tả hợp đồng của Express API tại `http://localhost:3000/api/v1`.
 
 ## Kết nối
 
@@ -161,6 +161,8 @@ Authorization: Bearer ...
 
 Phòng bật `autoApprove` trả booking `APPROVED`; còn lại trả `PENDING`.
 
+Khi booking là `PENDING`, backend tự ghi email outbox cho từng manager `ACTIVE`. Việc gửi email chạy nền nên không làm thay đổi response hoặc thời gian chờ của frontend. Phòng `autoApprove` không tạo email chờ duyệt.
+
 ### 3. Booking cá nhân và digital pass
 
 ```http
@@ -183,6 +185,8 @@ PATCH /manager/bookings/:id/reject
 ```
 
 Approve nhận `note` tùy chọn; reject yêu cầu `note`.
+
+Email booking mới liên kết tới `${FRONTEND_URL}/manager/bookings/:bookingId`. Frontend nên cung cấp route chi tiết này; nếu trang manager chỉ có approval queue, route có thể redirect tới queue và mở booking tương ứng.
 
 ### Key tracker
 

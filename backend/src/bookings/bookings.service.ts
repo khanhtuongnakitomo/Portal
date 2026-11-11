@@ -7,11 +7,12 @@ import {
 } from '../common/http-exceptions.js';
 import type { AuthenticatedUser } from '../common/interfaces/authenticated-user.interface.js';
 import { BookingStatus, Role, RoomBlockStatus, RoomStatus } from '../generated/prisma/client.js';
+import { NotificationsService } from '../notifications/notifications.service.js';
 import { PrismaService } from '../prisma/prisma.service.js';
 import {
   getZonedDayRange,
-  validateBookingWindow,
   validateStaffBookingWindow,
+  validateBookingWindow,
 } from './booking-policy.js';
 import type { CalendarQueryDto } from './dto/calendar-query.dto.js';
 import type { CreateBookingDto } from './dto/create-booking.dto.js';
@@ -47,7 +48,10 @@ type BookingUserRecord = {
 };
 
 export class BookingsService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly notifications?: NotificationsService,
+  ) {}
 
   async create(dto: CreateBookingDto, actor: AuthenticatedUser | string) {
     const userId = typeof actor === 'string' ? actor : actor.id;
@@ -213,6 +217,7 @@ export class BookingsService {
         where: { id: created.id },
         include: bookingInclude,
       });
+      await this.notifications?.enqueueBookingCreated(tx, booking, settings.timezone);
       return this.toApiBooking(booking);
     });
   }

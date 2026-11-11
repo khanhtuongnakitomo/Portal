@@ -11,7 +11,7 @@ File DBML chính: [`TNE_PORTAL_ERD.dbml`](TNE_PORTAL_ERD.dbml).
 
 ## Trạng thái tài liệu
 
-Đây là **ERD v2 đã triển khai**, áp dụng feedback ngày 2026-11-02. File được đồng bộ với `backend/prisma/schema.prisma` và migration `20261103000000_apply_erd_v2`.
+Đây là **ERD v2 đã triển khai**, áp dụng feedback ngày 2026-11-02 và phần mở rộng email ngày 2026-11-11. File được đồng bộ với `backend/prisma/schema.prisma`, migration `20261103000000_apply_erd_v2` và `20261111000000_add_resend_notifications`.
 
 Các thay đổi chính:
 
@@ -19,6 +19,7 @@ Các thay đổi chính:
 - `users` là superclass, với ba subclass 1–1: `student_profiles`, `manager_profiles`, `admin_profiles`.
 - Bỏ `refresh_tokens` và `system_settings.key_pickup_window_minutes`.
 - `bookings.status` quản lý cả quy trình duyệt phòng và chìa khóa; không còn `key_status`.
+- `notification_outbox` lưu email booking mới trong cùng transaction và cho phép worker Resend retry an toàn.
 
 ## Quy tắc cần nhớ
 
@@ -29,5 +30,6 @@ Các thay đổi chính:
 - Backend phải khóa row `rooms` trong transaction trước khi kiểm tra và cập nhật lịch phòng.
 - `booking_status_history` lưu toàn bộ lịch sử trạng thái; `audit_logs.target_id` là polymorphic nên không có FK.
 - `system_settings` là singleton row với `id = default`.
+- Mỗi booking `PENDING` có tối đa một notification cho mỗi manager nhờ `dedupe_key` duy nhất.
 
 Tài liệu cú pháp: [DBML Syntax](https://dbml.dbdiagram.io/docs/) và [dbdiagram editing guide](https://docs.dbdiagram.io/basic-editing-experience/).

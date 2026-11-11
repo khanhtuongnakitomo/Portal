@@ -1,6 +1,6 @@
 # TNE Portal Backend
 
-REST API đặt phòng cho ba nhóm quyền `USER`, `MANAGER`, `ADMIN`, xây bằng NestJS 12, Prisma 7 và PostgreSQL 17.
+REST API đặt phòng cho ba nhóm quyền `USER`, `MANAGER`, `ADMIN`, xây bằng Express 5, Prisma 7 và PostgreSQL 17.
 
 ## Kiến trúc
 
@@ -8,10 +8,11 @@ REST API đặt phòng cho ba nhóm quyền `USER`, `MANAGER`, `ADMIN`, xây b�
 Frontend
    │ HTTPS + Bearer access token
    ▼
-NestJS API
+Express API
    ├── Auth + RBAC
    ├── Booking/key state machine
    ├── Manager/Admin workflows
+   ├── PostgreSQL email outbox + Resend worker
    └── Prisma
          │ PostgreSQL protocol
          ▼
@@ -31,7 +32,8 @@ Frontend không truy cập database trực tiếp. Schema `app` không được 
 - Một state machine duy nhất: `PENDING → APPROVED → KEY_CHECKED_OUT → COMPLETED`.
 - Manager/Admin đặt một khoảng block cho từng phòng; block và schedule lock được lưu trong `rooms`.
 - Admin quản lý user/role/status, phòng, chính sách và audit log.
-- Swagger, DTO validation, Helmet, CORS, health checks.
+- Booking `PENDING` tạo email outbox cho từng manager đang hoạt động; worker gửi qua Resend với retry và idempotency key.
+- DTO validation, Helmet, CORS và health checks.
 - Row lock theo phòng và PostgreSQL exclusion constraint chống booking trùng lịch khi request đồng thời.
 
 ## Chạy local
@@ -50,13 +52,37 @@ pnpm start:dev
 ```
 
 - API: `http://localhost:3000/api/v1`
-- Swagger: `http://localhost:3000/api/v1/docs`
 - Liveness: `GET /api/v1/health/live`
 - Readiness: `GET /api/v1/health/ready`
 
 Đổi `ADMIN_PASSWORD` trước khi seed môi trường dùng chung. Không commit `.env`.
 
 Đặt `SEED_DEMO_USERS=true` để tạo tài khoản manager và student dùng cho frontend local. Thông tin nằm trong [`../docs/API_HANDOFF.md`](../docs/API_HANDOFF.md); không bật demo users ở production.
+
+## Email thông báo qua Resend
+
+Mặc định local và CI có `EMAIL_NOTIFICATIONS_ENABLED=false`: booking vẫn tạo các row trong `notification_outbox`, nhưng worker không gọi dịch vụ bên ngoài. Để bật gửi thật:
+
+1. Tạo API key trong Resend.
+2. Xác minh domain gửi và cấu hình SPF/DKIM theo Resend.
+3. Điền `RESEND_API_KEY`, `EMAIL_FROM`, `FRONTEND_URL` và đặt `EMAIL_NOTIFICATIONS_ENABLED=true` trong môi trường chạy backend.
+4. Khởi động lại backend và tạo một booking ở phòng không bật `autoApprove`.
+
+Khi được bật, worker sẽ xử lý cả những row `PENDING` đã tạo trước đó. Trước lần bật đầu tiên trên môi trường dùng chung, kiểm tra hàng đợi để tránh gửi email thử nghiệm cũ.
+
+`FRONTEND_URL` được dùng để tạo link `${FRONTEND_URL}/manager/bookings/:bookingId` trong email. Frontend cần cung cấp route này hoặc redirect nó tới trang approval queue.
+
+Luồng gửi:
+
+```text
+Booking PENDING + active MANAGERs
+  -> notification_outbox (cùng database transaction)
+  -> worker claim bằng FOR UPDATE SKIP LOCKED
+  -> Resend API
+  -> SENT hoặc retry exponential tối đa EMAIL_MAX_ATTEMPTS
+```
+
+Worker chạy mỗi 15 giây, tự phục hồi row `PROCESSING` bị treo quá 5 phút và dùng `dedupe_key` làm Resend idempotency key. Không có API key nào được lưu trong database hoặc commit lên Git.
 
 ## Xác thực
 
@@ -87,7 +113,7 @@ Các bảng nghiệp vụ:
 
 - `users`, `student_profiles`, `manager_profiles`, `admin_profiles`
 - `rooms`, `bookings`, `booking_status_history`
-- `audit_logs`, `system_settings`
+- `notification_outbox`, `audit_logs`, `system_settings`
 
 Migration `20261103000000_apply_erd_v2` nâng schema v1 lên v2 và giữ dữ liệu tương thích. Migration sẽ dừng nếu một phòng đang có nhiều hơn một `room_blocks` ACTIVE, vì schema mới chỉ lưu một block trên mỗi phòng.
 
@@ -138,7 +164,7 @@ Supabase/PostgreSQL dùng extension `btree_gist` cho exclusion constraint. Khi S
 | PATCH      | `/admin/settings`                         | Admin                     |
 | GET        | `/admin/audit-logs`                       | Admin                     |
 
-Swagger runtime là hợp đồng đầy đủ nhất.
+Các endpoint và payload tích hợp frontend được duy trì trong [`../docs/API_HANDOFF.md`](../docs/API_HANDOFF.md).
 
 ## Kiểm tra chất lượng
 
@@ -151,7 +177,7 @@ pnpm build
 pnpm audit --prod
 ```
 
-E2E test chạy toàn bộ luồng đăng ký → booking → approve → giao/trả chìa → room block. GitHub Actions tự dựng PostgreSQL 17, chạy ba migration và test trên mỗi push/PR có thay đổi backend.
+E2E test chạy toàn bộ luồng đăng ký → booking → email outbox → approve → giao/trả chìa → room block. GitHub Actions tự dựng PostgreSQL 17, chạy các migration và test trên mỗi push/PR có thay đổi backend.
 
 ## Lưu ý dependency
 
@@ -160,7 +186,7 @@ E2E test chạy toàn bộ luồng đăng ký → booking → approve → giao/t
 ## Việc cần bổ sung trước production
 
 - Email verification, quên mật khẩu và SMTP/provider của trường.
-- Rate limiting tại reverse proxy hoặc NestJS throttler.
-- Email/push notification cho thay đổi trạng thái và chìa quá hạn.
+- Rate limiting tại reverse proxy hoặc middleware Express.
+- Email cho user khi booking đổi trạng thái và cảnh báo chìa quá hạn; hiện chỉ booking mới gửi manager.
 - Backup, monitoring, alerting và kiểm thử restore.
 - Chính sách retention dữ liệu sinh viên và phê duyệt của nhà trường.
