@@ -1,3 +1,11 @@
+import {
+  escapeHtml,
+  formatDateTime,
+  portalUrl,
+  row,
+  type RenderedEmail,
+} from './email-template.js';
+
 export type BookingCreatedEmailPayload = {
   bookingId: string;
   title: string;
@@ -13,21 +21,13 @@ export type BookingCreatedEmailPayload = {
   studentCode: string | null;
 };
 
-export type RenderedEmail = {
-  subject: string;
-  html: string;
-  text: string;
-};
-
 export function buildManagerBookingCreatedEmail(
   payload: BookingCreatedEmailPayload,
   frontendUrl: string,
 ): RenderedEmail {
   const start = formatDateTime(payload.startTime, payload.timezone);
   const end = formatDateTime(payload.endTime, payload.timezone);
-  const managerUrl = new URL(ensureTrailingSlash(frontendUrl));
-  managerUrl.hash = '/manager';
-  const bookingUrl = managerUrl.toString();
+  const bookingUrl = portalUrl(frontendUrl, '/manager');
   const studentIdentity = payload.studentCode
     ? `${payload.requesterName} (${payload.studentCode})`
     : payload.requesterName;
@@ -101,31 +101,6 @@ export function parseBookingCreatedPayload(value: unknown): BookingCreatedEmailP
     throw new Error('Notification payload.studentCode is invalid');
   }
   return value as BookingCreatedEmailPayload;
-}
-
-function formatDateTime(value: string, timezone: string) {
-  return new Intl.DateTimeFormat('vi-VN', {
-    timeZone: timezone,
-    dateStyle: 'full',
-    timeStyle: 'short',
-  }).format(new Date(value));
-}
-
-function row(label: string, value: string) {
-  return `<tr><td style="padding:8px 12px 8px 0;color:#64748b;vertical-align:top;width:120px">${escapeHtml(label)}</td><td style="padding:8px 0;font-weight:600">${escapeHtml(value)}</td></tr>`;
-}
-
-function escapeHtml(value: string) {
-  return value
-    .replaceAll('&', '&amp;')
-    .replaceAll('<', '&lt;')
-    .replaceAll('>', '&gt;')
-    .replaceAll('"', '&quot;')
-    .replaceAll("'", '&#039;');
-}
-
-function ensureTrailingSlash(value: string) {
-  return value.endsWith('/') ? value : `${value}/`;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
