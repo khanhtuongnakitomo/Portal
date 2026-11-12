@@ -1,6 +1,6 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import type { AuditLog, Booking, BookingMember, Role, Room, RoomBlock, Settings, User } from './types'
-import { makePassCode, seedAudit, seedBlocks, seedBookings, seedRooms, seedSettings, seedUsers, uid } from './seed'
+import { makePassCode, seedAudit, seedBlocks, seedBookings, seedRooms, seedSettings, uid } from './seed'
 import { addDays, daysBetween, durationMin, isWeekend, overlaps, parseHM, startOfDay } from './time'
 import {
   apiApproveBooking,
@@ -18,6 +18,8 @@ import {
   apiGetSettings,
   apiGetUsers,
   apiLogin,
+  apiMe,
+  apiGetMyBookings,
   apiRegister,
   apiRejectBooking,
   apiReturnKey,
@@ -27,7 +29,7 @@ import {
   apiUpdateUserStatus,
   clearAuth,
   encodeRoomToBackend,
-  setStoredToken,
+  getStoredToken,
   setStoredUser,
   USER_KEY,
 } from './api'
@@ -52,13 +54,11 @@ export interface Store {
   audit: AuditLog[]
   toasts: Toast[]
   apiConnected: boolean
+  sessionReady: boolean
   isLoading: boolean
   notify: (message: string, tone?: Toast['tone']) => void
-  login: (email: string, password: string) => Result
-  register: (input: { fullName: string; email: string; password: string; studentCode?: string; hcmutId?: string; utsId?: string }) => Result
   logout: () => void
-  previewAs: (role: Role) => void
-  createBooking: (input: { roomId: string; start: Date; end: Date; phone: string; title: string; purpose: string; members?: string; memberList?: BookingMember[] }) => Result
+  createBooking: (input: { roomId: string; start: Date; end: Date; phone: string; title: string; purpose: string; members?: string; memberList?: BookingMember[] }) => Promise<Result>
   cancelBooking: (id: string) => void
   approveBooking: (id: string, note?: string) => void
   rejectBooking: (id: string, note: string) => Result
@@ -110,30 +110,7 @@ function loadLocal<T>(key: string, fallback: T): T {
 
 function loadUsers(): User[] {
   const saved = loadLocal<User[]>('tne_v7_users', [])
-  if (!saved || saved.length === 0) return seedUsers
-
-  const merged = saved.map((u) => {
-    const lower = u.email.toLowerCase()
-    if (lower.startsWith('manager@') || lower.includes('d.tran@')) return { ...u, role: 'MANAGER' as Role }
-    if (lower.startsWith('admin@') || lower.includes('g.pham@')) return { ...u, role: 'ADMIN' as Role }
-    return u
-  })
-  for (const seed of seedUsers) {
-    const idx = merged.findIndex((u) => u.id === seed.id || u.email.toLowerCase() === seed.email.toLowerCase())
-    if (idx === -1) {
-      merged.push(seed)
-    } else {
-      merged[idx] = {
-        ...seed,
-        ...merged[idx],
-        role: seed.role,
-        hcmutId: merged[idx].hcmutId || seed.hcmutId,
-        utsId: merged[idx].utsId || seed.utsId,
-        studentCode: merged[idx].studentCode || seed.studentCode,
-      }
-    }
-  }
-  return merged
+  return saved.filter((u) => /^[0-9a-f]{8}-[0-9a-f-]{27}$/i.test(u.id)).map((u) => ({ ...u, password: '' }))
 }
 
 function loadInitialUserId(users: User[]): string | null {
@@ -161,6 +138,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   const [currentUserId, setCurrentUserId] = useState<string | null>(() => loadInitialUserId(users))
   const [toasts, setToasts] = useState<Toast[]>([])
   const [apiConnected, setApiConnected] = useState<boolean>(false)
+  const [sessionReady, setSessionReady] = useState(false)
   const [isLoading, setIsLoading] = useState<boolean>(false)
 
   const toastSeq = useRef(0)
@@ -208,6 +186,13 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     return users.find((u) => u.id === currentUserId) ?? null
   }, [users, currentUserId])
 
+  const acceptSession = useCallback((user: User) => {
+    setUsers((prev) => [...prev.filter((u) => u.id !== user.id && u.email.toLowerCase() !== user.email.toLowerCase()), user])
+    setCurrentUserId(user.id)
+    setStoredUser(user)
+    setApiConnected(true)
+  }, [])
+
   const actor = currentUser?.id ?? 'anonymous'
 
   const notify = useCallback((message: string, tone: Toast['tone'] = 'ok') => {
@@ -215,6 +200,34 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     setToasts((t) => [...t, { id, message, tone }])
     setTimeout(() => setToasts((t) => t.filter((x) => x.id !== id)), 3600)
   }, [])
+
+  useEffect(() => {
+    let active = true
+    const restore = async () => {
+      try {
+        const token = getStoredToken()
+        if (!token || token.startsWith('local_token_') || token.startsWith('preview_token_')) {
+          clearAuth()
+          if (active) setCurrentUserId(null)
+          return
+        }
+        const user = await apiMe()
+        if (!active) return
+        if (user) acceptSession(user)
+        else {
+          clearAuth()
+          setCurrentUserId(null)
+          notify('Your session is invalid or expired. Please sign in again.', 'error')
+        }
+      } finally {
+        if (active) setSessionReady(true)
+      }
+    }
+    restore().catch(() => {
+      if (active) { clearAuth(); setCurrentUserId(null); setSessionReady(true) }
+    })
+    return () => { active = false }
+  }, [acceptSession, notify])
 
   const log = useCallback(
     (action: string, entity: string, metadata: Record<string, unknown>, actorId = actor) => {
@@ -277,10 +290,11 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   const refreshData = useCallback(async () => {
     try {
       setIsLoading(true)
-      const [remoteRooms, remoteSettings, calRes] = await Promise.all([
+      const [remoteRooms, remoteSettings, calRes, personalBookings] = await Promise.all([
         apiGetRooms(),
         apiGetSettings(),
         apiGetCalendar(),
+        sessionReady && currentUser ? apiGetMyBookings() : Promise.resolve([]),
       ])
 
       if (remoteRooms && remoteRooms.length > 0) {
@@ -291,41 +305,16 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         setSettings(remoteSettings)
         setApiConnected(true)
       }
-      if (calRes && (calRes.bookings.length > 0 || calRes.blocks.length > 0)) {
-        if (calRes.bookings.length > 0) {
-          const activeRooms = remoteRooms && remoteRooms.length > 0 ? remoteRooms : rooms
-          const mappedBookings = calRes.bookings.map((b) => {
-            const matchRoom = activeRooms.find((r) => r.id === b.roomId || r.code === b.roomId)
-            if (matchRoom) {
-              return { ...b, roomId: matchRoom.id }
-            }
-            return b
-          })
-          setBookings(mappedBookings)
-        }
-        if (calRes.blocks.length > 0) {
-          const activeRooms = remoteRooms && remoteRooms.length > 0 ? remoteRooms : rooms
-          const mappedBlocks = calRes.blocks.map((blk) => {
-            const matchRoom = activeRooms.find((r) => r.id === blk.roomId || r.code === blk.roomId)
-            if (matchRoom) {
-              return { ...blk, roomId: matchRoom.id }
-            }
-            return blk
-          })
-          setBlocks(mappedBlocks)
-        }
-        if (calRes.users && calRes.users.length > 0) {
-          setUsers((prev) => {
-            const map = new Map(prev.map((u) => [u.id, u]))
-            calRes.users.forEach((u) => {
-              const existing = map.get(u.id)
-              const preservedRole: Role =
-                existing?.role === 'ADMIN' || existing?.role === 'MANAGER' ? existing.role : u.role
-              map.set(u.id, { ...existing, ...u, role: preservedRole })
-            })
-            return Array.from(map.values())
-          })
-        }
+      if (calRes.ok) {
+        const allBookings = new Map(calRes.bookings.map((booking) => [booking.id, booking]))
+        personalBookings.forEach((booking) => allBookings.set(booking.id, booking))
+        setBookings([...allBookings.values()])
+        setBlocks(calRes.blocks)
+        setUsers((prev) => {
+          const map = new Map(prev.map((user) => [user.id, user]))
+          calRes.users.forEach((user) => map.set(user.id, { ...map.get(user.id), ...user }))
+          return [...map.values()]
+        })
         setApiConnected(true)
       }
 
@@ -351,7 +340,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     } finally {
       setIsLoading(false)
     }
-  }, [currentUser?.role])
+  }, [currentUser?.id, currentUser?.role, sessionReady])
 
   // Probe API connection on initial mount
   useEffect(() => {
@@ -368,72 +357,19 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     audit,
     toasts,
     apiConnected,
+    sessionReady,
     isLoading,
     notify,
     validateSlot,
     refreshData,
 
     async loginAsync(email: string, password: string) {
-      const normEmail = email.trim().toLowerCase()
-
-      // Try live API first
-      try {
-        const apiRes = await apiLogin(email, password)
-        if ('token' in apiRes && apiRes.user) {
-          setApiConnected(true)
-          setUsers((prev) => {
-            const exists = prev.some((u) => u.id === apiRes.user.id || u.email.toLowerCase() === normEmail)
-            if (exists) {
-              return prev.map((u) => (u.id === apiRes.user.id || u.email.toLowerCase() === normEmail ? { ...u, ...apiRes.user } : u))
-            }
-            return [...prev, apiRes.user]
-          })
-          setCurrentUserId(apiRes.user.id)
-          setStoredUser(apiRes.user)
-          log('AUTH_LOGIN', `user:${apiRes.user.id}`, { role: apiRes.user.role, method: 'API' }, apiRes.user.id)
-          notify(`Welcome back, ${apiRes.user.fullName}`)
-          refreshData().catch(() => {})
-          return { error: null, user: apiRes.user }
-        }
-      } catch {}
-
-      // Fallback: match local users with alias tolerance
-      const u = users.find((x) => {
-        const ue = x.email.toLowerCase()
-        if (ue === normEmail) return true
-        if (normEmail === 'student@tne.edu.vn' && (ue === 'linh.nguyen@student.uts.edu.au' || ue === 'student@tne.local')) return true
-        if (normEmail === 'manager@tne.edu.vn' && (ue === 'd.tran@uts-tne.edu.vn' || ue === 'manager@tne.local')) return true
-        if (normEmail === 'admin@tne.edu.vn' && (ue === 'g.pham@uts-tne.edu.vn' || ue === 'admin@tne.local')) return true
-        if (ue === 'student@tne.edu.vn' && (normEmail === 'linh.nguyen@student.uts.edu.au' || normEmail === 'student@tne.local')) return true
-        if (ue === 'manager@tne.edu.vn' && (normEmail === 'd.tran@uts-tne.edu.vn' || normEmail === 'manager@tne.local')) return true
-        if (ue === 'admin@tne.edu.vn' && (normEmail === 'g.pham@uts-tne.edu.vn' || normEmail === 'admin@tne.local')) return true
-        return false
-      })
-
-      if (!u) {
-        return { error: 'Invalid email or password.' }
-      }
-
-      const pwMatches =
-        u.password === password ||
-        (u.role === 'USER' && (password === 'Student123456!' || password === 'student' || password === 'Demo12345678!')) ||
-        (u.role === 'MANAGER' && (password === 'Manager123456!' || password === 'manager' || password === 'Demo12345678!')) ||
-        (u.role === 'ADMIN' && (password === 'Admin12345678!' || password === 'admin' || password === 'ChangeMe123!'))
-
-      if (!pwMatches) {
-        return { error: 'Invalid email or password.' }
-      }
-
-      if (u.status === 'SUSPENDED') {
-        return { error: 'This account is suspended. Contact the facilities office.' }
-      }
-
-      setCurrentUserId(u.id)
-      setStoredUser(u)
-      setStoredToken(`local_token_${u.id}`)
-      log('AUTH_LOGIN', `user:${u.id}`, { role: u.role, method: 'LOCAL' }, u.id)
-      notify(`Welcome back, ${u.fullName}`)
-      return { error: null, user: u }
+      const result = await apiLogin(email, password)
+      if ('error' in result) return { error: result.error }
+      acceptSession(result.user)
+      log('AUTH_LOGIN', `user:${result.user.id}`, { role: result.user.role, method: 'API' }, result.user.id)
+      notify(`Welcome back, ${result.user.fullName}`)
+      return { error: null, user: result.user }
     },
 
     async registerAsync(input) {
@@ -445,8 +381,8 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       if (!/^\S+@\S+\.\S+$/.test(input.email)) {
         return { error: 'Enter a valid email address.' }
       }
-      if (input.password.length < 6) {
-        return { error: 'Password must be at least 6 characters.' }
+      if (input.password.length < 8 || !/[a-z]/.test(input.password) || !/[A-Z]/.test(input.password) || !/\d/.test(input.password)) {
+        return { error: 'Password must have at least 8 characters, including uppercase, lowercase and a number.' }
       }
       if (hcmut.length < 5) {
         return { error: 'Enter a valid HCMUT Student ID (e.g. 2110123).' }
@@ -457,122 +393,12 @@ export function StoreProvider({ children }: { children: ReactNode }) {
 
       const combinedCode = `${hcmut} / ${uts}`
 
-      // Try API register
-      try {
-        const apiRes = await apiRegister({ ...input, studentCode: combinedCode, hcmutId: hcmut, utsId: uts })
-        if ('token' in apiRes && apiRes.user) {
-          setApiConnected(true)
-          const enriched: User = { ...apiRes.user, hcmutId: hcmut, utsId: uts, studentCode: hcmut }
-          setUsers((prev) => [...prev, enriched])
-          setCurrentUserId(enriched.id)
-          setStoredUser(enriched)
-          log('USER_REGISTER', `user:${enriched.id}`, { studentCode: hcmut, hcmutId: hcmut, utsId: uts, role: 'USER', method: 'API' }, enriched.id)
-          notify('Account created successfully.')
-          return { error: null, user: enriched }
-        }
-      } catch {}
-
-      // Local fallback
-      if (users.some((u) => u.email.toLowerCase() === input.email.trim().toLowerCase())) {
-        return { error: 'Email is already registered.' }
-      }
-      if (users.some((u) => u.hcmutId === hcmut || u.studentCode === hcmut)) {
-        return { error: `HCMUT Student ID ${hcmut} is already registered.` }
-      }
-      if (users.some((u) => u.utsId === uts)) {
-        return { error: `UTS Student ID ${uts} is already registered.` }
-      }
-
-      const u: User = {
-        id: uid('u'),
-        fullName: input.fullName.trim(),
-        email: input.email.trim(),
-        password: input.password,
-        role: 'USER',
-        studentCode: hcmut,
-        hcmutId: hcmut,
-        utsId: uts,
-        status: 'ACTIVE',
-        createdAt: new Date().toISOString(),
-      }
-      setUsers((us) => [...us, u])
-      setCurrentUserId(u.id)
-      setStoredUser(u)
-      setStoredToken(`local_token_${u.id}`)
-      log('USER_REGISTER', `user:${u.id}`, { studentCode: hcmut, hcmutId: hcmut, utsId: uts, role: 'USER', method: 'LOCAL' }, u.id)
+      const result = await apiRegister({ ...input, studentCode: combinedCode, hcmutId: hcmut, utsId: uts })
+      if ('error' in result) return { error: result.error }
+      acceptSession(result.user)
+      log('USER_REGISTER', `user:${result.user.id}`, { role: result.user.role, method: 'API' }, result.user.id)
       notify('Account created successfully.')
-      return { error: null, user: u }
-    },
-
-    login(email, password) {
-      const normEmail = email.trim().toLowerCase()
-      const u = users.find((x) => {
-        const ue = x.email.toLowerCase()
-        if (ue === normEmail) return true
-        if (normEmail === 'student@tne.edu.vn' && (ue === 'linh.nguyen@student.uts.edu.au' || ue === 'student@tne.local')) return true
-        if (normEmail === 'manager@tne.edu.vn' && (ue === 'd.tran@uts-tne.edu.vn' || ue === 'manager@tne.local')) return true
-        if (normEmail === 'admin@tne.edu.vn' && (ue === 'g.pham@uts-tne.edu.vn' || ue === 'admin@tne.local')) return true
-        if (ue === 'student@tne.edu.vn' && (normEmail === 'linh.nguyen@student.uts.edu.au' || normEmail === 'student@tne.local')) return true
-        if (ue === 'manager@tne.edu.vn' && (normEmail === 'd.tran@uts-tne.edu.vn' || normEmail === 'manager@tne.local')) return true
-        if (ue === 'admin@tne.edu.vn' && (normEmail === 'g.pham@uts-tne.edu.vn' || normEmail === 'admin@tne.local')) return true
-        return false
-      })
-
-      const pwMatches =
-        u &&
-        (u.password === password ||
-          (u.role === 'USER' && (password === 'Student123456!' || password === 'student' || password === 'Demo12345678!')) ||
-          (u.role === 'MANAGER' && (password === 'Manager123456!' || password === 'manager' || password === 'Demo12345678!')) ||
-          (u.role === 'ADMIN' && (password === 'Admin12345678!' || password === 'admin' || password === 'ChangeMe123!')))
-
-      if (!u || !pwMatches) return 'Invalid email or password.'
-      if (u.status === 'SUSPENDED') return 'This account is suspended. Contact the facilities office.'
-
-      setCurrentUserId(u.id)
-      setStoredUser(u)
-      setStoredToken(`local_token_${u.id}`)
-      log('AUTH_LOGIN', `user:${u.id}`, { role: u.role }, u.id)
-      notify(`Welcome back, ${u.fullName}`)
-
-      // Fire async api login in background if reachable
-      apiLogin(email, password).catch(() => {})
-      return null
-    },
-
-    register({ fullName, email, password, studentCode, hcmutId, utsId }) {
-      const hcmut = (hcmutId ?? studentCode ?? '').trim().toUpperCase()
-      const uts = (utsId ?? '').trim().toUpperCase()
-      if (!fullName.trim() || !email.trim() || !password || !hcmut || !uts) return 'All fields are required.'
-      if (!/^\S+@\S+\.\S+$/.test(email)) return 'Enter a valid email address.'
-      if (password.length < 6) return 'Password must be at least 6 characters.'
-      if (hcmut.length < 5) return 'Enter a valid HCMUT Student ID (e.g. 2110123).'
-      if (uts.length < 5) return 'Enter a valid UTS Student ID (e.g. 14234567).'
-      if (users.some((u) => u.email.toLowerCase() === email.trim().toLowerCase())) return 'Email is already registered.'
-      if (users.some((u) => u.hcmutId === hcmut || u.studentCode === hcmut)) return `HCMUT Student ID ${hcmut} is already registered.`
-      if (users.some((u) => u.utsId === uts)) return `UTS Student ID ${uts} is already registered.`
-
-      const u: User = {
-        id: uid('u'),
-        fullName: fullName.trim(),
-        email: email.trim(),
-        password,
-        role: 'USER',
-        studentCode: hcmut,
-        hcmutId: hcmut,
-        utsId: uts,
-        status: 'ACTIVE',
-        createdAt: new Date().toISOString(),
-      }
-      setUsers((us) => [...us, u])
-      setCurrentUserId(u.id)
-      setStoredUser(u)
-      setStoredToken(`local_token_${u.id}`)
-      log('USER_REGISTER', `user:${u.id}`, { studentCode: hcmut, hcmutId: hcmut, utsId: uts, role: 'USER' }, u.id)
-      notify('Account created.')
-
-      // Fire async api register in background if reachable
-      apiRegister({ fullName, email, password, studentCode: `${hcmut} / ${uts}`, hcmutId: hcmut, utsId: uts }).catch(() => {})
-      return null
+      return { error: null, user: result.user }
     },
 
     logout() {
@@ -580,44 +406,6 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       clearAuth()
       setCurrentUserId(null)
       notify('Signed out.')
-    },
-
-    previewAs(role) {
-      const base =
-        users.find((x) => x.role === role) ??
-        (role === 'USER' ? seedUsers[0] : role === 'MANAGER' ? seedUsers[1] : seedUsers[2])
-      const u: User = { ...base, role }
-      setUsers((prev) => {
-        const exists = prev.some((x) => x.id === u.id)
-        return exists ? prev.map((x) => (x.id === u.id ? u : x)) : [...prev, u]
-      })
-      setCurrentUserId(u.id)
-      setStoredUser(u)
-      setStoredToken(`preview_token_${u.id}`)
-      notify(`Switched to ${u.fullName} (${role})`)
-
-      const creds =
-        role === 'MANAGER'
-          ? { email: 'manager@tne.edu.vn', pw: 'Manager123456!' }
-          : role === 'ADMIN'
-            ? { email: 'admin@tne.edu.vn', pw: 'Admin12345678!' }
-            : { email: 'student@tne.edu.vn', pw: 'Student123456!' }
-      apiLogin(creds.email, creds.pw)
-        .then((res) => {
-          if ('token' in res && res.user) {
-            const authedUser: User = { ...res.user, role }
-            setApiConnected(true)
-            setUsers((prev) => {
-              const exists = prev.some((x) => x.id === authedUser.id || x.email.toLowerCase() === creds.email)
-              return exists
-                ? prev.map((x) => (x.id === authedUser.id || x.email.toLowerCase() === creds.email ? { ...x, ...authedUser } : x))
-                : [...prev, authedUser]
-            })
-            setCurrentUserId(authedUser.id)
-            setStoredUser(authedUser)
-          }
-        })
-        .catch(() => {})
     },
 
     async createManagerAccount(input) {
@@ -660,7 +448,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       return null
     },
 
-    createBooking({ roomId, start, end, phone, title, purpose, members, memberList }) {
+    async createBooking({ roomId, start, end, phone, title, purpose, members, memberList }) {
       if (!currentUser) return 'Not signed in.'
       if (durationMin(start, end) > 120) return 'Maximum booking duration is 2 hours (120 minutes).'
       const err = validateSlot(roomId, start, end)
@@ -669,7 +457,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       if (!/^\+?[\d\s().-]{8,20}$/.test(phone.trim())) return 'Enter a valid phone number.'
       if (!title.trim()) return 'Booking title is required.'
       if (!purpose.trim()) return 'Purpose is required.'
-      const active = bookings.filter((b) => b.userId === currentUser.id && ACTIVE_STATUSES.includes(b.status)).length
+      const active = bookings.filter((b) => b.userId === currentUser.id && !b.isEvent && ACTIVE_STATUSES.includes(b.status) && new Date(b.end) > new Date()).length
       if (active >= settings.maxActiveBookings) return `You already hold ${active} active bookings (limit ${settings.maxActiveBookings}).`
 
       const validMemberList =
@@ -713,36 +501,21 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         passCode: makePassCode(room.code),
         createdAt: new Date().toISOString(),
       }
-      setBookings((bs) => [...bs, booking])
-      log('BOOKING_CREATE', `booking:${booking.id}`, {
-        room: room.code,
-        status: 'PENDING',
-        title: booking.title,
-        members: booking.members ?? null,
-      })
-      if (apiConnected) {
-        apiCreateBooking({
-          roomId,
-          title: booking.title,
+      let saved: Booking
+      try {
+        const remote = await apiCreateBooking({
+          roomId, title: booking.title,
           purpose: booking.members ? `${booking.purpose} [Members: ${booking.members}]` : booking.purpose,
           attendeeCount: booking.attendeeCount ?? 1,
-          startTime: booking.start,
-          endTime: booking.end,
-        }).then((saved) => {
-          if (saved) {
-            setBookings((bs) => bs.map((b) => b.id === booking.id ? { ...booking, ...saved } : b))
-            notify('Booking request submitted successfully. Your manager will be notified when email notifications are enabled.')
-          } else {
-            setBookings((bs) => bs.filter((b) => b.id !== booking.id))
-            notify('Unable to submit the booking request. Please try again.', 'error')
-          }
-        }).catch(() => {
-          setBookings((bs) => bs.filter((b) => b.id !== booking.id))
-          notify('Unable to submit the booking request. Please try again.', 'error')
+          isEvent: false, startTime: booking.start, endTime: booking.end,
         })
-      } else {
-        notify('Booking saved in demo mode. Connect to the API to submit it to your manager.')
+        saved = { ...booking, ...remote }
+      } catch (error) {
+        return error instanceof Error ? error.message : 'Unable to submit the booking request. Please try again.'
       }
+      setBookings((bs) => [...bs, saved])
+      log('BOOKING_CREATE', `booking:${saved.id}`, { room: room.code, status: saved.status, title: saved.title })
+      notify('Booking request submitted successfully. Your manager will be notified when email notifications are enabled.')
       return null
     },
 
@@ -809,6 +582,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       if (apiConnected) {
         apiCreateBooking({
           roomId,
+          isEvent: true,
           title: newBooking.title,
           purpose: newBooking.purpose,
           attendeeCount: newBooking.attendeeCount,

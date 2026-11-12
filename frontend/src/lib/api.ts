@@ -3,7 +3,7 @@ import type { AuditLog, Booking, Role, Room, RoomBlock, RoomStatus, Settings, Us
 export const TOKEN_KEY = 'tne_access_token'
 export const USER_KEY = 'tne_current_user'
 
-const BASE_URL = (import.meta.env.VITE_API_URL as string | undefined) ?? '/api/v1'
+const BASE_URL = (import.meta.env?.VITE_API_URL as string | undefined) ?? '/api/v1'
 const API_BASE = BASE_URL.replace(/\/+$/, '')
 
 export function getStoredToken(): string | null {
@@ -47,6 +47,15 @@ export interface ApiResponse<T> {
   error: string | null
   status: number
   ok: boolean
+}
+
+export class ApiError extends Error {
+  readonly status: number
+  constructor(message: string, status: number) {
+    super(message)
+    this.name = 'ApiError'
+    this.status = status
+  }
 }
 
 async function apiFetch<T>(path: string, options: RequestInit = {}): Promise<ApiResponse<T>> {
@@ -97,7 +106,7 @@ async function apiFetch<T>(path: string, options: RequestInit = {}): Promise<Api
     return {
       data: null,
       error: err?.message?.includes('Failed to fetch')
-        ? 'Cannot connect to backend server. Operating in offline/local mode.'
+        ? 'Cannot connect to the server. Please try again when the connection is restored.'
         : (err?.message ?? 'Network error'),
       status: 0,
       ok: false,
@@ -291,6 +300,7 @@ export async function apiLogin(email: string, password: string): Promise<{ user:
     return { error: res.error || 'Login failed' }
   }
   const token = res.data.accessToken || res.data.token || ''
+  if (!token || !res.data.user?.id) return { error: 'Invalid authentication response. Please try again.' }
   const user = mapBackendUserToFrontend(res.data.user)
   setStoredToken(token)
   setStoredUser(user)
@@ -323,6 +333,7 @@ export async function apiRegister(input: {
     return { error: res.error || 'Registration failed' }
   }
   const token = res.data.accessToken || res.data.token || ''
+  if (!token || !res.data.user?.id) return { error: 'Invalid authentication response. Please try again.' }
   const user: User = {
     ...mapBackendUserToFrontend(res.data.user),
     hcmutId: hcmut || undefined,
@@ -354,7 +365,7 @@ export async function apiGetSettings(): Promise<Settings | null> {
   return mapBackendSettingsToFrontend(res.data)
 }
 
-export async function apiGetCalendar(fromIso?: string, toIso?: string): Promise<{ bookings: Booking[]; blocks: RoomBlock[]; users: User[] }> {
+export async function apiGetCalendar(fromIso?: string, toIso?: string): Promise<{ ok: boolean; bookings: Booking[]; blocks: RoomBlock[]; users: User[] }> {
   const now = new Date()
   const defaultFrom = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000).toISOString()
   const defaultTo = new Date(now.getTime() + 21 * 24 * 60 * 60 * 1000).toISOString()
@@ -363,7 +374,7 @@ export async function apiGetCalendar(fromIso?: string, toIso?: string): Promise<
   params.set('to', toIso || defaultTo)
   const qs = `?${params.toString()}`
   const res = await apiFetch<{ bookings?: any[]; blocks?: any[] } | any[]>(`/bookings/calendar${qs}`)
-  if (!res.ok || !res.data) return { bookings: [], blocks: [], users: [] }
+  if (!res.ok || !res.data) return { ok: false, bookings: [], blocks: [], users: [] }
 
   const rawBookings = Array.isArray(res.data)
     ? res.data
@@ -380,6 +391,7 @@ export async function apiGetCalendar(fromIso?: string, toIso?: string): Promise<
   }
 
   return {
+    ok: true,
     bookings: rawBookings.map(mapBackendBookingToFrontend),
     blocks: rawBlocks.map(mapBackendBlockToFrontend),
     users: Array.from(userMap.values()),
@@ -392,13 +404,15 @@ export async function apiCreateBooking(dto: {
   title: string
   purpose: string
   attendeeCount?: number
+  isEvent?: boolean
   startTime: string
   endTime: string
-}): Promise<Booking | null> {
+}): Promise<Booking> {
   const res = await apiFetch<any>('/bookings', {
     method: 'POST',
     body: JSON.stringify({
       roomId: dto.roomId,
+      isEvent: dto.isEvent,
       title: dto.title,
       purpose: dto.purpose,
       attendeeCount: dto.attendeeCount ?? 1,
@@ -406,7 +420,10 @@ export async function apiCreateBooking(dto: {
       endTime: dto.endTime,
     }),
   })
-  if (!res.ok || !res.data) return null
+  if (!res.ok || !res.data) throw new ApiError(
+    res.status === 401 ? 'Your session is invalid or expired. Please sign in again.' : (res.error || 'Unable to submit the booking request.'),
+    res.status,
+  )
   return mapBackendBookingToFrontend(res.data)
 }
 

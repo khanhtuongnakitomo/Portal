@@ -160,6 +160,7 @@ Table app.bookings {
   title varchar(150) [not null]
   purpose varchar(1000) [not null]
   attendee_count integer [not null]
+  is_event boolean [not null, default: false, note: 'false: yêu cầu cá nhân ở mọi role; true: hoạt động chính thức do staff phân bổ']
   pass_code varchar(20) [not null, note: 'Mã digital pass ngẫu nhiên, chỉ dùng từ trạng thái APPROVED']
   start_time timestamptz(3) [not null]
   end_time timestamptz(3) [not null]

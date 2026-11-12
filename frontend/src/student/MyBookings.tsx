@@ -22,7 +22,7 @@ export function MyBookingsDrawer({ open, onClose }: { open: boolean; onClose: ()
   }, [open, onClose])
 
   const mine = useMemo(
-    () => bookings.filter((b) => b.userId === currentUser?.id).sort((a, b) => +new Date(a.start) - +new Date(b.start)),
+    () => bookings.filter((b) => b.userId === currentUser?.id && !b.isEvent).sort((a, b) => +new Date(a.start) - +new Date(b.start)),
     [bookings, currentUser],
   )
   const list = mine.filter((b) => (filter === 'all' ? true : filter === 'active' ? ACTIVE_STATUSES.includes(b.status) : !ACTIVE_STATUSES.includes(b.status)))
@@ -40,7 +40,7 @@ export function MyBookingsDrawer({ open, onClose }: { open: boolean; onClose: ()
         <div className="flex items-start justify-between border-b border-rule px-6 pt-6 pb-5">
           <div className="flex flex-col gap-2">
             <Eyebrow>
-              LEDGER · HCMUT: {currentUser?.hcmutId || currentUser?.studentCode || '2110123'} · UTS: {currentUser?.utsId || '14234567'}
+              LEDGER · HCMUT: {currentUser?.hcmutId || currentUser?.studentCode || '—'} · UTS: {currentUser?.utsId || '—'}
             </Eyebrow>
             <h2 className="font-display text-section font-w450">
               <BlurText text="My bookings" />

@@ -3,6 +3,8 @@
 Sinh viên đặt phòng nhận email tại địa chỉ của tài khoản đã tạo booking khi manager/admin
 duyệt hoặc từ chối. Email chứa phòng, vị trí, ngày giờ theo timezone hệ thống, mã yêu cầu,
 ghi chú/lý do của manager và link tới Portal. Cả hai mẫu có bản HTML và bản văn bản.
+Manager/Admin gửi yêu cầu qua **Đặt phòng cá nhân** cũng nhận cùng các email này; một tài khoản
+có thể vừa đặt phòng cá nhân vừa quản lý, không cần đăng ký thêm bằng cùng email.
 
 ## Mẫu 1 — Được duyệt
 
@@ -54,7 +56,7 @@ Mẫu thực thi nằm tại `backend/src/notifications/booking-decision-email.t
 
 ## Quy tắc gửi và triển khai
 
-- Duyệt: tạo `BOOKING_APPROVED` cho chủ booking là sinh viên (`USER`).
+- Duyệt: tạo `BOOKING_APPROVED` cho chủ booking cá nhân (`isEvent=false`) ở mọi role.
 - Từ chối: tạo `BOOKING_REJECTED`, bao gồm các booking bị tự từ chối khi quản lý phân bổ
   hoạt động chính thức, duyệt một yêu cầu cạnh tranh, hoặc khóa phòng. Nếu phòng bị khóa
   sau khi booking đã được duyệt, sinh viên nhận thêm email từ chối để biết lịch không còn hiệu lực.
@@ -64,7 +66,8 @@ Mẫu thực thi nằm tại `backend/src/notifications/booking-decision-email.t
   Hủy bởi sinh viên và giao/trả chìa không tạo email kết quả duyệt.
 - Không gửi hồi tố cho booking đã duyệt/từ chối trước khi triển khai.
 - Chạy `pnpm prisma:generate`, `pnpm db:deploy`, `pnpm build` từ `backend` trước khi khởi động
-  bản backend mới. Migration chỉ thêm hai giá trị vào enum sự kiện, giữ nguyên dữ liệu cũ.
+  bản backend mới. Migration email thêm hai giá trị enum; migration chế độ cá nhân thêm
+  `is_event` và đánh dấu các booking cũ của staff là hoạt động chính thức.
 - Giữ cấu hình Resend đang có. Khi chưa xác minh domain, `onboarding@resend.dev` chỉ gửi tới
   email chủ tài khoản Resend; gửi tới email sinh viên khác cần domain gửi đã xác minh.
 

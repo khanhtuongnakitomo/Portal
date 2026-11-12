@@ -39,51 +39,23 @@ export function LogoMark({ size = 18, className }: { size?: number; className?: 
   )
 }
 
-const roles: { role: Role | null; label: string; who: string }[] = [
-  { role: 'USER', label: 'USER', who: 'Student · HCMUT: 2110123 · UTS: 14234567' },
-  { role: 'MANAGER', label: 'MANAGER', who: 'Facilities · Duc Tran' },
-  { role: 'ADMIN', label: 'ADMIN', who: 'System · Giang Pham' },
-  { role: null, label: 'SIGNED OUT', who: 'Auth screen' },
-]
-
 export function RoleSwitcher({ go }: { go: (r: Route) => void }) {
-  const { currentUser, previewAs, logout, apiConnected } = useStore()
+  const { currentUser } = useStore()
+  const { locale } = useI18n()
+  if (!currentUser) return null
+  const personal = locale === 'vi' ? 'Đặt phòng cá nhân' : 'Personal bookings'
+  const manager = locale === 'vi' ? 'Quản lý phòng' : 'Manage rooms'
   return (
-    <div className="bg-forest text-paper select-none role-switcher">
-      <div className="mx-auto flex max-w-[1440px] flex-wrap items-center justify-between gap-x-4 gap-y-2 px-6 py-2 select-none">
-        <div className="flex items-center gap-2.5 font-mono text-[12px] text-white/75">
-          <span className={cx('h-2 w-2 rounded-sm', apiConnected ? 'bg-tint animate-pulse' : 'bg-steel')} />
-          <span>{apiConnected ? 'API LIVE SYNC' : 'HYBRID STORAGE'} · ROLE PREVIEW</span>
-        </div>
-        <div className="flex flex-wrap gap-1">
-          {roles.map((r) => {
-            const active = r.role ? currentUser?.role === r.role : !currentUser
-            return (
-              <button
-                key={r.label}
-                onClick={() => {
-                  if (r.role) {
-                    previewAs(r.role)
-                    go(homeFor(r.role))
-                  } else {
-                    logout()
-                    go('/auth')
-                  }
-                }}
-                className={cx(
-                  'group flex items-center gap-2 rounded-md border px-2.5 py-1 font-mono text-[12px] font-semibold transition-colors',
-                  active ? 'border-tint bg-tint text-ink' : 'border-white/20 text-white/80 hover:border-white/50 hover:text-paper',
-                )}
-              >
-                {active && <Check size={12} strokeWidth={2.5} />}
-                {r.label}
-                <span className={cx('hidden font-sans text-[11px] font-normal lg:inline', active ? 'text-ink/60' : 'text-white/75')}>{r.who}</span>
-              </button>
-            )
-          })}
+    <nav aria-label={locale === 'vi' ? 'Chế độ làm việc' : 'Workspace'} className="bg-forest text-paper">
+      <div className="mx-auto flex max-w-[1440px] flex-wrap items-center justify-between gap-2 px-6 py-2">
+        <span className="text-[12px]">{currentUser.email}</span>
+        <div className="flex flex-wrap gap-2">
+          <button className="rounded-md border border-white/40 px-3 py-1 text-[12px] hover:bg-white/10" onClick={() => go('/student')}>{personal}</button>
+          {currentUser.role !== 'USER' && <button className="rounded-md border border-white/40 px-3 py-1 text-[12px] hover:bg-white/10" onClick={() => go('/manager')}>{manager}</button>}
+          {currentUser.role === 'ADMIN' && <button className="rounded-md border border-white/40 px-3 py-1 text-[12px] hover:bg-white/10" onClick={() => go('/admin')}>{locale === 'vi' ? 'Quản trị' : 'Administration'}</button>}
         </div>
       </div>
-    </div>
+    </nav>
   )
 }
 

@@ -36,6 +36,11 @@ Backend hiện đã triển khai ERD v2, Resend email outbox cho manager và ema
 - `MANAGER`: Duyệt booking, quản lý giao/trả chìa, cảnh báo chìa quá hạn và chặn phòng theo lịch.
 - `ADMIN`: Toàn quyền manager cộng quản lý user, role, trạng thái phòng và chính sách hệ thống.
 
+Manager/Admin dùng cùng một tài khoản để chuyển giữa **Đặt phòng cá nhân** và **Quản lý phòng**
+trên thanh điều hướng. Yêu cầu cá nhân chờ duyệt và nhận email kết quả; hoạt động chính thức
+được tạo từ màn quản lý. Đăng nhập/đăng ký cần API xác nhận thành công, không tạo tài khoản
+hoặc phiên đăng nhập giả khi API từ chối.
+
 ---
 
 ## 🚀 Hướng dẫn chạy Frontend (Local)

@@ -154,14 +154,21 @@ Authorization: Bearer ...
   "title": "Group study",
   "purpose": "Prepare final presentation",
   "attendeeCount": 6,
+  "isEvent": false,
   "startTime": "2026-11-10T09:00:00+07:00",
   "endTime": "2026-11-10T11:00:00+07:00"
 }
 ```
 
-Phòng bật `autoApprove` trả booking `APPROVED`; còn lại trả `PENDING`.
+`isEvent=false` gửi yêu cầu cá nhân ở mọi role và trả `PENDING`. `isEvent=true` dành cho
+Manager/Admin phân bổ hoạt động chính thức và trả `APPROVED`; USER gửi `true` nhận `403`.
+Các client cũ không gửi trường này giữ hành vi trước đây: USER là cá nhân, staff là hoạt động
+chính thức. Booking và public calendar trả `isEvent` để frontend phân biệt hai luồng.
+Giới hạn số booking cá nhân không tính các hoạt động chính thức của staff.
 
-Khi booking là `PENDING`, backend tự ghi email outbox cho từng manager `ACTIVE`. Việc gửi email chạy nền nên không làm thay đổi response hoặc thời gian chờ của frontend. Phòng `autoApprove` không tạo email chờ duyệt.
+Yêu cầu cá nhân luôn chờ duyệt (`PENDING`), kể cả khi tài khoản là Manager/Admin.
+
+Khi booking là `PENDING`, backend tự ghi email outbox cho từng manager `ACTIVE`. Việc gửi email chạy nền nên không làm thay đổi response hoặc thời gian chờ của frontend. Hoạt động chính thức được duyệt ngay và không tạo email chờ duyệt.
 
 ### 3. Booking cá nhân và digital pass
 

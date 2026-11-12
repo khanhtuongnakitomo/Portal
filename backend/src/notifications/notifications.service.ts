@@ -31,7 +31,7 @@ export class NotificationsService {
       where: {
         id: { in: bookingIds },
         status: { in: [BookingStatus.APPROVED, BookingStatus.REJECTED] },
-        user: { role: Role.USER },
+        isEvent: false,
       },
       include: {
         room: { select: { name: true, location: true } },

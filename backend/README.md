@@ -34,6 +34,7 @@ Frontend không truy cập database trực tiếp. Schema `app` không được 
 - Admin quản lý user/role/status, phòng, chính sách và audit log.
 - Booking `PENDING` tạo email outbox cho từng manager đang hoạt động; worker gửi qua Resend với retry và idempotency key.
 - Sinh viên nhận email khi booking được duyệt hoặc bị từ chối, gồm lý do khi có. Xem [hai mẫu email](../docs/BOOKING_EMAILS.md).
+- Manager/Admin có thể gửi yêu cầu cá nhân bằng `isEvent=false`, áp dụng giới hạn và chờ duyệt như sinh viên. Hoạt động chính thức dùng `isEvent=true`, chỉ dành cho manager/admin. Email kết quả gửi cho chủ booking cá nhân ở mọi role.
 - DTO validation, Helmet, CORS và health checks.
 - Row lock theo phòng và PostgreSQL exclusion constraint chống booking trùng lịch khi request đồng thời.
 

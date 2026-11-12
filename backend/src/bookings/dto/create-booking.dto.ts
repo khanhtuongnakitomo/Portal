@@ -1,5 +1,7 @@
 import {
   IsDateString,
+  IsBoolean,
+  IsOptional,
   IsInt,
   IsString,
   IsUUID,
@@ -10,6 +12,10 @@ import {
 } from 'class-validator';
 
 export class CreateBookingDto {
+  @IsOptional()
+  @IsBoolean()
+  isEvent?: boolean;
+
   @IsUUID()
   roomId!: string;
 

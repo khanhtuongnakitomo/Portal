@@ -24,8 +24,8 @@ export function DigitalPass({
   const { user } = useLookups()
   const { t, locale } = useI18n()
   const u = user(booking.userId)
-  const resolvedHcmut = hcmutId || u?.hcmutId || studentCode || u?.studentCode || '2110123'
-  const resolvedUts = utsId || u?.utsId || '14234567'
+  const resolvedHcmut = hcmutId || u?.hcmutId || studentCode || u?.studentCode || '—'
+  const resolvedUts = utsId || u?.utsId || '—'
   const out = booking.status === 'KEY_CHECKED_OUT'
   const overdue = out && new Date() > new Date(booking.end)
   return (
