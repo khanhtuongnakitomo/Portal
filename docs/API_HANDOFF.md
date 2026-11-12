@@ -186,7 +186,7 @@ PATCH /manager/bookings/:id/reject
 
 Approve nhận `note` tùy chọn; reject yêu cầu `note`.
 
-Email booking mới liên kết tới `${FRONTEND_URL}/manager/bookings/:bookingId`. Frontend nên cung cấp route chi tiết này; nếu trang manager chỉ có approval queue, route có thể redirect tới queue và mở booking tương ứng.
+Email booking mới liên kết tới `${FRONTEND_URL}/#/manager`, khớp hash router của frontend hiện tại và mở hàng đợi phê duyệt sau khi manager đăng nhập. Người nhận lấy từ các tài khoản `MANAGER` đang `ACTIVE`; frontend không gọi API gửi email riêng hoặc tự chọn người nhận.
 
 ### Key tracker
 

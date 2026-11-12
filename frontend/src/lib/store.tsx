@@ -21,7 +21,6 @@ import {
   apiRegister,
   apiRejectBooking,
   apiReturnKey,
-  apiSendManagerEmailNotification,
   apiUpdateRoom,
   apiUpdateSettings,
   apiUpdateUserRole,
@@ -721,11 +720,6 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         title: booking.title,
         members: booking.members ?? null,
       })
-      notify('Booking request submitted successfully & notification email dispatched directly to Facilities Manager (manager@tne.edu.vn).')
-
-      // Dispatch notification email to manager
-      apiSendManagerEmailNotification(booking).catch(() => {})
-
       if (apiConnected) {
         apiCreateBooking({
           roomId,
@@ -734,7 +728,20 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           attendeeCount: booking.attendeeCount ?? 1,
           startTime: booking.start,
           endTime: booking.end,
-        }).catch(() => {})
+        }).then((saved) => {
+          if (saved) {
+            setBookings((bs) => bs.map((b) => b.id === booking.id ? { ...booking, ...saved } : b))
+            notify('Booking request submitted successfully. Your manager will be notified when email notifications are enabled.')
+          } else {
+            setBookings((bs) => bs.filter((b) => b.id !== booking.id))
+            notify('Unable to submit the booking request. Please try again.', 'error')
+          }
+        }).catch(() => {
+          setBookings((bs) => bs.filter((b) => b.id !== booking.id))
+          notify('Unable to submit the booking request. Please try again.', 'error')
+        })
+      } else {
+        notify('Booking saved in demo mode. Connect to the API to submit it to your manager.')
       }
       return null
     },

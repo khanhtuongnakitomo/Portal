@@ -632,17 +632,3 @@ export async function apiGetAuditLogs(query?: { action?: string; targetType?: st
   const items = Array.isArray(res.data) ? res.data : (res.data.items ?? [])
   return items.map(mapBackendAuditToFrontend)
 }
-
-
-export async function apiSendManagerEmailNotification(booking: Booking): Promise<boolean> {
-  const res = await apiFetch<any>('/manager/notifications/email', {
-    method: 'POST',
-    body: JSON.stringify({
-      bookingId: booking.id,
-      recipient: 'manager@tne.edu.vn',
-      subject: `[TNE-PORTAL] New Booking Request: Room ${booking.roomId}`,
-      booking,
-    }),
-  })
-  return res.ok
-}

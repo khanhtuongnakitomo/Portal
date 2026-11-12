@@ -59,6 +59,32 @@ pnpm start:dev
 
 Đặt `SEED_DEMO_USERS=true` để tạo tài khoản manager và student dùng cho frontend local. Thông tin nằm trong [`../docs/API_HANDOFF.md`](../docs/API_HANDOFF.md); không bật demo users ở production.
 
+### macOS không dùng Docker
+
+```sh
+brew install postgresql@17
+brew services start postgresql@17
+"$(brew --prefix postgresql@17)/bin/createdb" tne_portal
+cd backend
+cp .env.example .env
+```
+
+PostgreSQL do Homebrew tạo dùng username macOS hiện tại (`whoami`). Đổi cả
+`DATABASE_URL` và `DIRECT_URL` trong `.env` thành
+`postgresql://<macOS-username>@localhost:5432/tne_portal?schema=app`, rồi chạy:
+
+```sh
+pnpm install --frozen-lockfile
+pnpm prisma:generate
+pnpm db:deploy
+pnpm db:seed
+pnpm start:dev
+```
+
+Chỉ seed lần đầu cho database local mới: seed hiện tại xóa bookings cũ để tạo dữ liệu mẫu.
+Mở terminal khác, chạy `cd frontend && npm ci && npm run dev -- --host 127.0.0.1`
+từ repo root. Vào `http://localhost:5173`; Vite tự proxy `/api` đến backend port 3000.
+
 ## Email thông báo qua Resend
 
 Mặc định local và CI có `EMAIL_NOTIFICATIONS_ENABLED=false`: booking vẫn tạo các row trong `notification_outbox`, nhưng worker không gọi dịch vụ bên ngoài. Để bật gửi thật:
@@ -70,7 +96,49 @@ Mặc định local và CI có `EMAIL_NOTIFICATIONS_ENABLED=false`: booking vẫ
 
 Khi được bật, worker sẽ xử lý cả những row `PENDING` đã tạo trước đó. Trước lần bật đầu tiên trên môi trường dùng chung, kiểm tra hàng đợi để tránh gửi email thử nghiệm cũ.
 
-`FRONTEND_URL` được dùng để tạo link `${FRONTEND_URL}/manager/bookings/:bookingId` trong email. Frontend cần cung cấp route này hoặc redirect nó tới trang approval queue.
+`FRONTEND_URL` được dùng để tạo link `${FRONTEND_URL}/#/manager` trong email,
+khớp hash router hiện tại. Manager đăng nhập để xem hàng đợi phê duyệt.
+
+### Test Gmail khi chưa có domain riêng
+
+Không cần Gmail SMTP hoặc mật khẩu ứng dụng Google. Resend gửi email, Gmail là nơi nhận.
+
+1. Đăng nhập Resend bằng Gmail muốn nhận thử; tạo key với **Sending access**.
+2. Tạo `backend/.env.local` (đã gitignore):
+
+   ```dotenv
+   EMAIL_NOTIFICATIONS_ENABLED=true
+   RESEND_API_KEY=re_your_private_key
+   EMAIL_FROM="TNE Portal Local <onboarding@resend.dev>"
+   FRONTEND_URL=http://localhost:5173
+   ```
+
+3. Trong Portal, đăng nhập admin, tạo tài khoản manager bằng **đúng Gmail của chủ tài khoản Resend**.
+   Suspend các manager demo khác trên database local để hàng đợi không thử gửi tới địa chỉ mẫu.
+   Người nhận luôn lấy từ các user `MANAGER` có trạng thái `ACTIVE` trong database.
+4. Khởi động lại backend (`pnpm start:dev`), đăng nhập student và tạo booking mới.
+   Chọn ngày làm việc cách ít nhất 2 ngày, tối đa 7 ngày, trong giờ mở cửa.
+5. Chờ tối đa một chu kỳ worker (15 giây), kiểm tra Gmail Inbox/Spam và Resend Emails.
+   Row outbox `SENT` kèm `provider_message_id` nghĩa là Resend đã nhận request;
+   xác nhận trong Gmail hoặc sự kiện `Delivered` để biết email đã tới nơi.
+   Frontend chỉ báo booking được lưu sau khi API thành công; việc gửi email do worker backend xử lý.
+
+Backend, Prisma CLI và seed đều đọc `.env.local` trước `.env`; biến môi trường từ shell/hosting
+được ưu tiên cao nhất. API key chỉ nằm ở backend, không thêm biến `VITE_RESEND_API_KEY`.
+
+Theo [giới hạn domain thử của Resend](https://resend.com/docs/knowledge-base/403-error-resend-dev-domain),
+`onboarding@resend.dev` chỉ gửi tới email chủ tài khoản Resend. Nếu gặp `403`, kiểm tra
+người nhận hoặc domain gửi. `401` thường do API key không hợp lệ. Worker lưu lỗi trong
+`notification_outbox.last_error` và retry; khắc phục cấu hình trước khi gửi lại.
+
+### Chuyển cấu hình email lên môi trường chính thức
+
+Code có thể push lên repo mà không kèm `.env`, `.env.local` hoặc tài khoản thử.
+Trên hosting backend, cấu hình secret `RESEND_API_KEY` riêng; xác minh domain gửi trong
+Resend rồi đổi `EMAIL_FROM` sang địa chỉ thuộc domain đó, đặt `FRONTEND_URL` thành URL
+HTTPS của Portal và bật `EMAIL_NOTIFICATIONS_ENABLED=true`. Đảm bảo manager có email thật,
+kiểm tra hàng đợi cũ trước khi bật và giữ tiến trình backend chạy để worker xử lý email.
+Không dùng domain `resend.dev` để gửi cho nhiều manager ở production.
 
 Luồng gửi:
 

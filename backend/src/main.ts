@@ -1,5 +1,5 @@
 import 'reflect-metadata';
-import 'dotenv/config';
+import './config/load-environment.js';
 import { createApp } from './app.js';
 import { validateEnvironment } from './config/environment.js';
 import { NotificationWorkerService } from './notifications/notification-worker.service.js';

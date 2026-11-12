@@ -25,10 +25,9 @@ export function buildManagerBookingCreatedEmail(
 ): RenderedEmail {
   const start = formatDateTime(payload.startTime, payload.timezone);
   const end = formatDateTime(payload.endTime, payload.timezone);
-  const bookingUrl = new URL(
-    `manager/bookings/${encodeURIComponent(payload.bookingId)}`,
-    ensureTrailingSlash(frontendUrl),
-  ).toString();
+  const managerUrl = new URL(ensureTrailingSlash(frontendUrl));
+  managerUrl.hash = '/manager';
+  const bookingUrl = managerUrl.toString();
   const studentIdentity = payload.studentCode
     ? `${payload.requesterName} (${payload.studentCode})`
     : payload.requesterName;
