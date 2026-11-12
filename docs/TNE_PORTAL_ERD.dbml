@@ -56,6 +56,8 @@ Enum app.BookingStatus {
 
 Enum app.NotificationEventType {
   BOOKING_CREATED [note: 'Booking PENDING mới cần manager xem và duyệt']
+  BOOKING_APPROVED [note: 'Thông báo duyệt cho sinh viên đặt phòng']
+  BOOKING_REJECTED [note: 'Thông báo từ chối cho sinh viên đặt phòng']
 }
 
 Enum app.NotificationStatus {
@@ -219,8 +221,8 @@ Table app.notification_outbox {
   id uuid [pk, not null]
   event_type app.NotificationEventType [not null]
   booking_id uuid [not null]
-  recipient_user_id uuid [note: 'Manager nhận email; có thể null nếu tài khoản bị xóa sau khi enqueue']
-  recipient_email varchar(255) [not null, note: 'Snapshot địa chỉ nhận tại thời điểm booking được tạo']
+  recipient_user_id uuid [note: 'Manager hoặc sinh viên nhận email; có thể null nếu tài khoản bị xóa sau khi enqueue']
+  recipient_email varchar(255) [not null, note: 'Snapshot địa chỉ nhận tại thời điểm tạo sự kiện']
   payload jsonb [not null, note: 'Snapshot dữ liệu booking dùng để render email; không chứa passCode']
   status app.NotificationStatus [not null, default: 'PENDING']
   attempts integer [not null, default: 0]

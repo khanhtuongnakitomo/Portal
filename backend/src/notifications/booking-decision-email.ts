@@ -67,6 +67,7 @@ export function buildStudentBookingDecisionEmail(
     text,
     html: `<!doctype html>
 <html lang="vi">
+  <head><meta charset="UTF-8"/><meta name="viewport" content="width=device-width, initial-scale=1"/><title>${heading}</title></head>
   <body style="margin:0;background:#f4f6f8;font-family:Arial,sans-serif;color:#17202a">
     <div style="max-width:640px;margin:0 auto;padding:24px">
       <div style="background:#fff;border-radius:12px;padding:28px;border:1px solid #e5e7eb">
@@ -74,7 +75,7 @@ export function buildStudentBookingDecisionEmail(
         <h1 style="margin:0 0 20px;font-size:24px;color:${approved ? '#0f766e' : '#b45309'}">${heading}</h1>
         <p>Chào ${escapeHtml(payload.requesterName)},</p>
         <p style="line-height:1.6">${introduction}</p>
-        <table style="width:100%;border-collapse:collapse;font-size:15px">
+        <table style="width:100%;border-collapse:collapse;table-layout:fixed;font-size:15px">
           ${details.map(([label, value]) => row(label, value)).join('\n')}
         </table>
         <p style="line-height:1.6">${instructions}</p>

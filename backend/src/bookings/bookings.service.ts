@@ -144,6 +144,7 @@ export class BookingsService {
               note: displacementNote,
             })),
           });
+          await this.notifications?.enqueueBookingDecision(tx, pendingIds);
         }
       } else {
         const firmConflict = await tx.booking.findFirst({
@@ -417,8 +418,8 @@ export class BookingsService {
       }
 
       const now = new Date();
-      await tx.booking.update({
-        where: { id },
+      const changed = await tx.booking.updateMany({
+        where: { id, status: BookingStatus.PENDING },
         data: {
           status: BookingStatus.APPROVED,
           reviewedById: actorId,
@@ -426,6 +427,7 @@ export class BookingsService {
           reviewNote: note?.trim(),
         },
       });
+      if (changed.count !== 1) throw new ConflictException('Booking is no longer pending');
 
       await tx.bookingStatusHistory.create({
         data: {
@@ -496,6 +498,10 @@ export class BookingsService {
         }
       }
 
+      await this.notifications?.enqueueBookingDecision(tx, [
+        id,
+        ...overlappingPending.map((pending) => pending.id),
+      ]);
       const updated = await tx.booking.findUniqueOrThrow({
         where: { id },
         include: bookingInclude,
@@ -652,6 +658,7 @@ export class BookingsService {
         where: { id },
         include: bookingInclude,
       });
+      if (isReview) await this.notifications?.enqueueBookingDecision(tx, [id]);
       return this.toApiBooking(booking);
     });
   }

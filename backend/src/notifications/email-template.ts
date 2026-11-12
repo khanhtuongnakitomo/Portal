@@ -15,7 +15,7 @@ export function formatDateTime(value: string, timezone: string) {
 }
 
 export function row(label: string, value: string) {
-  return `<tr><td style="padding:8px 12px 8px 0;color:#64748b;vertical-align:top;width:120px">${escapeHtml(label)}</td><td style="padding:8px 0;font-weight:600;white-space:pre-wrap">${escapeHtml(value)}</td></tr>`;
+  return `<tr><td style="padding:8px 12px 8px 0;color:#64748b;vertical-align:top;width:120px">${escapeHtml(label)}</td><td style="padding:8px 0;font-weight:600;white-space:pre-wrap;overflow-wrap:break-word">${escapeHtml(value)}</td></tr>`;
 }
 
 export function escapeHtml(value: string) {

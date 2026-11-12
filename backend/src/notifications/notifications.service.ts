@@ -6,6 +6,7 @@ import {
   UserStatus,
 } from '../generated/prisma/client.js';
 import type { BookingCreatedEmailPayload } from './booking-created-email.js';
+import type { BookingDecisionEmailPayload } from './booking-decision-email.js';
 
 type BookingCreatedSource = {
   id: string;
@@ -24,6 +25,53 @@ type BookingCreatedSource = {
 };
 
 export class NotificationsService {
+  async enqueueBookingDecision(tx: Prisma.TransactionClient, bookingIds: string[]) {
+    if (!bookingIds.length) return;
+    const bookings = await tx.booking.findMany({
+      where: {
+        id: { in: bookingIds },
+        status: { in: [BookingStatus.APPROVED, BookingStatus.REJECTED] },
+        user: { role: Role.USER },
+      },
+      include: {
+        room: { select: { name: true, location: true } },
+        user: { select: { id: true, email: true, fullName: true } },
+      },
+    });
+    if (!bookings.length) return;
+    const { timezone } = await tx.systemSetting.findUniqueOrThrow({ where: { id: 'default' } });
+    await tx.notificationOutbox.createMany({
+      data: bookings.map((booking) => {
+        const status = booking.status === BookingStatus.APPROVED ? 'APPROVED' : 'REJECTED';
+        const eventType =
+          status === 'APPROVED'
+            ? NotificationEventType.BOOKING_APPROVED
+            : NotificationEventType.BOOKING_REJECTED;
+        const payload: BookingDecisionEmailPayload = {
+          bookingId: booking.id,
+          status,
+          title: booking.title,
+          roomName: booking.room.name,
+          roomLocation: booking.room.location,
+          startTime: booking.startTime.toISOString(),
+          endTime: booking.endTime.toISOString(),
+          timezone,
+          requesterName: booking.user.fullName,
+          reviewNote: booking.reviewNote,
+        };
+        return {
+          eventType,
+          bookingId: booking.id,
+          recipientUserId: booking.user.id,
+          recipientEmail: booking.user.email,
+          payload: payload as unknown as Prisma.InputJsonValue,
+          dedupeKey: `booking-${status.toLowerCase()}:${booking.id}:${booking.user.id}`,
+        };
+      }),
+      skipDuplicates: true,
+    });
+  }
+
   async enqueueBookingCreated(
     tx: Prisma.TransactionClient,
     booking: BookingCreatedSource,

@@ -1,10 +1,7 @@
 import { NotificationStatus, Prisma } from '../generated/prisma/client.js';
 import { PrismaService } from '../prisma/prisma.service.js';
-import {
-  buildManagerBookingCreatedEmail,
-  parseBookingCreatedPayload,
-} from './booking-created-email.js';
 import type { EmailProvider } from './email-provider.interface.js';
+import { renderNotificationEmail } from './notification-email.js';
 
 const PROCESSING_TIMEOUT_MS = 5 * 60_000;
 const ERROR_LIMIT = 2_000;
@@ -133,8 +130,7 @@ export class NotificationWorkerService {
     item: Awaited<ReturnType<NotificationWorkerService['claimBatch']>>[number],
   ) {
     try {
-      const payload = parseBookingCreatedPayload(item.payload);
-      const email = buildManagerBookingCreatedEmail(payload, this.options.frontendUrl);
+      const email = renderNotificationEmail(item.eventType, item.payload, this.options.frontendUrl);
       const result = await this.emailProvider.send({
         to: item.recipientEmail,
         subject: email.subject,

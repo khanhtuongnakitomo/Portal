@@ -1,8 +1,9 @@
 import { jest } from '@jest/globals';
 import { ConflictException } from '../common/http-exceptions.js';
 import type { AuthenticatedUser } from '../common/interfaces/authenticated-user.interface.js';
-import { BookingStatus, Role, RoomStatus } from '../generated/prisma/client.js';
+import { BookingStatus, Role, RoomStatus, UserStatus } from '../generated/prisma/client.js';
 import type { PrismaService } from '../prisma/prisma.service.js';
+import { NotificationsService } from '../notifications/notifications.service.js';
 import { BookingsService } from './bookings.service.js';
 
 type AsyncMock<T> = jest.Mock<Promise<T>, [unknown]>;
@@ -18,6 +19,17 @@ type PendingLookup = {
   startTime?: Date;
   endTime?: Date;
 };
+
+class RecordingNotifications extends NotificationsService {
+  readonly decisionBookings: string[] = [];
+  enqueueBookingCreated() {
+    return Promise.resolve();
+  }
+  enqueueBookingDecision(...args: Parameters<NotificationsService['enqueueBookingDecision']>) {
+    this.decisionBookings.push(...args[1]);
+    return Promise.resolve();
+  }
+}
 
 describe('BookingsService - Competing Pending & Auto-Decline', () => {
   const mockSettings = {
@@ -45,18 +57,24 @@ describe('BookingsService - Competing Pending & Auto-Decline', () => {
     id: 'student-1',
     email: 'student1@tne.edu.vn',
     role: Role.USER,
+    fullName: 'Student One',
+    status: UserStatus.ACTIVE,
   };
 
   const student2: AuthenticatedUser = {
     id: 'student-2',
     email: 'student2@tne.edu.vn',
     role: Role.USER,
+    fullName: 'Student Two',
+    status: UserStatus.ACTIVE,
   };
 
   const manager: AuthenticatedUser = {
     id: 'manager-1',
     email: 'manager@tne.edu.vn',
     role: Role.MANAGER,
+    fullName: 'Manager',
+    status: UserStatus.ACTIVE,
   };
 
   // Compute a future Tuesday within 1-14 days so it is strictly in the future on a workday
@@ -144,6 +162,7 @@ describe('BookingsService - Competing Pending & Auto-Decline', () => {
   }
 
   let service: BookingsService;
+  let notifications: RecordingNotifications;
   let mockTx: {
     room: {
       updateMany: AsyncMock<{ count: number }>;
@@ -208,7 +227,8 @@ describe('BookingsService - Competing Pending & Auto-Decline', () => {
       },
     };
 
-    service = new BookingsService(mockPrisma as unknown as PrismaService);
+    notifications = new RecordingNotifications();
+    service = new BookingsService(mockPrisma as unknown as PrismaService, notifications);
   });
 
   describe('create', () => {
@@ -248,6 +268,7 @@ describe('BookingsService - Competing Pending & Auto-Decline', () => {
       mockTx.booking.findMany.mockResolvedValue([{ id: 'pending-1' }, { id: 'pending-2' }]);
 
       await service.create(baseBookingDto, manager);
+      expect(notifications.decisionBookings).toEqual(['pending-1', 'pending-2']);
 
       expect(mockTx.booking.updateMany.mock.calls[0]?.[0]).toMatchObject({
         where: { id: { in: ['pending-1', 'pending-2'] } },
@@ -290,8 +311,9 @@ describe('BookingsService - Competing Pending & Auto-Decline', () => {
 
       const result = await service.approve('booking-1', manager.id, 'Looks good');
       expect(result.status).toBe(BookingStatus.APPROVED);
+      expect(notifications.decisionBookings).toEqual(['booking-1', 'competing-pending-2']);
 
-      expect(mockTx.booking.updateMany.mock.calls[0]?.[0]).toMatchObject({
+      expect(mockTx.booking.updateMany.mock.calls[1]?.[0]).toMatchObject({
         where: { id: { in: ['competing-pending-2'] } },
         data: {
           status: BookingStatus.REJECTED,
@@ -337,6 +359,21 @@ describe('BookingsService - Competing Pending & Auto-Decline', () => {
       await expect(service.approve('booking-1', manager.id)).rejects.toThrow(
         new ConflictException('Booking is no longer pending'),
       );
+    });
+
+    it('refuses to send approval when another reviewer already changed the pending booking', async () => {
+      mockTx.booking.findUnique.mockResolvedValue({
+        id: 'booking-1',
+        roomId: 'room-1',
+        status: BookingStatus.PENDING,
+        startTime,
+        endTime,
+      });
+      mockTx.booking.updateMany.mockResolvedValue({ count: 0 });
+      await expect(service.approve('booking-1', manager.id)).rejects.toThrow(
+        'Booking is no longer pending',
+      );
+      expect(notifications.decisionBookings).toHaveLength(0);
     });
   });
 });
