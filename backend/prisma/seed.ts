@@ -1,4 +1,4 @@
-import 'dotenv/config';
+import '../src/config/load-environment.js';
 import { PrismaPg } from '@prisma/adapter-pg';
 import * as argon2 from 'argon2';
 import {

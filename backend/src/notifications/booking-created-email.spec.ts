@@ -24,10 +24,16 @@ describe('manager booking-created email', () => {
     const result = buildManagerBookingCreatedEmail(payload, 'https://portal.example.edu.vn');
 
     expect(result.subject).toContain('Room 1');
-    expect(result.html).toContain('https://portal.example.edu.vn/manager/bookings/booking-123');
+    expect(result.html).toContain('https://portal.example.edu.vn/#/manager');
+    expect(result.text).toContain('https://portal.example.edu.vn/#/manager');
     expect(result.html).toContain('Study &lt;script&gt;alert(1)&lt;/script&gt;');
     expect(result.html).not.toContain('<script>alert(1)</script>');
     expect(result.text).toContain('SE001');
+  });
+
+  it('preserves a frontend deployment subpath when opening the manager queue', () => {
+    const result = buildManagerBookingCreatedEmail(payload, 'https://example.edu.vn/portal');
+    expect(result.text).toContain('https://example.edu.vn/portal/#/manager');
   });
 
   it('rejects malformed persisted payloads', () => {
