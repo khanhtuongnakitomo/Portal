@@ -33,6 +33,7 @@ Frontend không truy cập database trực tiếp. Schema `app` không được 
 - Manager/Admin đặt một khoảng block cho từng phòng; block và schedule lock được lưu trong `rooms`.
 - Admin quản lý user/role/status, phòng, chính sách và audit log.
 - Booking `PENDING` tạo email outbox cho từng manager đang hoạt động; worker gửi qua Resend với retry và idempotency key.
+- Sinh viên nhận email khi booking được duyệt hoặc bị từ chối, gồm lý do khi có. Xem [hai mẫu email](../docs/BOOKING_EMAILS.md).
 - DTO validation, Helmet, CORS và health checks.
 - Row lock theo phòng và PostgreSQL exclusion constraint chống booking trùng lịch khi request đồng thời.
 
@@ -98,6 +99,9 @@ Khi được bật, worker sẽ xử lý cả những row `PENDING` đã tạo t
 
 `FRONTEND_URL` được dùng để tạo link `${FRONTEND_URL}/#/manager` trong email,
 khớp hash router hiện tại. Manager đăng nhập để xem hàng đợi phê duyệt.
+Email kết quả cho sinh viên mở `${FRONTEND_URL}/#/student`. Các sự kiện
+`BOOKING_APPROVED` và `BOOKING_REJECTED` dùng chung worker với email booking mới.
+Quy tắc gửi và hai mẫu có sẵn tại [BOOKING_EMAILS.md](../docs/BOOKING_EMAILS.md).
 
 ### Test Gmail khi chưa có domain riêng
 
@@ -255,6 +259,6 @@ E2E test chạy toàn bộ luồng đăng ký → booking → email outbox → a
 
 - Email verification, quên mật khẩu và SMTP/provider của trường.
 - Rate limiting tại reverse proxy hoặc middleware Express.
-- Email cho user khi booking đổi trạng thái và cảnh báo chìa quá hạn; hiện chỉ booking mới gửi manager.
+- Email cảnh báo chìa quá hạn; email kết quả duyệt/từ chối cho sinh viên đã có.
 - Backup, monitoring, alerting và kiểm thử restore.
 - Chính sách retention dữ liệu sinh viên và phê duyệt của nhà trường.

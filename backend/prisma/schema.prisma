@@ -51,6 +51,8 @@ enum RoomBlockStatus {
 
 enum NotificationEventType {
   BOOKING_CREATED
+  BOOKING_APPROVED
+  BOOKING_REJECTED
 
   @@schema("app")
 }

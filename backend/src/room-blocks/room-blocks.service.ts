@@ -5,6 +5,7 @@ import {
 } from '../common/http-exceptions.js';
 import { BookingStatus, RoomBlockStatus, RoomStatus } from '../generated/prisma/client.js';
 import { PrismaService } from '../prisma/prisma.service.js';
+import { NotificationsService } from '../notifications/notifications.service.js';
 import type { CreateRoomBlockDto } from './dto/create-room-block.dto.js';
 import type { ListRoomBlocksDto } from './dto/list-room-blocks.dto.js';
 
@@ -14,7 +15,10 @@ const blockRoomInclude = {
 } as const;
 
 export class RoomBlocksService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly notifications?: NotificationsService,
+  ) {}
 
   async create(dto: CreateRoomBlockDto, actorId: string) {
     const startTime = new Date(dto.startTime);
@@ -91,6 +95,7 @@ export class RoomBlocksService {
             note: displacementNote,
           })),
         });
+        await this.notifications?.enqueueBookingDecision(tx, bookingIds);
       }
 
       const blockedRoom = await tx.room.update({

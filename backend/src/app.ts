@@ -47,8 +47,9 @@ export function createApp(customPrisma?: PrismaService): { app: Express; prisma:
   const authService = new AuthService(prisma);
   const usersService = new UsersService(prisma);
   const roomsService = new RoomsService(prisma);
-  const bookingsService = new BookingsService(prisma, new NotificationsService());
-  const roomBlocksService = new RoomBlocksService(prisma);
+  const notificationsService = new NotificationsService();
+  const bookingsService = new BookingsService(prisma, notificationsService);
+  const roomBlocksService = new RoomBlocksService(prisma, notificationsService);
   const settingsService = new SettingsService(prisma);
   const auditService = new AuditService(prisma);
 

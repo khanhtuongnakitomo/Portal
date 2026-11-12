@@ -188,6 +188,12 @@ Approve nhận `note` tùy chọn; reject yêu cầu `note`.
 
 Email booking mới liên kết tới `${FRONTEND_URL}/#/manager`, khớp hash router của frontend hiện tại và mở hàng đợi phê duyệt sau khi manager đăng nhập. Người nhận lấy từ các tài khoản `MANAGER` đang `ACTIVE`; frontend không gọi API gửi email riêng hoặc tự chọn người nhận.
 
+Khi duyệt/từ chối thành công, backend tạo email outbox cho sinh viên sở hữu booking trong
+cùng transaction (`BOOKING_APPROVED` / `BOOKING_REJECTED`). Áp dụng cả các booking bị tự
+từ chối do hoạt động chính thức, lịch cạnh tranh hoặc khóa phòng. Worker gửi qua Resend
+sau commit, link `${FRONTEND_URL}/#/student`; API và payload review giữ nguyên.
+Mẫu email và hướng dẫn triển khai: [BOOKING_EMAILS.md](BOOKING_EMAILS.md).
+
 ### Key tracker
 
 ```http

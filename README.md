@@ -28,7 +28,7 @@ DESIGN.md                Tài liệu Design System & Style Guide chi tiết
 
 ---
 
-Backend hiện đã triển khai ERD v2, Resend email outbox cho manager, migration nâng cấp dữ liệu, unit test, PostgreSQL E2E test và CI GitHub Actions.
+Backend hiện đã triển khai ERD v2, Resend email outbox cho manager và email kết quả duyệt/từ chối cho sinh viên, migration nâng cấp dữ liệu, unit test, PostgreSQL E2E test và CI GitHub Actions. Hai mẫu email sinh viên có tại [docs/BOOKING_EMAILS.md](docs/BOOKING_EMAILS.md).
 
 ## 🏛️ Vai trò người dùng (Roles)
 
