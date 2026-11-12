@@ -156,6 +156,7 @@ model Booking {
   title             String                 @db.VarChar(150)
   purpose           String                 @db.VarChar(1000)
   attendeeCount     Int                    @map("attendee_count")
+  isEvent           Boolean                @default(false) @map("is_event")
   passCode          String                 @unique @map("pass_code") @db.VarChar(20)
   startTime         DateTime               @map("start_time") @db.Timestamptz(3)
   endTime           DateTime               @map("end_time") @db.Timestamptz(3)

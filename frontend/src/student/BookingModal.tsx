@@ -35,6 +35,7 @@ export function BookingModal({
   ])
   const [confirmed, setConfirmed] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [submitting, setSubmitting] = useState(false)
 
   // Prefill contact number from the student's most recent booking
   const lastPhone = bookings.filter((b) => b.userId === currentUser?.id).sort((a, b) => +new Date(b.createdAt) - +new Date(a.createdAt))[0]?.phone ?? ''
@@ -144,7 +145,8 @@ export function BookingModal({
     (m) => !m.hcmutId.trim() && !m.utsId.trim(),
   )
 
-  const submit = () => {
+  const submit = async () => {
+    if (submitting) return
     if (!confirmed) {
       setError(
         locale === 'vi'
@@ -177,21 +179,27 @@ export function BookingModal({
       )
       return
     }
-    const err = createBooking({
-      roomId: activeRoom.id,
-      start: s,
-      end: e,
-      phone,
-      title,
-      purpose,
-      memberList: validMemberList,
-    })
-    if (err) setError(err)
-    else onClose()
+    setSubmitting(true)
+    setError(null)
+    try {
+      const err = await createBooking({
+        roomId: activeRoom.id,
+        start: s,
+        end: e,
+        phone,
+        title,
+        purpose,
+        memberList: validMemberList,
+      })
+      if (err) setError(err)
+      else onClose()
+    } finally {
+      setSubmitting(false)
+    }
   }
 
-  const hcmutId = currentUser?.hcmutId || currentUser?.studentCode || '2110123'
-  const utsId = currentUser?.utsId || '14234567'
+  const hcmutId = currentUser?.hcmutId || currentUser?.studentCode || '—'
+  const utsId = currentUser?.utsId || '—'
 
   return (
     <Modal
@@ -202,13 +210,14 @@ export function BookingModal({
       width="max-w-[740px]"
       footer={
         <div className="flex items-center justify-between gap-3">
-          <Button variant="ghost" onClick={onClose}>
+          <Button variant="ghost" onClick={onClose} disabled={submitting}>
             {t('common.cancel')}
           </Button>
           <Button
             size="md"
             onClick={submit}
             disabled={
+              submitting ||
               !confirmed ||
               !!slotErr ||
               overMaxDuration ||
@@ -220,7 +229,7 @@ export function BookingModal({
               hasIncomplete
             }
           >
-            {t('bookingModal.submitBtn')} <ArrowRight size={16} />
+            {submitting ? (locale === 'vi' ? 'Đang gửi…' : 'Submitting…') : t('bookingModal.submitBtn')} <ArrowRight size={16} />
           </Button>
         </div>
       }

@@ -98,6 +98,89 @@ describe('booking decision notifications (PostgreSQL e2e)', () => {
     expect(await studentEmails(booking.id)).toHaveLength(1);
   });
 
+  it('lets a manager submit a personal request and receive its decision email', async () => {
+    const response = await request(app)
+      .post('/api/v1/bookings')
+      .set('Authorization', `Bearer ${tokens[0]}`)
+      .send({
+        roomId,
+        title: 'Manager personal booking',
+        purpose: 'Personal study session',
+        attendeeCount: 2,
+        isEvent: false,
+        ...slot(),
+      })
+      .expect(201);
+    const booking = response.body as BookingResponse;
+    expect(booking.status).toBe('PENDING');
+    expect((response.body as { isEvent: boolean }).isEvent).toBe(false);
+    await review(booking.id, 'approve').expect(200);
+    const email = await prisma.notificationOutbox.findFirstOrThrow({
+      where: { bookingId: booking.id, eventType: 'BOOKING_APPROVED' },
+    });
+    expect(email.recipientEmail).toBe(emails[0]);
+  });
+
+  it('does not let a student bypass approval by marking a booking as an official activity', async () => {
+    await request(app)
+      .post('/api/v1/bookings')
+      .set('Authorization', `Bearer ${tokens[1]}`)
+      .send({
+        roomId,
+        title: 'Forged official activity',
+        purpose: 'Must not bypass approval',
+        attendeeCount: 2,
+        isEvent: true,
+        ...slot(),
+      })
+      .expect(403);
+    expect(await prisma.booking.count({ where: { roomId } })).toBe(0);
+  });
+
+  it('keeps official manager activities approved and excludes them from the personal booking limit', async () => {
+    const settings = await prisma.systemSetting.findUniqueOrThrow({ where: { id: 'default' } });
+    try {
+      await prisma.systemSetting.update({
+        where: { id: 'default' },
+        data: { maxActiveBookingsPerUser: 1 },
+      });
+      const official = await book(0);
+      expect(official.status).toBe('APPROVED');
+      expect((await prisma.booking.findUniqueOrThrow({ where: { id: official.id } })).isEvent).toBe(
+        true,
+      );
+      await request(app)
+        .post('/api/v1/bookings')
+        .set('Authorization', `Bearer ${tokens[0]}`)
+        .send({
+          roomId,
+          title: 'Personal request',
+          purpose: 'Personal use after event',
+          attendeeCount: 2,
+          isEvent: false,
+          ...slot(11),
+        })
+        .expect(201);
+      await request(app)
+        .post('/api/v1/bookings')
+        .set('Authorization', `Bearer ${tokens[0]}`)
+        .send({
+          roomId,
+          title: 'Second personal request',
+          purpose: 'Exceeds personal booking limit',
+          attendeeCount: 2,
+          isEvent: false,
+          ...slot(13),
+        })
+        .expect(409);
+    } finally {
+      await prisma.systemSetting.update({
+        where: { id: 'default' },
+        data: { maxActiveBookingsPerUser: settings.maxActiveBookingsPerUser },
+      });
+    }
+  });
+
   it('queues one rejection email with the manager reason and rejects repeated decisions', async () => {
     const booking = await book(1);
     await review(booking.id, 'reject', 'Phòng đang bảo trì').expect(200);

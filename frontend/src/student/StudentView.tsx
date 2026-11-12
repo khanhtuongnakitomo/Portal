@@ -27,7 +27,7 @@ export function StudentView() {
 
   const activeBookingObj = bookings.find((b) => b.id === activeBooking?.id)
 
-  const mine = useMemo(() => bookings.filter((b) => b.userId === currentUser?.id), [bookings, currentUser])
+  const mine = useMemo(() => bookings.filter((b) => b.userId === currentUser?.id && !b.isEvent), [bookings, currentUser])
   const active = mine.filter((b) => ACTIVE_STATUSES.includes(b.status))
   const nextPass = mine
     .filter((b) => b.status === 'KEY_CHECKED_OUT' || b.status === 'APPROVED')

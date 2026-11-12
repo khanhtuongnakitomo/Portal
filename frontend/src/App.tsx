@@ -8,9 +8,10 @@ import { ManagerView } from '@/manager/ManagerView'
 import { AdminView } from '@/admin/AdminView'
 import { ProfileView } from '@/components/ProfileView'
 import { AuroraBackdrop, CursorField } from '@/components/effects'
+import { canAccessRoute } from '@/lib/permissions'
 
 function Router() {
-  const { currentUser } = useStore()
+  const { currentUser, sessionReady } = useStore()
   const [route, go] = useHashRoute()
   const { locale } = useI18n()
 
@@ -24,14 +25,16 @@ function Router() {
 
   // Guard: unauthenticated users go to /auth; authenticated users leave /auth.
   useEffect(() => {
+    if (!sessionReady) return
     if (!currentUser && route !== '/auth') go('/auth')
     if (currentUser && route === '/auth') go(homeFor(currentUser.role))
-  }, [currentUser, route, go])
+  }, [currentUser, route, go, sessionReady])
 
   let page
-  if (!currentUser || route === '/auth') page = <AuthScreen go={go} />
+  if (!sessionReady) page = <main role="status" className="p-10 text-center">{locale === 'vi' ? 'Đang kiểm tra phiên đăng nhập…' : 'Checking your session…'}</main>
+  else if (!currentUser || route === '/auth') page = <AuthScreen go={go} />
   else if (route === '/profile') page = <ProfileView go={go} />
-  else if (routeRole[route] && routeRole[route] !== currentUser.role) page = <AccessDenied need={routeRole[route]!} go={go} />
+  else if (!canAccessRoute(route, currentUser.role)) page = <AccessDenied need={routeRole[route]!} go={go} />
   else if (route === '/student') page = <StudentView />
   else if (route === '/manager') page = <ManagerView />
   else page = <AdminView />

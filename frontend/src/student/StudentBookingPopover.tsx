@@ -104,8 +104,8 @@ export function StudentBookingPopover({
             : 'border-plum text-plum bg-plum/[0.07]'
 
   const studentName = u?.fullName || 'Student'
-  const hcmutId = u?.hcmutId || u?.studentCode || '2110123'
-  const utsId = u?.utsId || '14234567'
+  const hcmutId = u?.hcmutId || u?.studentCode || '—'
+  const utsId = u?.utsId || '—'
 
   return createPortal(
     <div

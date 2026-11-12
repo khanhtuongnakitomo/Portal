@@ -15,7 +15,7 @@ const demo = [
 ]
 
 export function AuthScreen({ go }: { go: (r: Route) => void }) {
-  const { loginAsync, registerAsync, users } = useStore()
+  const { loginAsync, registerAsync } = useStore()
   const [mode, setMode] = useState<'signin' | 'register'>('signin')
   const [form, setForm] = useState({ fullName: '', email: '', password: '', hcmutId: '', utsId: '' })
   const [error, setError] = useState<string | null>(null)
@@ -70,18 +70,6 @@ export function AuthScreen({ go }: { go: (r: Route) => void }) {
     }
   }
 
-  const hcmutTaken =
-    mode === 'register' &&
-    form.hcmutId.trim().length >= 5 &&
-    users.some((u) => u.hcmutId === form.hcmutId.trim().toUpperCase() || u.studentCode === form.hcmutId.trim().toUpperCase())
-
-  const utsTaken =
-    mode === 'register' &&
-    form.utsId.trim().length >= 5 &&
-    users.some((u) => u.utsId === form.utsId.trim().toUpperCase())
-
-  const codeTaken = hcmutTaken || utsTaken
-
   return (
     <div className="relative flex min-h-[calc(100vh-40px)] items-center justify-center overflow-hidden px-6 py-16">
       <div className="absolute top-4 right-6 z-20">
@@ -126,7 +114,7 @@ export function AuthScreen({ go }: { go: (r: Route) => void }) {
             <Field label="Email">
               <Input type="email" value={form.email} onChange={set('email')} placeholder="student@tne.edu.vn" autoComplete="email" />
             </Field>
-            <Field label="Password" hint={mode === 'register' ? 'min 6 chars' : undefined}>
+            <Field label="Password" hint={mode === 'register' ? '8+ chars · uppercase, lowercase, number' : undefined}>
               <Input
                 type="password"
                 value={form.password}
@@ -137,7 +125,7 @@ export function AuthScreen({ go }: { go: (r: Route) => void }) {
             </Field>
             {mode === 'register' && (
               <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-                <Field label="HCMUT Student ID" hint="required" error={hcmutTaken ? 'HCMUT ID already registered.' : null}>
+                <Field label="HCMUT Student ID" hint="required">
                   <Input
                     value={form.hcmutId}
                     onChange={(e) => setForm((f) => ({ ...f, hcmutId: e.target.value.toUpperCase().slice(0, 12) }))}
@@ -145,7 +133,7 @@ export function AuthScreen({ go }: { go: (r: Route) => void }) {
                     className="font-mono tracking-wider"
                   />
                 </Field>
-                <Field label="UTS Student ID" hint="required" error={utsTaken ? 'UTS ID already registered.' : null}>
+                <Field label="UTS Student ID" hint="required">
                   <Input
                     value={form.utsId}
                     onChange={(e) => setForm((f) => ({ ...f, utsId: e.target.value.toUpperCase().slice(0, 12) }))}
@@ -156,7 +144,7 @@ export function AuthScreen({ go }: { go: (r: Route) => void }) {
               </div>
             )}
             {error && <div className="border-l-2 border-plum bg-plum/[0.06] px-3 py-2 text-[13px] font-medium text-plum">{error}</div>}
-            <Button type="submit" size="md" className="mt-2 w-full" disabled={codeTaken || loading}>
+            <Button type="submit" size="md" className="mt-2 w-full" disabled={loading}>
               {loading ? (
                 <span className="flex items-center gap-2">
                   <span className="h-3 w-3 animate-spin rounded-full border-2 border-paper border-t-transparent" />

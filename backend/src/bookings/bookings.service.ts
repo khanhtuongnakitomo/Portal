@@ -57,6 +57,11 @@ export class BookingsService {
     const userId = typeof actor === 'string' ? actor : actor.id;
     const actorRole = typeof actor === 'string' ? Role.USER : actor.role;
     const isStaff = actorRole === Role.MANAGER || actorRole === Role.ADMIN;
+    if (dto.isEvent === true && !isStaff) {
+      throw new ForbiddenException('Only managers or admins can assign official activities');
+    }
+    // Keep legacy staff API calls as official; personal mode must be explicit.
+    const isOfficialActivity = isStaff && dto.isEvent !== false;
 
     const startTime = new Date(dto.startTime);
     const endTime = new Date(dto.endTime);
@@ -78,16 +83,17 @@ export class BookingsService {
       }
 
       const settings = await tx.systemSetting.findUniqueOrThrow({ where: { id: 'default' } });
-      if (isStaff) {
+      if (isOfficialActivity) {
         validateStaffBookingWindow(startTime, endTime, settings);
       } else {
         validateBookingWindow(startTime, endTime, settings);
       }
 
-      if (!isStaff) {
+      if (!isOfficialActivity) {
         const activeCount = await tx.booking.count({
           where: {
             userId,
+            isEvent: false,
             status: { in: [...activeBookingStatuses] },
             endTime: { gt: new Date() },
           },
@@ -99,7 +105,7 @@ export class BookingsService {
         }
       }
 
-      if (isStaff) {
+      if (isOfficialActivity) {
         const firmConflict = await tx.booking.findFirst({
           where: {
             roomId: dto.roomId,
@@ -183,12 +189,12 @@ export class BookingsService {
         room.blockEndTime > startTime;
       if (isBlocked) throw new ConflictException('This room is blocked for that time range');
 
-      const initialStatus = isStaff ? BookingStatus.APPROVED : BookingStatus.PENDING;
-      const reviewNote = isStaff
+      const initialStatus = isOfficialActivity ? BookingStatus.APPROVED : BookingStatus.PENDING;
+      const reviewNote = isOfficialActivity
         ? 'Scheduled room activity / event assigned by Manager'
         : undefined;
-      const reviewedById = isStaff ? userId : undefined;
-      const reviewedAt = isStaff ? new Date() : undefined;
+      const reviewedById = isOfficialActivity ? userId : undefined;
+      const reviewedAt = isOfficialActivity ? new Date() : undefined;
 
       const created = await tx.booking.create({
         data: {
@@ -197,6 +203,7 @@ export class BookingsService {
           title: dto.title.trim(),
           purpose: dto.purpose.trim(),
           attendeeCount: dto.attendeeCount,
+          isEvent: isOfficialActivity,
           passCode: randomBytes(8).toString('hex').toUpperCase(),
           startTime,
           endTime,
@@ -250,6 +257,7 @@ export class BookingsService {
           roomId: true,
           title: true,
           purpose: true,
+          isEvent: true,
           userId: true,
           reviewNote: true,
           passCode: true,
