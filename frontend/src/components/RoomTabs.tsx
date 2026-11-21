@@ -1,41 +1,16 @@
+import type { CSSProperties } from 'react'
 import type { Room } from '@/lib/types'
 import { cx } from './ui'
 
-export function getRoomColor(code?: string) {
-  if (code === '602') {
-    return {
-      code: '602',
-      label: 'Room 602',
-      dot: 'bg-emerald-600',
-      bar: 'bg-emerald-600',
-      badge: 'bg-emerald-600 text-white',
-      solid: 'border-emerald-700 bg-emerald-600 text-white',
-      soft: 'border-emerald-600 bg-emerald-500/15 text-emerald-950',
-      pending: 'border-dashed border-2 border-emerald-600 bg-emerald-500/12 text-emerald-950 hover:bg-emerald-500/20',
-    }
-  }
-  if (code === '605') {
-    return {
-      code: '605',
-      label: 'Room 605',
-      dot: 'bg-violet-600',
-      bar: 'bg-violet-600',
-      badge: 'bg-violet-600 text-white',
-      solid: 'border-violet-700 bg-violet-600 text-white',
-      soft: 'border-violet-600 bg-violet-500/15 text-violet-950',
-      pending: 'border-dashed border-2 border-violet-600 bg-violet-500/12 text-violet-950 hover:bg-violet-500/20',
-    }
-  }
-  return {
-    code: '601',
-    label: 'Room 601',
-    dot: 'bg-blue-600',
-    bar: 'bg-blue-600',
-    badge: 'bg-blue-600 text-white',
-    solid: 'border-blue-700 bg-blue-600 text-white',
-    soft: 'border-blue-600 bg-blue-500/15 text-blue-950',
-    pending: 'border-dashed border-2 border-blue-600 bg-blue-500/12 text-blue-950 hover:bg-blue-500/20',
-  }
+const ROOM_COLORS = [
+  { dot: 'bg-room-1', style: { '--room-color': 'var(--color-room-1)' } as CSSProperties },
+  { dot: 'bg-room-2', style: { '--room-color': 'var(--color-room-2)' } as CSSProperties },
+  { dot: 'bg-room-3', style: { '--room-color': 'var(--color-room-3)' } as CSSProperties },
+]
+
+export function roomColor(roomOrIndex: Room | number) {
+  const index = typeof roomOrIndex === 'number' ? roomOrIndex : roomOrIndex.code === '602' ? 1 : roomOrIndex.code === '605' ? 2 : 0
+  return ROOM_COLORS[index % ROOM_COLORS.length] ?? ROOM_COLORS[0]
 }
 
 /** Google Sheets-style room tabs that attach to the calendar sheet below. */
@@ -59,6 +34,7 @@ export function RoomTabs({
     <div className="scrollbar-thin flex items-end gap-1 overflow-x-auto pl-[64px]" role="tablist" data-cursor-zone>
       {showAllTab && (
         <button
+          type="button"
           role="tab"
           aria-selected={allOn}
           onClick={() => onChange('ALL')}
@@ -70,23 +46,24 @@ export function RoomTabs({
           {allOn && <span className="absolute inset-x-[-1px] top-[-1px] h-[3px] rounded-t-md bg-accent" />}
           <span className={cx('flex items-center gap-2 font-mono text-[14px] font-semibold', allOn ? 'text-ink' : 'text-graphite')}>
             <span className="flex items-center gap-1">
-              <span className="h-2.5 w-2.5 rounded-full bg-blue-600 shrink-0" />
-              <span className="h-2.5 w-2.5 rounded-full bg-emerald-600 shrink-0" />
-              <span className="h-2.5 w-2.5 rounded-full bg-violet-600 shrink-0" />
+              {rooms.map((r) => (
+                <span key={r.id} className={cx('h-2.5 w-2.5 shrink-0 rounded-full', roomColor(r).dot)} />
+              ))}
             </span>
             [ ALL ROOMS ]
             {totalBadge > 0 && <span className="rounded-sm bg-ink px-1 font-mono text-[10px] leading-[1.5] text-paper">{totalBadge}</span>}
           </span>
-          <span className="font-mono text-[10px] text-steel">601 · 602 · 605 COMBINED</span>
+          <span className="font-mono text-[10px] text-steel">{rooms.map((r) => r.code).join(' · ')} COMBINED</span>
         </button>
       )}
 
       {rooms.map((r, i) => {
         const on = r.id === activeId
         const n = badge?.(r.id) ?? 0
-        const c = getRoomColor(r.code)
+        const c = roomColor(r)
         return (
           <button
+            type="button"
             key={r.id}
             role="tab"
             aria-selected={on}
@@ -96,7 +73,7 @@ export function RoomTabs({
               on ? 'z-10 border-ink border-b-paper bg-paper' : 'border-rule bg-ice hover:border-edge hover:bg-paper',
             )}
           >
-            {on && <span className={cx('absolute inset-x-[-1px] top-[-1px] h-[3px] rounded-t-md', c.bar)} />}
+            {on && <span className={cx('absolute inset-x-[-1px] top-[-1px] h-[3px] rounded-t-md', c.dot)} />}
             <span className={cx('flex items-center gap-2 font-mono text-[14px] font-semibold', on ? 'text-ink' : 'text-graphite')}>
               <span className={cx('h-2.5 w-2.5 rounded-full shrink-0', c.dot)} />
               [ {String(i + 1).padStart(2, '0')} / ROOM {r.code} ]

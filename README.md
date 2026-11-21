@@ -18,7 +18,7 @@ Chi tiết toàn bộ triết lý thiết kế **Modern Treasury**, bảng màu 
 ## 📁 Repository Layout
 
 ```text
-backend/                 NestJS REST API + Prisma + PostgreSQL
+backend/                 Express 5 REST API + Prisma + PostgreSQL
 frontend/                React 19 + TypeScript + Tailwind CSS v4 Frontend
 docs/API_HANDOFF.md      Hợp đồng API và luồng tích hợp frontend
 docs/TNE_PORTAL_ERD.dbml ERD chi tiết để import vào dbdiagram.io
@@ -56,6 +56,8 @@ npm run build
 
 ## ⚙️ Hướng dẫn chạy Backend
 
+Sau khi copy `.env.example`, đặt `JWT_ACCESS_SECRET`, `ADMIN_EMAIL` và `ADMIN_PASSWORD` trong `backend/.env` trước khi chạy seed và khởi động API.
+
 ```powershell
 cd backend
 Copy-Item .env.example .env
@@ -67,8 +69,8 @@ pnpm db:seed
 pnpm start:dev
 ```
 
-Swagger API documentation tại: `http://localhost:3000/api/v1/docs`.  
-Hướng dẫn backend chi tiết: [backend/README.md](backend/README.md).
+Hợp đồng API: [docs/API_HANDOFF.md](docs/API_HANDOFF.md).
+Xem [hướng dẫn backend](backend/README.md) và [tài khoản demo / `pnpm db:reset-demo`](backend/README.md#tài-khoản-demo-và-reset-local).
 
 ---
 
@@ -77,4 +79,4 @@ Hướng dẫn backend chi tiết: [backend/README.md](backend/README.md).
 - **Icons:** `lucide-react`
 - **Typography:** IBM Plex Mono, Inter, Manrope
 - **Motion:** React Bits-inspired restrained animations (`BlurText`, `SplitText`, `Reveal`, `ScrollRevealText`, `ShinyText`)
-- **Backend:** NestJS, Prisma ORM, PostgreSQL, Docker
+- **Backend:** Express 5, Prisma ORM, PostgreSQL, Docker

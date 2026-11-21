@@ -36,11 +36,12 @@ react(),
       host: process.env.FIGMA_DEV_SERVER_HOST || '0.0.0.0',
       port: parseInt(process.env.PORT || '5173'),
       strictPort: false,
-      allowedHosts: true,
+      allowedHosts: ['localhost', '127.0.0.1', '.trycloudflare.com'],
       proxy: {
         '/api': {
           target: process.env.VITE_BACKEND_ORIGIN || 'http://127.0.0.1:3000',
           changeOrigin: true,
+          xfwd: true,
         },
       },
       watch: {
@@ -52,11 +53,12 @@ react(),
     preview: {
       host: process.env.FIGMA_DEV_SERVER_HOST || '0.0.0.0',
       port: parseInt(process.env.PORT || '5173'),
-      allowedHosts: true,
+      allowedHosts: ['localhost', '127.0.0.1', '.trycloudflare.com'],
       proxy: {
         '/api': {
           target: process.env.VITE_BACKEND_ORIGIN || 'http://127.0.0.1:3000',
           changeOrigin: true,
+          xfwd: true,
         },
       },
     }

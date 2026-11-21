@@ -1,38 +1,59 @@
-import { useMemo, useState } from 'react'
+import { useRef, useState } from 'react'
 import { ArrowRight, ChevronLeft, ChevronRight } from 'lucide-react'
 import { ACTIVE_STATUSES, useStore } from '@/lib/store'
-import { addDays, fmtShort, startOfWeek } from '@/lib/time'
+import { addDays, at, ensureWorkday, fmtShort, parseHM, startOfWeek } from '@/lib/time'
 import { Button, Eyebrow, Tag, cx } from '@/components/ui'
 import { NavItem, PageHeader, TopNav } from '@/components/Shell'
-import { RoomTabs } from '@/components/RoomTabs'
+import { RoomTabs, roomColor } from '@/components/RoomTabs'
 import { Reveal, ScrollRevealText, SplitText } from '@/components/effects'
-import { WeekCalendar, firstBookableWeek, type Selection } from './WeekCalendar'
+import { WeekCalendar, type Selection } from './WeekCalendar'
 import { BookingModal } from './BookingModal'
 import { MyBookingsDrawer } from './MyBookings'
 import { DigitalPass } from './DigitalPass'
 import { StudentBookingPopover } from './StudentBookingPopover'
 
 export function StudentView() {
-  const { rooms, bookings, blocks, settings, currentUser, notify } = useStore()
+  const { rooms, bookings, myBookings, blocks, settings, currentUser, notify, connection, refreshData, refreshMyBookings } = useStore()
   const [roomId, setRoomId] = useState<string>('ALL')
-  const [weekStart, setWeekStart] = useState(() => startOfWeek(firstBookableWeek(settings)))
+  const [weekStart, setWeekStart] = useState(() => startOfWeek(new Date()))
   const [selection, setSelection] = useState<Selection | null>(null)
   const [activeBooking, setActiveBooking] = useState<{ id: string; el: HTMLElement } | null>(null)
+  const checkingBooking = useRef<typeof activeBooking>(null)
   const [drawer, setDrawer] = useState(false)
 
-  const isAllRooms = roomId === 'ALL'
-  const room = isAllRooms ? rooms[0] : (rooms.find((r) => r.id === roomId) ?? rooms[0])
+  const selectedRoom = rooms.find((entry) => entry.id === roomId)
+  const isAllRooms = !selectedRoom
+  const room = selectedRoom ?? rooms.find((entry) => entry.status === 'AVAILABLE') ?? rooms[0]
+  const activeBookingObj = myBookings.find((b) => b.id === activeBooking?.id)
 
-  const activeBookingObj = bookings.find((b) => b.id === activeBooking?.id)
+  const now = new Date()
+  const active = myBookings.filter((b) => ACTIVE_STATUSES.includes(b.status) && new Date(b.end) > now)
+  const nextPass = myBookings
+    .filter((b) => b.passCode && (b.status === 'KEY_CHECKED_OUT' || (b.status === 'APPROVED' && new Date(b.end) > now)))
+    .sort((a, b) => Number(b.status === 'KEY_CHECKED_OUT') - Number(a.status === 'KEY_CHECKED_OUT') || +new Date(a.start) - +new Date(b.start))[0]
 
-  const mine = useMemo(() => bookings.filter((b) => b.userId === currentUser?.id), [bookings, currentUser])
-  const active = mine.filter((b) => ACTIVE_STATUSES.includes(b.status))
-  const nextPass = mine
-    .filter((b) => b.status === 'KEY_CHECKED_OUT' || b.status === 'APPROVED')
-    .sort((a, b) => (a.status === 'KEY_CHECKED_OUT' ? -1 : b.status === 'KEY_CHECKED_OUT' ? 1 : +new Date(a.start) - +new Date(b.start)))[0]
-
-  if (!currentUser || !room) return null
-  const thisWeek = startOfWeek(new Date())
+  if (!currentUser) return null
+  if (!room) return (
+    <>
+      <TopNav />
+      <main className="mx-auto max-w-[1440px] px-6 pt-10">
+        <PageHeader
+          eyebrow="STUDENT WORKSPACE · ROOM RESERVATION"
+          title={connection === 'connecting' ? 'Loading rooms…' : connection === 'offline' ? 'Room inventory unavailable' : 'No rooms listed'}
+          right={<Button variant="outline" onClick={() => setDrawer(true)}>My bookings</Button>}
+        />
+        {connection === 'offline' && <Button className="mt-4" onClick={() => void refreshData()}>Retry connection</Button>}
+      </main>
+      <MyBookingsDrawer open={drawer} onClose={() => setDrawer(false)} />
+    </>
+  )
+  const thisWeek = startOfWeek(now)
+  const openReservation = () => {
+    const { h, m } = parseHM(settings.openTime)
+    const day = ensureWorkday(weekStart > now ? weekStart : now)
+    setActiveBooking(null)
+    setSelection({ start: at(day, h, m), end: at(day, h, m + 30), roomId: room.id })
+  }
 
   return (
     <>
@@ -47,11 +68,11 @@ export function StudentView() {
         <PageHeader
           eyebrow="STUDENT WORKSPACE · ROOM RESERVATION"
           title="Reserve a room. Collect the key."
-          body="Choose a room tab, then drag across open slots in the weekly ledger. Bookings open two to seven days ahead; collect the physical key with your Student ID."
+          body="Choose a room and time in the weekly ledger, or use the reservation form. Collect the physical key with your student ID once approved."
           right={
             <Reveal stagger className="grid grid-cols-2 border-t border-l border-rule sm:grid-cols-4">
               {[
-                ['WINDOW', `T-${settings.minAdvanceDays} → T-${settings.maxAdvanceDays}`],
+                ['WINDOW', `Up to ${settings.maxAdvanceDays} days ahead`],
                 ['HOURS', `${settings.openTime}–${settings.closeTime}`],
                 ['MAX LENGTH', `${settings.maxDurationMinutes / 60}h`],
                 ['ACTIVE', `${active.length} / ${settings.maxActiveBookings}`],
@@ -115,15 +136,14 @@ export function StudentView() {
                     This week
                   </Button>
                   <div className="ml-2 font-mono text-[13px] font-semibold text-ink">
-                    {fmtShort(weekStart)} — {fmtShort(addDays(weekStart, 4))} · MON–FRI
+                    {fmtShort(weekStart)} — {fmtShort(addDays(weekStart, 6))} · MON–SUN
                   </div>
+                  <Button size="xs" onClick={openReservation}>New reservation</Button>
                 </div>
                 <div className="flex flex-wrap items-center gap-3 text-[11px] text-graphite">
                   {isAllRooms && (
                     <>
-                      <Legend swatch="bg-blue-600" label="RM 601" />
-                      <Legend swatch="bg-emerald-600" label="RM 602" />
-                      <Legend swatch="bg-violet-600" label="RM 605" />
+                      {rooms.map((entry) => <Legend key={entry.id} swatch={roomColor(entry).dot} label={`RM ${entry.code}`} />)}
                       <span className="text-rule">|</span>
                     </>
                   )}
@@ -148,16 +168,33 @@ export function StudentView() {
                     bookings={bookings}
                     blocks={blocks}
                     settings={settings}
-                    currentUserId={currentUser.id}
                     selection={selection}
                     onSelect={(s) => {
+                      checkingBooking.current = null
                       setActiveBooking(null)
                       setSelection(s)
                     }}
                     onReject={(m) => notify(m, 'error')}
-                    onEventClick={(b, el) => {
+                    onEventClick={async (b, el) => {
                       setSelection(null)
-                      setActiveBooking((prev) => (prev?.id === b.id ? null : { id: b.id, el }))
+                      const wasOpen = activeBooking?.id === b.id || checkingBooking.current?.id === b.id
+                      checkingBooking.current = null
+                      setActiveBooking(null)
+                      if (wasOpen) return
+                      const target = { id: b.id, el }
+                      const personal = myBookings.find((booking) => booking.id === b.id)
+                      if (personal?.status !== b.status || ((b.status === 'APPROVED' || b.status === 'KEY_CHECKED_OUT') && !personal?.passCode)) {
+                        checkingBooking.current = target
+                        const refreshed = await refreshMyBookings()
+                        if (checkingBooking.current !== target) return
+                        checkingBooking.current = null
+                        if (!el.isConnected) return
+                        if (!refreshed) {
+                          notify('Could not refresh the booking. Try again.', 'error')
+                          return
+                        }
+                      }
+                      setActiveBooking(target)
                     }}
                     activeId={activeBooking?.id}
                     allRooms={isAllRooms}
@@ -171,7 +208,7 @@ export function StudentView() {
           <Reveal as="aside" stagger className="flex flex-col gap-6">
             <div className="rounded-lg bg-ice p-6">
               <Eyebrow>
-                {isAllRooms ? 'ALL ROOMS · LEVEL 6' : `ROOM ${room.code} · LEVEL ${room.floor}`}
+                {isAllRooms ? 'ALL ROOMS' : `ROOM ${room.code} · LEVEL ${room.floor}`}
               </Eyebrow>
               <h3 className="mt-3 font-display text-feature font-w450 text-ink">
                 <SplitText key={isAllRooms ? 'all' : room.id} text={isAllRooms ? 'Combined Room Schedule' : room.name} />
@@ -179,7 +216,7 @@ export function StudentView() {
               <div className="mt-4 grid grid-cols-2 gap-px border border-rule bg-rule">
                 <div className="bg-paper px-3 py-2">
                   <div className="font-mono text-[10px] text-steel">APPROVAL</div>
-                  <div className="font-mono text-[13px] font-semibold text-accent">MANAGER</div>
+                  <div className="font-mono text-[13px] font-semibold text-accent">{isAllRooms ? 'VARIES BY ROOM' : room.autoApprove ? 'AUTO WHEN FREE' : 'MANAGER'}</div>
                 </div>
                 <div className="bg-paper px-3 py-2">
                   <div className="font-mono text-[10px] text-steel">KEY DESK</div>
@@ -187,7 +224,7 @@ export function StudentView() {
                 </div>
               </div>
               <div className="mt-4 flex flex-wrap gap-1.5">
-                {(isAllRooms ? ['Projector', 'PA System', 'Dual Display', 'Whiteboard Wall', 'Recording', 'Tiered Seating'] : room.features).map((f) => (
+                {(isAllRooms ? [...new Set(rooms.flatMap((entry) => entry.features))] : room.features).map((f) => (
                   <Tag key={f}>{f}</Tag>
                 ))}
               </div>
@@ -196,9 +233,9 @@ export function StudentView() {
             <div className="flex flex-col gap-3 border-t border-ink pt-4">
               <Eyebrow tone="ink">HOW IT WORKS</Eyebrow>
               {[
-                ['01', 'Drag across open slots on a highlighted day.'],
-                ['02', 'Confirm your contact details and purpose in the ledger entry.'],
-                ['03', 'Wait for Manager approval on your reservation.'],
+                ['01', 'Select an open calendar slot or start a new reservation.'],
+                ['02', 'Enter the purpose of the booking and number of attendees.'],
+                ['03', 'Check My bookings for the status of your reservation.'],
               ].map(([n, t]) => (
                 <div key={n} className="flex gap-3 border-b border-dashed border-rule pb-3 last:border-0">
                   <span className="font-mono text-[12px] font-semibold text-accent">{n}</span>
@@ -228,13 +265,14 @@ export function StudentView() {
         </div>
       </main>
 
-      <BookingModal room={room} rooms={rooms} allowRoomChange={isAllRooms} selection={selection} onClose={() => setSelection(null)} />
+      {selection && <BookingModal room={room} rooms={rooms} allowRoomChange={isAllRooms} selection={selection} onClose={() => setSelection(null)} />}
       <MyBookingsDrawer open={drawer} onClose={() => setDrawer(false)} />
       {activeBooking && activeBookingObj && (
         <StudentBookingPopover
+          key={activeBooking.id}
           booking={activeBookingObj}
           anchor={activeBooking.el}
-          onClose={() => setActiveBooking(null)}
+          onClose={() => setActiveBooking((current) => current?.id === activeBooking.id ? null : current)}
         />
       )}
     </>

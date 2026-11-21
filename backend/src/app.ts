@@ -11,13 +11,22 @@ import { CalendarQueryDto } from './bookings/dto/calendar-query.dto.js';
 import { CreateBookingDto } from './bookings/dto/create-booking.dto.js';
 import { ListBookingsDto } from './bookings/dto/list-bookings.dto.js';
 import { ManagerDayQueryDto } from './bookings/dto/manager-day-query.dto.js';
-import { RejectBookingDto, ReviewBookingDto } from './bookings/dto/review-booking.dto.js';
-import { ServiceUnavailableException } from './common/http-exceptions.js';
+import {
+  CheckoutKeyDto,
+  RejectBookingDto,
+  ReviewBookingDto,
+} from './bookings/dto/review-booking.dto.js';
+import { NotFoundException, ServiceUnavailableException } from './common/http-exceptions.js';
 import { validateDto, validateUuid } from './common/validate.js';
+import { validateEnvironment, type Environment } from './config/environment.js';
+import { createDevRouter } from './dev/dev.router.js';
+import { requireLocalClient } from './dev/local-client.middleware.js';
 import { Role } from './generated/prisma/client.js';
+import { authRateLimit } from './middleware/auth-rate-limit.middleware.js';
 import { createAuthMiddleware } from './middleware/auth.middleware.js';
 import { errorMiddleware } from './middleware/error.middleware.js';
 import { PrismaService } from './prisma/prisma.service.js';
+import { CancelRoomBlockDto } from './room-blocks/dto/cancel-room-block.dto.js';
 import { CreateRoomBlockDto } from './room-blocks/dto/create-room-block.dto.js';
 import { ListRoomBlocksDto } from './room-blocks/dto/list-room-blocks.dto.js';
 import { RoomBlocksService } from './room-blocks/room-blocks.service.js';
@@ -41,9 +50,16 @@ function wrap(fn: AsyncHandler) {
   };
 }
 
-export function createApp(customPrisma?: PrismaService): { app: Express; prisma: PrismaService } {
-  const prisma = customPrisma ?? new PrismaService();
-  const authService = new AuthService(prisma);
+export function createApp(
+  customPrisma?: PrismaService,
+  environment: Environment = validateEnvironment(process.env),
+): { app: Express; prisma: PrismaService } {
+  if (environment.devToolsEnabled && process.env.NODE_ENV === 'production') {
+    throw new Error('DEV_TOOLS_ENABLED cannot be true in production');
+  }
+
+  const prisma = customPrisma ?? new PrismaService(environment.databaseUrl);
+  const authService = new AuthService(prisma, environment.jwt);
   const usersService = new UsersService(prisma);
   const roomsService = new RoomsService(prisma);
   const bookingsService = new BookingsService(prisma);
@@ -51,12 +67,19 @@ export function createApp(customPrisma?: PrismaService): { app: Express; prisma:
   const settingsService = new SettingsService(prisma);
   const auditService = new AuditService(prisma);
 
-  const { authenticate, requireRoles } = createAuthMiddleware(prisma);
+  const { authenticate, optionalAuthenticate, requireRoles } = createAuthMiddleware(
+    prisma,
+    environment.jwt,
+  );
 
   const app: Express = express();
+  app.set('trust proxy', environment.trustProxy);
   app.use(helmet());
-  app.use(cors({ origin: true, credentials: true }));
-  app.use(express.json());
+  if (environment.devToolsEnabled) {
+    app.use(environment.apiPrefix, express.Router().use('/dev', requireLocalClient));
+  }
+  app.use(cors({ origin: environment.corsOrigins, credentials: true }));
+  app.use(express.json({ limit: '100kb' }));
 
   const router = express.Router();
 
@@ -80,6 +103,7 @@ export function createApp(customPrisma?: PrismaService): { app: Express; prisma:
   // Auth
   router.post(
     '/auth/register',
+    authRateLimit(5),
     wrap(async (req, res) => {
       const dto = await validateDto(RegisterDto, req.body);
       const result = await authService.register(dto);
@@ -89,6 +113,8 @@ export function createApp(customPrisma?: PrismaService): { app: Express; prisma:
 
   router.post(
     '/auth/login',
+    authRateLimit(30),
+    authRateLimit(10, true),
     wrap(async (req, res) => {
       const dto = await validateDto(LoginDto, req.body);
       const result = await authService.login(dto);
@@ -173,7 +199,7 @@ export function createApp(customPrisma?: PrismaService): { app: Express; prisma:
   router.get(
     '/admin/rooms',
     authenticate,
-    requireRoles(Role.ADMIN),
+    requireRoles(Role.ADMIN, Role.MANAGER),
     wrap(async (_req, res) => {
       const result = await roomsService.listAdmin();
       res.json(result);
@@ -218,9 +244,10 @@ export function createApp(customPrisma?: PrismaService): { app: Express; prisma:
   // Bookings
   router.get(
     '/bookings/calendar',
+    optionalAuthenticate,
     wrap(async (req, res) => {
       const dto = await validateDto(CalendarQueryDto, req.query);
-      const result = await bookingsService.calendar(dto);
+      const result = await bookingsService.calendar(dto, req.user ?? null);
       res.json(result);
     }),
   );
@@ -338,8 +365,8 @@ export function createApp(customPrisma?: PrismaService): { app: Express; prisma:
     requireRoles(Role.MANAGER, Role.ADMIN),
     wrap(async (req, res) => {
       const id = validateUuid(req.params.id);
-      const dto = await validateDto(ReviewBookingDto, req.body);
-      const result = await bookingsService.checkoutKey(id, req.user!.id, dto.note);
+      const dto = await validateDto(CheckoutKeyDto, req.body);
+      const result = await bookingsService.checkoutKey(id, req.user!.id, dto.passCode, dto.note);
       res.json(result);
     }),
   );
@@ -385,7 +412,12 @@ export function createApp(customPrisma?: PrismaService): { app: Express; prisma:
     requireRoles(Role.MANAGER, Role.ADMIN),
     wrap(async (req, res) => {
       const roomId = validateUuid(req.params.roomId, 'roomId');
-      const result = await roomBlocksService.cancel(roomId, req.user!.id);
+      const dto = await validateDto(CancelRoomBlockDto, req.body);
+      const expected =
+        dto.startTime && dto.endTime
+          ? { startTime: new Date(dto.startTime), endTime: new Date(dto.endTime) }
+          : undefined;
+      const result = await roomBlocksService.cancel(roomId, req.user!.id, expected);
       res.json(result);
     }),
   );
@@ -422,8 +454,12 @@ export function createApp(customPrisma?: PrismaService): { app: Express; prisma:
     }),
   );
 
-  const prefix = (process.env.API_PREFIX || 'api/v1').replace(/^\/+|\/+$/g, '');
-  app.use(`/${prefix}`, router);
+  if (environment.devToolsEnabled) {
+    router.use('/dev', createDevRouter(prisma, authService));
+  }
+
+  app.use(environment.apiPrefix, router);
+  app.use(environment.apiPrefix, (_req, _res, next) => next(new NotFoundException()));
 
   app.use(errorMiddleware);
 

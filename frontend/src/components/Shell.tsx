@@ -1,5 +1,5 @@
-import { useEffect, useState, type ReactNode } from 'react'
-import { ArrowRight, Check, LogOut, ShieldAlert, TriangleAlert } from 'lucide-react'
+import { useCallback, useEffect, useState, type ReactNode } from 'react'
+import { ArrowRight, LogOut, ShieldAlert, TriangleAlert } from 'lucide-react'
 import { useStore } from '@/lib/store'
 import type { Role } from '@/lib/types'
 import { Button, Eyebrow, Mono, cx } from './ui'
@@ -20,7 +20,8 @@ export function useHashRoute(): [Route, (r: Route) => void] {
     window.addEventListener('hashchange', on)
     return () => window.removeEventListener('hashchange', on)
   }, [])
-  return [route, (r) => (window.location.hash = r)]
+  const go = useCallback((r: Route) => { window.location.hash = r }, [])
+  return [route, go]
 }
 
 export function LogoMark({ size = 18, className }: { size?: number; className?: string }) {
@@ -34,49 +35,20 @@ export function LogoMark({ size = 18, className }: { size?: number; className?: 
   )
 }
 
-const roles: { role: Role | null; label: string; who: string }[] = [
-  { role: 'USER', label: 'USER', who: 'Student · SE184022' },
-  { role: 'MANAGER', label: 'MANAGER', who: 'Facilities · Duc Tran' },
-  { role: 'ADMIN', label: 'ADMIN', who: 'System · Giang Pham' },
-  { role: null, label: 'SIGNED OUT', who: 'Auth screen' },
-]
-
-export function RoleSwitcher({ go }: { go: (r: Route) => void }) {
-  const { currentUser, previewAs, logout, apiConnected } = useStore()
+export function ConnectionStatus() {
+  const { connection, sessionRecovery, retrySession } = useStore()
+  const live = connection === 'live'
   return (
     <div className="bg-forest text-paper">
-      <div className="mx-auto flex max-w-[1440px] flex-wrap items-center justify-between gap-x-4 gap-y-2 px-6 py-2">
-        <div className="flex items-center gap-2.5 font-mono text-[12px] text-white/75">
-          <span className={cx('h-2 w-2 rounded-full', apiConnected ? 'bg-tint animate-pulse' : 'bg-steel')} />
-          <span>{apiConnected ? 'API LIVE SYNC' : 'HYBRID STORAGE'} · ROLE PREVIEW</span>
+      <div className="mx-auto flex max-w-[1440px] flex-wrap items-center gap-2.5 px-6 py-2 font-mono text-[12px] text-white/75">
+        <div role="status" className="flex items-center gap-2.5">
+          <span aria-hidden className={cx('h-2 w-2 rounded-full', live ? 'bg-tint' : 'bg-white/60')} />
+          {sessionRecovery === 'checking' ? 'RESTORING SESSION…' : sessionRecovery === 'offline' ? 'COULD NOT RESTORE SESSION' :
+            live ? 'API LIVE SYNC' : connection === 'offline' ? 'API CONNECTION DEGRADED' : 'CONNECTING TO API'}
         </div>
-        <div className="flex flex-wrap gap-1">
-          {roles.map((r) => {
-            const active = r.role ? currentUser?.role === r.role : !currentUser
-            return (
-              <button
-                key={r.label}
-                onClick={() => {
-                  if (r.role) {
-                    previewAs(r.role)
-                    go(homeFor(r.role))
-                  } else {
-                    logout()
-                    go('/auth')
-                  }
-                }}
-                className={cx(
-                  'group flex items-center gap-2 rounded-md border px-2.5 py-1 font-mono text-[12px] font-semibold transition-colors',
-                  active ? 'border-tint bg-tint text-ink' : 'border-white/20 text-white/80 hover:border-white/50 hover:text-paper',
-                )}
-              >
-                {active && <Check size={12} strokeWidth={2.5} />}
-                {r.label}
-                <span className={cx('hidden font-sans text-[11px] font-normal lg:inline', active ? 'text-ink/60' : 'text-white/75')}>{r.who}</span>
-              </button>
-            )
-          })}
-        </div>
+        {sessionRecovery === 'offline' && (
+          <Button size="xs" variant="outline" onClick={() => void retrySession()}>Retry connection</Button>
+        )}
       </div>
     </div>
   )
@@ -85,7 +57,7 @@ export function RoleSwitcher({ go }: { go: (r: Route) => void }) {
 export function TopNav({ children }: { children?: ReactNode }) {
   const { currentUser, logout } = useStore()
   if (!currentUser) return null
-  const idCode = currentUser.studentCode && currentUser.role === 'USER' ? currentUser.studentCode : `STAFF-${currentUser.id.slice(2).toUpperCase()}`
+  const idCode = currentUser.role === 'USER' ? currentUser.studentCode : 'STAFF'
   return (
     <header className="sticky top-0 z-40 border-b border-rule bg-paper/95 shadow-nav backdrop-blur">
       <div className="mx-auto flex h-14 max-w-[1440px] items-center gap-6 px-6">
@@ -100,13 +72,10 @@ export function TopNav({ children }: { children?: ReactNode }) {
             <div className="text-[13px] font-medium leading-tight text-ink">{currentUser.fullName}</div>
             <div className="text-[11px] leading-tight text-steel">{currentUser.role === 'USER' ? 'Student' : currentUser.role === 'MANAGER' ? 'Facilities Manager' : 'System Administrator'}</div>
           </div>
-          <span className="rounded-md px-2 py-1 font-mono text-[13px] font-semibold text-ink shadow-subtle">{idCode}</span>
+          {idCode && <span className="rounded-md px-2 py-1 font-mono text-[13px] font-semibold text-ink shadow-subtle">{idCode}</span>}
           <Button
             variant="outline"
-            onClick={() => {
-              logout()
-              window.location.hash = '/auth'
-            }}
+            onClick={logout}
             className="!rounded-md !px-2 !py-1"
             aria-label="Log out"
           >
@@ -182,7 +151,7 @@ export function AccessDenied({ need, go }: { need: Role; go: (r: Route) => void 
 export function Footer() {
   const cols = [
     { t: 'Rooms', l: ['Seminar Hall 601', 'Studio Room 602', 'Lecture Theatre 605'] },
-    { t: 'Policy', l: ['Booking window 2–7 days', 'Key custody rules', 'Event priority'] },
+    { t: 'Policy', l: ['Booking limits', 'Key custody rules', 'Event priority'] },
     { t: 'Support', l: ['Facilities desk · Level 1', 'it-support@uts-tne.edu.vn', 'Ext. 6021'] },
   ]
   return (
@@ -196,7 +165,7 @@ export function Footer() {
               <div className="text-[14px] font-normal text-white/75">Room booking & key custody for UTS Transnational Education.</div>
             </div>
           </div>
-          <div className="font-mono text-[12px] text-white/75">BUILD 2.4.1 · NODE AP-SE-1 · ALL SYSTEMS NOMINAL</div>
+          <div className="font-mono text-[12px] text-white/75">UTS-TNE ROOM BOOKING</div>
         </div>
         <div className="grid grid-cols-2 gap-8 pt-8 md:grid-cols-4">
           {cols.map((c) => (
@@ -223,7 +192,7 @@ export function Footer() {
 export function Toasts() {
   const { toasts } = useStore()
   return (
-    <div className="pointer-events-none fixed right-6 bottom-6 z-[60] flex flex-col gap-2">
+    <div role="status" className="pointer-events-none fixed right-6 bottom-6 z-[60] flex flex-col gap-2">
       {toasts.map((t) => (
         <div
           key={t.id}

@@ -1,10 +1,9 @@
 import { useEffect, useMemo, useState } from 'react'
-import { createPortal } from 'react-dom'
-import { Calendar, Check, Clock, Sparkles, TriangleAlert, Users, X } from 'lucide-react'
+import { Check, Clock, Sparkles, TriangleAlert, X } from 'lucide-react'
 import { useLookups, useStore } from '@/lib/store'
 import type { Room } from '@/lib/types'
-import { at, fmtDate, fmtDuration, fmtRange, overlaps, parseHM, addDays } from '@/lib/time'
-import { Button, Eyebrow, Field, Input, Textarea, cx } from '@/components/ui'
+import { addDays, durationMin, ensureWorkday, fmtDate, fmtDuration, fmtRange, fmtTime, fromLocalInput, isWeekend, overlaps, parseHM, startOfDay, toLocalInput } from '@/lib/time'
+import { Button, Dialog, Eyebrow, Field, Input, StatusChip, cx } from '@/components/ui'
 import { CATEGORY_PRESETS, type ActivityCategory } from './types'
 
 export interface AssignModalInitial {
@@ -24,120 +23,77 @@ interface AssignActivityModalProps {
   onSuccess?: () => void
 }
 
-function toDateString(d: Date): string {
-  const year = d.getFullYear()
-  const month = String(d.getMonth() + 1).padStart(2, '0')
-  const day = String(d.getDate()).padStart(2, '0')
-  return `${year}-${month}-${day}`
-}
-
-function snapToWorkday(d: Date): Date {
-  const dow = d.getDay()
-  if (dow === 6) return addDays(d, 2)
-  if (dow === 0) return addDays(d, 1)
-  return d
-}
-
 function generateTimeOptions(openTime = '08:00', closeTime = '17:00', step = 30): string[] {
   const open = parseHM(openTime)
   const close = parseHM(closeTime)
   const startMin = open.h * 60 + open.m
   const endMin = close.h * 60 + close.m
   const options: string[] = []
-  for (let m = startMin; m <= endMin; m += step) {
+  for (let m = startMin; m < endMin; m += step) {
     const hh = String(Math.floor(m / 60)).padStart(2, '0')
     const mm = String(m % 60).padStart(2, '0')
     options.push(`${hh}:${mm}`)
   }
+  options.push(closeTime)
   return options
 }
 
-export function AssignActivityModal({
-  isOpen,
-  initial,
-  onClose,
-  onSuccess,
-}: AssignActivityModalProps) {
-  const store = useStore()
-  const { rooms, bookings, blocks, settings, notify } = store
+export function AssignActivityModal({ isOpen, ...props }: AssignActivityModalProps) {
+  return isOpen ? <AssignmentDraft {...props} /> : null
+}
+
+function AssignmentDraft({ initial, onClose, onSuccess }: Omit<AssignActivityModalProps, 'isOpen'>) {
+  const { rooms, bookings, blocks, settings, notify, assignRoomSchedule, setVisibleRange } = useStore()
   const { user } = useLookups()
 
-  const [mode, setMode] = useState<'EVENT' | 'BLOCK'>('EVENT')
-  const [roomId, setRoomId] = useState<string>(rooms[0]?.id ?? '')
-  const [dateStr, setDateStr] = useState<string>(() => toDateString(snapToWorkday(new Date())))
-  const [startTime, setStartTime] = useState<string>('09:00')
-  const [endTime, setEndTime] = useState<string>('11:00')
-  const [category, setCategory] = useState<ActivityCategory>('LECTURE')
-  const [title, setTitle] = useState<string>('')
-  const [notes, setNotes] = useState<string>('')
-  const [attendees, setAttendees] = useState<string>('')
-  const [error, setError] = useState<string | null>(null)
-  const [isSubmitting, setIsSubmitting] = useState(false)
-
-  // Sync state when initial payload changes
-  useEffect(() => {
-    if (!isOpen) return
-    setError(null)
-    if (initial) {
-      if (initial.roomId) setRoomId(initial.roomId)
-      if (initial.date) setDateStr(toDateString(snapToWorkday(initial.date)))
-      if (initial.startTime) setStartTime(initial.startTime)
-      if (initial.endTime) setEndTime(initial.endTime)
-      if (initial.mode) setMode(initial.mode)
-      if (initial.category) setCategory(initial.category)
-      if (initial.title) setTitle(initial.title)
-    } else {
-      setRoomId(rooms[0]?.id ?? '')
-      setDateStr(toDateString(snapToWorkday(new Date())))
-      setStartTime('09:00')
-      setEndTime('11:00')
-      setMode('EVENT')
-      setCategory('LECTURE')
-      setTitle('')
-      setNotes('')
-      setAttendees('')
-    }
-  }, [isOpen, initial, rooms])
-
-  // ESC to close
-  useEffect(() => {
-    if (!isOpen) return
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose()
-    }
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
-  }, [isOpen, onClose])
-
   const timeOptions = useMemo(
-    () => generateTimeOptions(settings.openTime, settings.closeTime, 30),
+    () => generateTimeOptions(settings.openTime, settings.closeTime),
     [settings.openTime, settings.closeTime],
   )
 
+  const [mode, setMode] = useState<'EVENT' | 'BLOCK'>(initial?.mode ?? 'EVENT')
+  const [roomId, setRoomId] = useState(initial?.roomId || rooms[0]?.id || '')
+  const [dateStr, setDateStr] = useState(() => toLocalInput(ensureWorkday(initial?.date ?? new Date())).slice(0, 10))
+  const [startTime, setStartTime] = useState(() =>
+    initial?.startTime ?? (timeOptions.slice(0, -1).includes('09:00') ? '09:00' : settings.openTime),
+  )
+  const [endTime, setEndTime] = useState(() => {
+    if (initial?.endTime) return initial.endTime
+    if (startTime < '11:00' && timeOptions.includes('11:00')) return '11:00'
+    const index = timeOptions.indexOf(startTime)
+    return timeOptions[Math.min(timeOptions.length - 1, Math.max(0, index) + 4)]
+  })
+  const [category, setCategory] = useState<ActivityCategory>(initial?.category ?? 'LECTURE')
+  const [title, setTitle] = useState(initial?.title ?? '')
+  const [notes, setNotes] = useState('')
+  const [attendees, setAttendees] = useState('')
+  const [error, setError] = useState<string | null>(null)
+  const [isSubmitting, setIsSubmitting] = useState(false)
+  const [confirmedBookings, setConfirmedBookings] = useState('')
+
   // Construct start and end Date objects
-  const { startDate, endDate, isValidRange, durationMinutes, isWeekend } = useMemo(() => {
-    const [y, m, d] = dateStr.split('-').map(Number)
-    const base = new Date(y, m - 1, d)
-    const sHm = parseHM(startTime)
-    const eHm = parseHM(endTime)
-    const sDate = at(base, sHm.h, sHm.m)
-    const eDate = at(base, eHm.h, eHm.m)
-    const sMin = sHm.h * 60 + sHm.m
-    const eMin = eHm.h * 60 + eHm.m
-    const dur = eMin - sMin
-    const isWeekend = base.getDay() === 0 || base.getDay() === 6
+  const { startDate, endDate, isValidRange, durationMinutes, weekend } = useMemo(() => {
+    const start = fromLocalInput(`${dateStr}T${startTime}`)
+    const end = fromLocalInput(`${dateStr}T${endTime}`)
     return {
-      startDate: sDate,
-      endDate: eDate,
-      isValidRange: dur > 0,
-      durationMinutes: dur,
-      isWeekend,
+      startDate: start,
+      endDate: end,
+      isValidRange: !!start && !!end && end > start,
+      durationMinutes: start && end ? durationMin(start, end) : 0,
+      weekend: !!start && isWeekend(start),
     }
   }, [dateStr, startTime, endTime])
 
+  useEffect(() => {
+    const selected = fromLocalInput(dateStr)
+    if (!selected) return
+    const from = startOfDay(selected)
+    setVisibleRange(from, addDays(from, 1))
+  }, [dateStr, setVisibleRange])
+
   // Overlap and displacement detection
   const { overlappingBookings, overlappingBlocks } = useMemo(() => {
-    if (!isValidRange || !roomId) return { overlappingBookings: [], overlappingBlocks: [] }
+    if (!isValidRange || !startDate || !endDate || !roomId) return { overlappingBookings: [], overlappingBlocks: [] }
     const bks = bookings.filter(
       (b) =>
         b.roomId === roomId &&
@@ -150,7 +106,10 @@ export function AssignActivityModal({
     return { overlappingBookings: bks, overlappingBlocks: blks }
   }, [bookings, blocks, roomId, startDate, endDate, isValidRange])
 
-  if (!isOpen) return null
+  const displaceable = overlappingBookings.filter((b) => b.status !== 'KEY_CHECKED_OUT')
+  const bookingIds = displaceable.map((b) => b.id).sort().join(',')
+  const displace = mode === 'BLOCK' && bookingIds !== '' && bookingIds === confirmedBookings
+  const close = () => { if (!isSubmitting) onClose() }
 
   const selectedRoom: Room | undefined = rooms.find((r) => r.id === roomId)
 
@@ -158,27 +117,31 @@ export function AssignActivityModal({
   const applyDuration = (hours: number) => {
     const sHm = parseHM(startTime)
     const startMins = sHm.h * 60 + sHm.m
-    const endMins = Math.min(17 * 60, startMins + hours * 60)
+    const closing = parseHM(settings.closeTime)
+    const endMins = Math.min(closing.h * 60 + closing.m, startMins + hours * 60)
     const hh = String(Math.floor(endMins / 60)).padStart(2, '0')
     const mm = String(endMins % 60).padStart(2, '0')
+    setConfirmedBookings('')
     setEndTime(`${hh}:${mm}`)
   }
 
   const applyFullDay = () => {
-    setStartTime('08:00')
-    setEndTime('17:00')
+    setConfirmedBookings('')
+    setStartTime(settings.openTime)
+    setEndTime(settings.closeTime)
   }
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
+    if (isSubmitting) return
     setError(null)
 
-    if (isWeekend) {
+    if (weekend) {
       setError('Activities can only be scheduled on workdays (Monday–Friday).')
       return
     }
 
-    if (!isValidRange) {
+    if (!isValidRange || !startDate || !endDate) {
       setError('End time must be strictly after start time.')
       return
     }
@@ -198,80 +161,38 @@ export function AssignActivityModal({
 
     setIsSubmitting(true)
 
-    const fullTitle = title.trim().startsWith(`[${category}]`) ? title.trim() : `[${category}] ${title.trim()}`
+    const activityTitle = title.trim()
     const fullPurpose = notes.trim() || `${category} scheduled by Facilities Desk`
 
     try {
-      // Use assignRoomSchedule if present on store (per instruction)
-      const storeWithAssign = store as typeof store & {
-        assignRoomSchedule?: (input: {
-          roomId: string
-          start: Date
-          end: Date
-          title: string
-          purpose: string
-          category?: string
-          mode?: 'EVENT' | 'BLOCK'
-          attendeeCount?: number
-        }) => string | null
-      }
-
-      if (typeof storeWithAssign.assignRoomSchedule === 'function') {
-        const err = storeWithAssign.assignRoomSchedule({
-          roomId,
-          start: startDate,
-          end: endDate,
-          title: fullTitle,
-          purpose: fullPurpose,
-          category,
-          mode,
-          attendeeCount: attendees ? parseInt(attendees, 10) : undefined,
-        })
-        if (err) {
-          setError(err)
-          setIsSubmitting(false)
-          return
-        }
-      } else {
-        // Fallback to store.createBlock
-        const err = store.createBlock({
-          roomId,
-          start: startDate,
-          end: endDate,
-          reason: `${fullTitle} · ${fullPurpose}`,
-        })
-        if (err) {
-          setError(err)
-          setIsSubmitting(false)
-          return
-        }
+      const err = await assignRoomSchedule({
+        roomId,
+        start: startDate,
+        end: endDate,
+        title: activityTitle,
+        purpose: fullPurpose,
+        category,
+        mode,
+        attendeeCount: attendees ? parseInt(attendees, 10) : undefined,
+        displace,
+      })
+      if (err) {
+        setError(err)
+        setConfirmedBookings('')
+        notify(err, 'error')
+        return
       }
 
       notify(`Room ${selectedRoom?.code ?? ''} scheduled for ${category} successfully.`)
       onSuccess?.()
       onClose()
-    } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : 'Failed to schedule room.')
     } finally {
       setIsSubmitting(false)
     }
   }
 
-  return createPortal(
-    <div
-      role="dialog"
-      aria-modal="true"
-      aria-labelledby="assign-modal-title"
-      className="fixed inset-0 z-50 flex items-center justify-center p-4 sm:p-6"
-    >
-      {/* Backdrop */}
-      <div
-        className="fixed inset-0 bg-ink/60 backdrop-blur-xs transition-opacity"
-        onClick={onClose}
-      />
-
-      {/* Modal Dialog Card */}
-      <div className="relative z-10 flex max-h-[92vh] w-full max-w-[620px] flex-col overflow-hidden rounded-lg border border-ink bg-paper shadow-2xl">
+  return (
+    <Dialog open onClose={close} labelledBy="assign-modal-title" className="max-w-[620px]">
         {/* Header */}
         <div className="flex items-center justify-between border-b border-rule bg-ice px-6 py-4">
           <div className="flex flex-col gap-0.5">
@@ -287,7 +208,8 @@ export function AssignActivityModal({
           </div>
           <button
             type="button"
-            onClick={onClose}
+            onClick={close}
+            disabled={isSubmitting}
             aria-label="Close modal"
             className="rounded-[4px] p-1.5 text-steel transition-colors hover:bg-paper hover:text-ink"
           >
@@ -297,7 +219,7 @@ export function AssignActivityModal({
 
         {/* Scrollable Form Body */}
         <form onSubmit={handleSubmit} className="overflow-y-auto px-6 py-5">
-          <div className="flex flex-col gap-5">
+          <fieldset disabled={isSubmitting} className="flex min-w-0 flex-col gap-5">
             {/* Mode Switcher */}
             <div>
               <div className="mb-1.5 flex items-center justify-between font-mono text-[11px] font-semibold text-steel uppercase">
@@ -309,7 +231,7 @@ export function AssignActivityModal({
               <div className="grid grid-cols-2 gap-1 rounded-[4px] border border-rule bg-ice p-1">
                 <button
                   type="button"
-                  onClick={() => setMode('EVENT')}
+                  onClick={() => { setMode('EVENT'); setConfirmedBookings('') }}
                   className={cx(
                     'flex flex-col items-center justify-center rounded-[3px] py-2 px-3 text-center transition-all',
                     mode === 'EVENT'
@@ -322,7 +244,7 @@ export function AssignActivityModal({
                 </button>
                 <button
                   type="button"
-                  onClick={() => setMode('BLOCK')}
+                  onClick={() => { setMode('BLOCK'); setConfirmedBookings('') }}
                   className={cx(
                     'flex flex-col items-center justify-center rounded-[3px] py-2 px-3 text-center transition-all',
                     mode === 'BLOCK'
@@ -331,7 +253,7 @@ export function AssignActivityModal({
                   )}
                 >
                   <span className="text-[13px]">Full Room Override</span>
-                  <span className="font-mono text-[10px] text-plum">DISPLACES BOOKINGS</span>
+                  <span className="font-mono text-[10px] text-plum">DISPLACEMENT REQUIRES CONFIRMATION</span>
                 </button>
               </div>
             </div>
@@ -351,7 +273,7 @@ export function AssignActivityModal({
                     <button
                       key={r.id}
                       type="button"
-                      onClick={() => setRoomId(r.id)}
+                      onClick={() => { setRoomId(r.id); setConfirmedBookings('') }}
                       className={cx(
                         'flex flex-col rounded-[4px] border px-3 py-2 text-left transition-all',
                         isSel
@@ -383,12 +305,7 @@ export function AssignActivityModal({
                     <button
                       key={p.category}
                       type="button"
-                      onClick={() => {
-                        setCategory(p.category)
-                        if (!title || CATEGORY_PRESETS.some((c) => title.startsWith(`[${c.category}]`))) {
-                          setTitle(`[${p.category}] `)
-                        }
-                      }}
+                      onClick={() => setCategory(p.category)}
                       className={cx(
                         'flex flex-col items-center justify-center rounded-[3px] border py-2 px-1 text-center transition-all',
                         isCat
@@ -408,21 +325,22 @@ export function AssignActivityModal({
             {/* Date & Time Range */}
             <div className="rounded-[4px] border border-rule bg-ice/40 p-3.5">
               <div className="grid gap-3 sm:grid-cols-3">
-                <Field label="Date" error={isWeekend ? 'Workdays only (Mon–Fri)' : undefined}>
+                <Field label="Date" error={weekend ? 'Workdays only (Mon–Fri)' : undefined}>
                   <Input
                     type="date"
                     value={dateStr}
-                    onChange={(e) => setDateStr(e.target.value)}
-                    className={cx("font-mono !text-[13px] bg-paper", isWeekend && "border-plum text-plum")}
+                    onChange={(e) => { setDateStr(e.target.value); setConfirmedBookings('') }}
+                    className={cx('font-mono !text-[13px] bg-paper', weekend && 'border-plum text-plum')}
                   />
                 </Field>
 
                 <Field label="Start Hour">
                   <select
                     value={startTime}
-                    onChange={(e) => setStartTime(e.target.value)}
+                    onChange={(e) => { setStartTime(e.target.value); setConfirmedBookings('') }}
                     className="h-[38px] w-full rounded-[2px] border border-edge bg-paper px-2.5 font-mono text-[13px] text-ink focus:border-ink focus:outline-hidden"
                   >
+                    {!timeOptions.slice(0, -1).includes(startTime) && <option value={startTime}>{startTime}</option>}
                     {timeOptions.slice(0, -1).map((t) => (
                       <option key={t} value={t}>
                         {t}
@@ -434,9 +352,10 @@ export function AssignActivityModal({
                 <Field label="End Hour">
                   <select
                     value={endTime}
-                    onChange={(e) => setEndTime(e.target.value)}
+                    onChange={(e) => { setEndTime(e.target.value); setConfirmedBookings('') }}
                     className="h-[38px] w-full rounded-[2px] border border-edge bg-paper px-2.5 font-mono text-[13px] text-ink focus:border-ink focus:outline-hidden"
                   >
+                    {!timeOptions.slice(1).includes(endTime) && <option value={endTime}>{endTime}</option>}
                     {timeOptions.slice(1).map((t) => (
                       <option key={t} value={t}>
                         {t}
@@ -447,7 +366,7 @@ export function AssignActivityModal({
               </div>
 
               {/* Weekend Validation Alert */}
-              {isWeekend && (
+              {weekend && (
                 <div className="mt-3 flex items-center gap-2 rounded-[3px] border border-plum/40 bg-plum/10 p-2.5 font-mono text-[11px] font-semibold text-plum">
                   <TriangleAlert size={14} className="shrink-0" />
                   <span>Activities can only be scheduled on workdays (Monday–Friday).</span>
@@ -480,7 +399,7 @@ export function AssignActivityModal({
                   onClick={applyFullDay}
                   className="rounded-[2px] border border-accent/40 bg-accent/5 px-2 py-0.5 font-mono text-[11px] font-semibold text-accent hover:bg-accent hover:text-paper"
                 >
-                  Full Day (08:00–17:00)
+                  Full Day ({settings.openTime}–{settings.closeTime})
                 </button>
                 <div className="ml-auto font-mono text-[11px] font-bold text-ink">
                   {isValidRange ? fmtDuration(durationMinutes) : 'Invalid Range'}
@@ -522,34 +441,39 @@ export function AssignActivityModal({
 
             {/* Live Conflict & Displacement Status Banner */}
             <div className="flex flex-col gap-2">
-              {overlappingBookings.length === 0 && overlappingBlocks.length === 0 ? (
+              {!startDate || !endDate || !isValidRange ? null : overlappingBookings.length === 0 && overlappingBlocks.length === 0 ? (
                 <div className="flex items-center gap-2 rounded-[4px] border border-[#0F62FE]/30 bg-tint/20 px-3.5 py-2.5 text-[12px] text-ink">
                   <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-accent text-paper">
                     <Check size={12} strokeWidth={2.5} />
                   </span>
                   <div className="flex flex-col">
-                    <span className="font-mono text-[11px] font-bold text-accent">SLOT FULLY CLEAR</span>
+                    <span className="font-mono text-[11px] font-bold text-accent">NO KNOWN CONFLICTS</span>
                     <span className="text-[12px] text-steel">
-                      No overlapping bookings or blocks on {fmtDate(startDate)} ({fmtRange(startDate, endDate)}).
+                      No conflicts shown on {fmtDate(startDate)} ({fmtTime(startDate)}–{fmtTime(endDate)}). The server checks again on submission.
                     </span>
                   </div>
                 </div>
               ) : mode === 'BLOCK' ? (
                 <div className="flex items-start gap-2.5 rounded-[4px] border border-plum/40 bg-plum/10 px-3.5 py-2.5 text-[12px] text-ink">
                   <TriangleAlert size={16} className="mt-0.5 shrink-0 text-plum" />
-                  <div className="flex flex-col gap-0.5">
-                    <span className="font-mono text-[11px] font-bold text-plum">
-                      PRIORITY OVERRIDE WILL DISPLACE {overlappingBookings.length} BOOKING(S)
-                    </span>
-                    <span className="text-[12px] text-graphite">
-                      {overlappingBookings.map((b) => {
-                        const u = user(b.userId)
-                        return `${u?.studentCode ?? 'Student'} (${fmtRange(b.start, b.end)})`
-                      }).join(', ')}
-                    </span>
-                    <span className="font-mono text-[10px] text-steel">
-                      Displaced requests will receive an automated university displacement notice.
-                    </span>
+                  <div className="flex flex-col gap-1.5">
+                    <span className="font-mono text-[11px] font-bold text-plum">SLOT CONFLICT DETECTED</span>
+                    <ul className="flex flex-col gap-1.5">
+                      {overlappingBookings.map((b) => (
+                        <li key={b.id} className="flex flex-wrap items-center gap-x-2 gap-y-1">
+                          <span>{user(b.userId)?.fullName ?? b.title} · {fmtRange(b.start, b.end)}</span>
+                          <StatusChip status={b.status} />
+                        </li>
+                      ))}
+                    </ul>
+                    {overlappingBookings.some((b) => b.status === 'KEY_CHECKED_OUT') && <span>Receive checked-out keys before blocking this slot.</span>}
+                    {overlappingBlocks.length > 0 && <span>Cancel the current room block before creating another.</span>}
+                    {displaceable.length > 0 && (
+                      <label className="flex items-center gap-2 font-semibold">
+                        <input type="checkbox" checked={displace} onChange={(event) => setConfirmedBookings(event.target.checked ? bookingIds : '')} />
+                        Decline {displaceable.length} overlapping {displaceable.length === 1 ? 'booking' : 'bookings'}
+                      </label>
+                    )}
                   </div>
                 </div>
               ) : (
@@ -567,22 +491,22 @@ export function AssignActivityModal({
             </div>
 
             {error && (
-              <div className="rounded-[4px] border border-plum bg-paper px-3.5 py-2.5 text-[13px] font-medium text-plum">
+              <div role="alert" className="rounded-[4px] border border-plum bg-paper px-3.5 py-2.5 text-[13px] font-medium text-plum">
                 {error}
               </div>
             )}
-          </div>
+          </fieldset>
 
           {/* Action Buttons */}
           <div className="mt-6 flex items-center justify-between border-t border-rule pt-4">
-            <Button type="button" variant="outline" onClick={onClose}>
+            <Button type="button" variant="outline" onClick={close} disabled={isSubmitting}>
               Cancel
             </Button>
 
             <Button
               type="submit"
               variant={mode === 'BLOCK' ? 'dark' : 'accent'}
-              disabled={isSubmitting || !isValidRange || !title.trim() || isWeekend}
+              disabled={isSubmitting || !roomId || !isValidRange || !title.trim() || weekend}
               className="gap-2"
             >
               <Check size={14} />
@@ -594,8 +518,6 @@ export function AssignActivityModal({
             </Button>
           </div>
         </form>
-      </div>
-    </div>,
-    document.body,
+    </Dialog>
   )
 }

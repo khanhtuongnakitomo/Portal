@@ -1,11 +1,11 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useState, type FormEvent } from 'react'
 import { ArrowRight, Info } from 'lucide-react'
 import { useStore } from '@/lib/store'
 import type { Room } from '@/lib/types'
-import { at, durationMin, fmtDate, fmtDuration, fmtTime, parseHM } from '@/lib/time'
-import { Button, Field, Input, LedgerRow, Modal, Select, Textarea, Mono, cx } from '@/components/ui'
+import { addDays, at, dayKey, durationMin, fmtDate, fmtDuration, fmtTime, fromLocalInput, overlaps, parseHM, toLocalInput } from '@/lib/time'
+import { Button, Field, Input, LedgerRow, Modal, Select, Textarea, cx } from '@/components/ui'
 import type { Selection } from './WeekCalendar'
-import { getRoomColor } from '@/components/RoomTabs'
+import { roomColor } from '@/components/RoomTabs'
 
 export function BookingModal({
   room,
@@ -17,92 +17,101 @@ export function BookingModal({
   room: Room
   rooms?: Room[]
   allowRoomChange?: boolean
-  selection: Selection | null
+  selection: Selection
   onClose: () => void
 }) {
-  const { createBooking, validateSlot, settings, bookings, currentUser } = useStore()
-  const availableRooms = rooms && rooms.length > 0 ? rooms : [room]
-  const [selectedRoomId, setSelectedRoomId] = useState(room.id)
-  const [start, setStart] = useState('')
-  const [end, setEnd] = useState('')
-  const [phone, setPhone] = useState('')
+  const { createBooking, validateSlot, settings, bookings, notify, setVisibleRange } = useStore()
+  const availableRooms = rooms?.length ? rooms : [room]
+  const [selectedRoomId, setSelectedRoomId] = useState(selection.roomId ?? room.id)
+  const [date, setDate] = useState(() => toLocalInput(selection.start).slice(0, 10))
+  const [start, setStart] = useState(() => fmtTime(selection.start))
+  const [end, setEnd] = useState(() => fmtTime(selection.end))
+  const [attendees, setAttendees] = useState('1')
   const [title, setTitle] = useState('')
   const [purpose, setPurpose] = useState('')
   const [error, setError] = useState<string | null>(null)
-
-  // Prefill contact number from the student's most recent booking
-  const lastPhone = bookings.filter((b) => b.userId === currentUser?.id).sort((a, b) => +new Date(b.createdAt) - +new Date(a.createdAt))[0]?.phone ?? ''
+  const [pending, setPending] = useState(false)
 
   useEffect(() => {
-    setSelectedRoomId(room.id)
-  }, [room.id, selection])
+    const day = fromLocalInput(date)
+    if (day) setVisibleRange(day, addDays(day, 1))
+  }, [date, setVisibleRange])
 
-  useEffect(() => {
-    if (selection) {
-      setStart(fmtTime(selection.start))
-      setEnd(fmtTime(selection.end))
-      setError(null)
-      setPurpose('')
-      setTitle('')
-      setPhone(lastPhone)
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selection])
-
-  if (!selection) return null
-  const day = selection.start
+  const chosenDay = fromLocalInput(date)
+  const day = chosenDay ?? selection.start
   const o = parseHM(settings.openTime)
   const c = parseHM(settings.closeTime)
   const times: string[] = []
-  for (let m = o.h * 60 + o.m; m <= c.h * 60 + c.m; m += 30) times.push(`${String(Math.floor(m / 60)).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`)
+  for (let m = o.h * 60 + o.m; m < c.h * 60 + c.m; m += 30) times.push(`${String(Math.floor(m / 60)).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`)
+  times.push(settings.closeTime)
+  const startTimes = times.slice(0, -1)
+  const endTimes = times.slice(1)
   const toDate = (hm: string) => {
     const { h, m } = parseHM(hm)
     return at(day, h, m)
   }
-  const s = toDate(start || fmtTime(selection.start))
-  const e = toDate(end || fmtTime(selection.end))
+  const s = toDate(start)
+  const e = toDate(end)
   const dur = durationMin(s, e)
 
   const activeRoom = availableRooms.find((r) => r.id === selectedRoomId) ?? room
-  const slotErr = validateSlot(activeRoom.id, s, e)
+  const slotErr = !chosenDay ? 'Choose a date.' : validateSlot(activeRoom.id, s, e)
+  const attendeeCount = Number(attendees)
+  const validCount = Number.isInteger(attendeeCount) && attendeeCount >= 1 && attendeeCount <= activeRoom.capacity
 
   const competingPending = bookings.filter(
-    (b) => b.roomId === activeRoom.id && b.status === 'PENDING' && new Date(b.start) < e && new Date(b.end) > s,
+    (b) => b.roomId === activeRoom.id && b.status === 'PENDING' && !b.isMine && overlaps(b.start, b.end, s, e),
   )
 
-  const submit = () => {
-    const err = createBooking({ roomId: activeRoom.id, start: s, end: e, phone, title, purpose })
-    if (err) setError(err)
-    else onClose()
+  const submit = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault()
+    if (pending || slotErr || !validCount || !title.trim() || !purpose.trim()) return
+    setError(null)
+    setPending(true)
+    try {
+      const error = await createBooking({ roomId: activeRoom.id, start: s, end: e, title, purpose, attendeeCount })
+      if (error) {
+        setError(error)
+        notify(error, 'error')
+      } else {
+        notify('Reservation submitted.')
+        onClose()
+      }
+    } finally {
+      setPending(false)
+    }
   }
 
   return (
-    <Modal open onClose={onClose} title="Confirm reservation" eyebrow={`NEW ENTRY · ROOM ${activeRoom.code}`} width="max-w-[720px]">
+    <Modal open onClose={() => { if (!pending) onClose() }} title="Confirm reservation" eyebrow={`NEW ENTRY · ROOM ${activeRoom.code}`} width="max-w-[720px]">
+      <form onSubmit={submit}>
       <div className="grid md:grid-cols-[1fr_260px]">
         <div className="flex flex-col gap-4 p-6">
           {allowRoomChange && availableRooms.length > 1 && (
             <div className="flex flex-col gap-1.5">
-              <label className="font-mono text-[11px] text-steel">SELECT ROOM</label>
+              <div className="font-mono text-[11px] text-steel">SELECT ROOM</div>
               <div className="grid grid-cols-3 gap-2">
                 {availableRooms.map((r) => {
-                  const rc = getRoomColor(r.code)
+                  const rc = roomColor(r)
                   const isSel = r.id === activeRoom.id
                   const errCheck = validateSlot(r.id, s, e)
                   return (
                     <button
                       key={r.id}
                       type="button"
-                      onClick={() => setSelectedRoomId(r.id)}
+                      aria-pressed={isSel}
+                      disabled={pending}
+                      onClick={() => { setSelectedRoomId(r.id); setError(null) }}
                       className={cx(
                         'flex flex-col items-start rounded-md border p-2 text-left transition-all',
-                        isSel ? rc.solid : 'border-rule bg-ice hover:border-edge',
+                        isSel ? 'border-accent bg-tint text-ink-blue' : 'border-rule bg-ice hover:border-edge',
                       )}
                     >
                       <div className="flex items-center gap-1.5 font-mono text-[13px] font-semibold">
-                        <span className={cx('h-2 w-2 rounded-full', isSel ? 'bg-white' : rc.dot)} />
+                        <span className={cx('h-2 w-2 rounded-full', rc.dot)} />
                         Room {r.code}
                       </div>
-                      <div className={cx('font-mono text-[10px]', isSel ? 'text-white/80' : 'text-steel')}>
+                      <div className="font-mono text-[10px] text-steel">
                         {errCheck ? 'Unavailable' : 'Available'}
                       </div>
                     </button>
@@ -112,24 +121,29 @@ export function BookingModal({
             </div>
           )}
 
+          <Field label="Date">
+            <Input type="date" value={date} min={dayKey(new Date())} max={dayKey(addDays(new Date(), settings.maxAdvanceDays))} required onChange={(ev) => { setDate(ev.target.value); setError(null) }} />
+          </Field>
           <div className="grid grid-cols-2 gap-3">
             <Field label="Start">
-              <Select value={start} onChange={(ev) => setStart(ev.target.value)} className="font-mono">
-                {times.slice(0, -1).map((t) => (
+              <Select value={start} onChange={(ev) => { setStart(ev.target.value); setError(null) }} className="font-mono">
+                {!startTimes.includes(start) && <option value={start}>{start}</option>}
+                {startTimes.map((t) => (
                   <option key={t}>{t}</option>
                 ))}
               </Select>
             </Field>
             <Field label="End">
-              <Select value={end} onChange={(ev) => setEnd(ev.target.value)} className="font-mono">
-                {times.slice(1).map((t) => (
+              <Select value={end} onChange={(ev) => { setEnd(ev.target.value); setError(null) }} className="font-mono">
+                {!endTimes.includes(end) && <option value={end}>{end}</option>}
+                {endTimes.map((t) => (
                   <option key={t}>{t}</option>
                 ))}
               </Select>
             </Field>
           </div>
-          <Field label="Phone number" hint="for key desk contact">
-            <Input type="tel" inputMode="tel" autoComplete="tel" value={phone} onChange={(ev) => setPhone(ev.target.value)} placeholder="+84 90 123 4567" className="font-mono" />
+          <Field label="Attendees" hint={`1–${activeRoom.capacity}`}>
+            <Input type="number" min={1} max={activeRoom.capacity} step={1} required value={attendees} onChange={(ev) => setAttendees(ev.target.value)} />
           </Field>
           <Field label="Booking title" hint={`${title.length}/60`}>
             <Input maxLength={60} value={title} onChange={(ev) => setTitle(ev.target.value)} placeholder="e.g. Capstone sprint review" />
@@ -144,7 +158,7 @@ export function BookingModal({
             </div>
           )}
 
-          {(error || slotErr) && <div className="border-l-2 border-plum bg-plum/[0.06] px-3 py-2 text-[13px] font-medium text-plum">{error || slotErr}</div>}
+          {(error || slotErr) && <div role="alert" className="border-l-2 border-plum bg-plum/[0.06] px-3 py-2 text-[13px] font-medium text-plum">{error || slotErr}</div>}
         </div>
         <aside className="flex flex-col justify-between gap-6 border-t border-rule bg-ice p-6 md:border-t-0 md:border-l">
           <div>
@@ -156,18 +170,19 @@ export function BookingModal({
           </div>
           <div className="flex gap-2 text-[12px] leading-[1.5] text-graphite">
             <Info size={14} className="mt-0.5 shrink-0 text-accent" />
-            <span>Requests enter the manager approval queue. Once approved, collect the key with your Student ID.</span>
+            <span>Requests may need manager approval. Once approved, collect the key with your Student ID.</span>
           </div>
         </aside>
       </div>
       <div className="flex items-center justify-between gap-3 border-t border-rule px-6 py-4">
-        <Button variant="ghost" onClick={onClose}>
+        <Button type="button" variant="ghost" onClick={onClose} disabled={pending}>
           Cancel
         </Button>
-        <Button size="md" onClick={submit} disabled={!!slotErr || !purpose.trim() || !title.trim() || !phone.trim()}>
-          Confirm reservation <ArrowRight size={16} />
+        <Button type="submit" size="md" disabled={pending || !!slotErr || !validCount || !purpose.trim() || !title.trim()}>
+          {pending ? 'Submitting…' : 'Confirm reservation'} <ArrowRight size={16} />
         </Button>
       </div>
+      </form>
     </Modal>
   )
 }

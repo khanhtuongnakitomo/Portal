@@ -2,6 +2,7 @@ import * as argon2 from 'argon2';
 import jwt from 'jsonwebtoken';
 import { ConflictException, UnauthorizedException } from '../common/http-exceptions.js';
 import type { JwtPayload } from '../common/interfaces/jwt-payload.interface.js';
+import type { Environment } from '../config/environment.js';
 import { Prisma, UserStatus } from '../generated/prisma/client.js';
 import { PrismaService } from '../prisma/prisma.service.js';
 import type { LoginDto } from './dto/login.dto.js';
@@ -19,7 +20,10 @@ const safeUserSelect = {
 type SafeUserRecord = Prisma.UserGetPayload<{ select: typeof safeUserSelect }>;
 
 export class AuthService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly jwtConfig: Environment['jwt'],
+  ) {}
 
   async register(dto: RegisterDto) {
     const email = dto.email.trim().toLowerCase();
@@ -65,7 +69,7 @@ export class AuthService {
     return this.issueAccess(user);
   }
 
-  private issueAccess(user: SafeUserRecord) {
+  issueAccess(user: SafeUserRecord) {
     const publicUser = {
       id: user.id,
       email: user.email,
@@ -75,16 +79,12 @@ export class AuthService {
       status: user.status,
     };
     const payload: JwtPayload = { sub: user.id, email: user.email, type: 'access' };
-    const secret =
-      process.env.JWT_ACCESS_SECRET || 'replace-with-at-least-32-random-characters-access';
-    const expiresIn = Number(process.env.JWT_ACCESS_TTL_SECONDS ?? 28_800);
-    const issuer = process.env.JWT_ISSUER || 'tne-portal-api';
-    const audience = process.env.JWT_AUDIENCE || 'tne-portal-client';
+    const { secret, expiresIn, issuer, audience } = this.jwtConfig;
 
     const accessToken = jwt.sign(payload, secret, {
       expiresIn,
-      issuer,
-      audience,
+      ...(issuer ? { issuer } : {}),
+      ...(audience ? { audience } : {}),
     });
     return { accessToken, expiresIn, user: publicUser };
   }

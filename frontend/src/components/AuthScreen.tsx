@@ -2,17 +2,11 @@ import { useState, type FormEvent } from 'react'
 import { ArrowRight } from 'lucide-react'
 import { useStore } from '@/lib/store'
 import { Button, Eyebrow, Field, Input, cx } from './ui'
-import { LogoMark, homeFor, type Route } from './Shell'
+import { LogoMark } from './Shell'
 import { BlurText, Reveal } from './effects'
 
-const demo = [
-  { role: 'USER' as const, label: 'Student', email: 'student@tne.edu.vn', pw: 'Student123456!' },
-  { role: 'MANAGER' as const, label: 'Facilities Manager', email: 'manager@tne.edu.vn', pw: 'Manager123456!' },
-  { role: 'ADMIN' as const, label: 'System Admin', email: 'admin@tne.edu.vn', pw: 'Admin12345678!' },
-]
-
-export function AuthScreen({ go }: { go: (r: Route) => void }) {
-  const { loginAsync, registerAsync, users } = useStore()
+export function AuthScreen() {
+  const { login, register, notify } = useStore()
   const [mode, setMode] = useState<'signin' | 'register'>('signin')
   const [form, setForm] = useState({ fullName: '', email: '', password: '', studentCode: '' })
   const [error, setError] = useState<string | null>(null)
@@ -21,49 +15,20 @@ export function AuthScreen({ go }: { go: (r: Route) => void }) {
 
   const submit = async (e: FormEvent) => {
     e.preventDefault()
+    if (loading) return
     setError(null)
     setLoading(true)
     try {
-      if (mode === 'signin') {
-        const res = await loginAsync(form.email, form.password)
-        if (res.error) {
-          setError(res.error)
-        } else if (res.user) {
-          go(homeFor(res.user.role))
-        }
-      } else {
-        const res = await registerAsync(form)
-        if (res.error) {
-          setError(res.error)
-        } else if (res.user) {
-          go(homeFor(res.user.role))
-        }
+      const error = mode === 'signin' ? await login(form.email, form.password) : await register(form)
+      if (error) {
+        setError(error)
+        notify(error, 'error')
       }
+      setForm((current) => ({ ...current, password: '' }))
     } finally {
       setLoading(false)
     }
   }
-
-  const quickSignIn = async (email: string, pw: string) => {
-    setForm((f) => ({ ...f, email, password: pw }))
-    setError(null)
-    setLoading(true)
-    try {
-      const res = await loginAsync(email, pw)
-      if (res.error) {
-        setError(res.error)
-      } else if (res.user) {
-        go(homeFor(res.user.role))
-      }
-    } finally {
-      setLoading(false)
-    }
-  }
-
-  const codeTaken =
-    mode === 'register' &&
-    form.studentCode.length >= 8 &&
-    users.some((u) => u.studentCode === form.studentCode.trim().toUpperCase())
 
   return (
     <div className="relative flex min-h-[calc(100vh-40px)] items-center justify-center overflow-hidden px-6 py-16">
@@ -84,6 +49,8 @@ export function AuthScreen({ go }: { go: (r: Route) => void }) {
             {(['signin', 'register'] as const).map((m) => (
               <button
                 key={m}
+                type="button"
+                disabled={loading}
                 onClick={() => {
                   setMode(m)
                   setError(null)
@@ -101,14 +68,16 @@ export function AuthScreen({ go }: { go: (r: Route) => void }) {
             <Eyebrow>{mode === 'signin' ? '01 / AUTHENTICATE' : '01 / NEW STUDENT ACCOUNT · ROLE=USER'}</Eyebrow>
             {mode === 'register' && (
               <Field label="Full name">
-                <Input value={form.fullName} onChange={set('fullName')} placeholder="Nguyen Van An" autoComplete="name" />
+                <Input required value={form.fullName} onChange={set('fullName')} placeholder="Nguyen Van An" autoComplete="name" />
               </Field>
             )}
             <Field label="Email">
-              <Input type="email" value={form.email} onChange={set('email')} placeholder="student@tne.edu.vn" autoComplete="email" />
+              <Input required type="email" value={form.email} onChange={set('email')} autoComplete="email" />
             </Field>
-            <Field label="Password" hint={mode === 'register' ? 'min 6 chars' : undefined}>
+            <Field label="Password" hint={mode === 'register' ? 'At least 8 characters, with uppercase, lowercase and a number' : undefined}>
               <Input
+                required
+                minLength={mode === 'register' ? 8 : undefined}
                 type="password"
                 value={form.password}
                 onChange={set('password')}
@@ -117,17 +86,18 @@ export function AuthScreen({ go }: { go: (r: Route) => void }) {
               />
             </Field>
             {mode === 'register' && (
-              <Field label="Student ID · studentCode" hint="unique · required" error={codeTaken ? 'This Student ID is already registered.' : null}>
+              <Field label="Student ID · studentCode" hint="unique · required">
                 <Input
+                  required
+                  maxLength={50}
                   value={form.studentCode}
-                  onChange={(e) => setForm((f) => ({ ...f, studentCode: e.target.value.toUpperCase().slice(0, 8) }))}
-                  placeholder="SE184022"
+                  onChange={set('studentCode')}
                   className="font-mono tracking-wider"
                 />
               </Field>
             )}
-            {error && <div className="border-l-2 border-plum bg-plum/[0.06] px-3 py-2 text-[13px] font-medium text-plum">{error}</div>}
-            <Button type="submit" size="md" className="mt-2 w-full" disabled={codeTaken || loading}>
+            {error && <div role="alert" className="border-l-2 border-plum bg-plum/[0.06] px-3 py-2 text-[13px] font-medium text-plum">{error}</div>}
+            <Button type="submit" size="md" className="mt-2 w-full" disabled={loading}>
               {loading ? (
                 <span className="flex items-center gap-2">
                   <span className="h-3 w-3 animate-spin rounded-full border-2 border-paper border-t-transparent" />
@@ -145,45 +115,6 @@ export function AuthScreen({ go }: { go: (r: Route) => void }) {
               </p>
             )}
           </form>
-          {mode === 'signin' && (
-            <div className="border-t border-rule bg-ice px-6 py-4">
-              <div className="mb-2 flex items-center justify-between">
-                <Eyebrow tone="steel" className="!text-[11px]">DEMO CREDENTIALS · 1-CLICK ACCESS</Eyebrow>
-                <span className="font-mono text-[10px] text-steel">CLICK TO FILL OR SIGN IN</span>
-              </div>
-              <div className="flex flex-col gap-1.5">
-                {demo.map((d) => (
-                  <div
-                    key={d.role}
-                    className="group flex flex-wrap items-center justify-between gap-2 rounded-md border border-edge/60 bg-paper/80 px-3 py-2 text-left transition hover:border-accent hover:bg-paper"
-                  >
-                    <button
-                      type="button"
-                      onClick={() => setForm((f) => ({ ...f, email: d.email, password: d.pw }))}
-                      className="flex flex-1 items-center gap-2.5 text-left"
-                      title="Click to populate form"
-                    >
-                      <span className="w-16 font-mono text-[11px] font-semibold text-meta">{d.role}</span>
-                      <div className="min-w-0 flex-1">
-                        <div className="truncate text-[13px] font-medium text-ink">{d.email}</div>
-                        <div className="font-mono text-[11px] text-steel">{d.pw}</div>
-                      </div>
-                    </button>
-                    <Button
-                      type="button"
-                      size="xs"
-                      variant="outline"
-                      disabled={loading}
-                      onClick={() => quickSignIn(d.email, d.pw)}
-                      className="!rounded !px-2 !py-0.5 text-[11px]"
-                    >
-                      Quick Sign In <ArrowRight size={11} />
-                    </Button>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
         </Reveal>
       </div>
     </div>

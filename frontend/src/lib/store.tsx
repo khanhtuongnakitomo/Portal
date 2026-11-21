@@ -1,36 +1,7 @@
-import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
-import type { AuditLog, Booking, Role, Room, RoomBlock, Settings, User } from './types'
-import { makePassCode, seedAudit, seedBlocks, seedBookings, seedRooms, seedSettings, seedUsers, uid } from './seed'
-import { addDays, daysBetween, durationMin, isWeekend, overlaps, parseHM, startOfDay } from './time'
-import {
-  apiApproveBooking,
-  apiCancelBooking,
-  apiCancelRoomBlock,
-  apiCheckoutKey,
-  apiCreateBooking,
-  apiCreateManager,
-  apiCreateRoom,
-  apiCreateRoomBlock,
-  apiGetAdminRooms,
-  apiGetAuditLogs,
-  apiGetCalendar,
-  apiGetRooms,
-  apiGetSettings,
-  apiGetUsers,
-  apiLogin,
-  apiRegister,
-  apiRejectBooking,
-  apiReturnKey,
-  apiUpdateRoom,
-  apiUpdateSettings,
-  apiUpdateUserRole,
-  apiUpdateUserStatus,
-  clearAuth,
-  encodeRoomToBackend,
-  setStoredToken,
-  setStoredUser,
-  USER_KEY,
-} from './api'
+import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from 'react'
+import { createApi, mapUser, type ApiAuth, type ApiResponse } from './api'
+import { addDays, at, CAMPUS_TZ, durationMin, isWeekend, overlaps, parseHM, sameDay, startOfWeek, toCampusIso } from './time'
+import type { AccountStatus, AuditLog, Booking, Role, Room, RoomBlock, RoomStatus, Settings, User } from './types'
 
 export interface Toast {
   id: number
@@ -41,957 +12,639 @@ export interface Toast {
 export const ACTIVE_STATUSES: Booking['status'][] = ['PENDING', 'APPROVED', 'KEY_CHECKED_OUT']
 
 type Result = string | null
+type UserQuery = { page: number; search?: string; role?: Role; status?: AccountStatus }
+type AuditQuery = { page: number; action?: string; targetType?: string }
+type Slot = { roomId: string; start: Date; end: Date }
+type BookingInput = Slot & { title: string; purpose: string; attendeeCount: number }
+type BlockInput = Slot & { reason: string; displace: boolean }
+type BlockInterval = Pick<Slot, 'start' | 'end'>
+type Session = { token: string; user: User; expiresAt: number }
+type Read = 'calendar' | 'rooms' | 'settings' | 'mine' | 'today' | 'overdue' | 'pending' | 'users' | 'audit'
+type Api = ReturnType<typeof createApi>
+type CalendarRange = { from: Date; to: Date }
+type CalendarRead = { range: CalendarRange; started: number; applied: number; pending: boolean; ok?: boolean }
 
 export interface Store {
   currentUser: User | null
   users: User[]
+  usersTotal: number
   rooms: Room[]
   bookings: Booking[]
+  myBookings: Booking[]
   blocks: RoomBlock[]
+  managerToday: Booking[]
+  overdueKeys: Booking[]
+  pendingQueue: Booking[]
   settings: Settings
+  settingsLoaded: boolean
   audit: AuditLog[]
+  auditTotal: number
   toasts: Toast[]
-  apiConnected: boolean
-  isLoading: boolean
-  notify: (message: string, tone?: Toast['tone']) => void
-  login: (email: string, password: string) => Result
-  register: (input: { fullName: string; email: string; password: string; studentCode: string }) => Result
-  logout: () => void
-  previewAs: (role: Role) => void
-  createBooking: (input: { roomId: string; start: Date; end: Date; phone: string; title: string; purpose: string }) => Result
-  cancelBooking: (id: string) => void
-  approveBooking: (id: string, note?: string) => void
-  rejectBooking: (id: string, note: string) => Result
-  checkoutKey: (id: string) => void
-  returnKey: (id: string) => void
-  createBlock: (input: { roomId: string; start: Date; end: Date; reason: string }) => Result
-  cancelBlock: (id: string) => void
-  deleteBlock?: (id: string) => void
-  saveRoom: (room: Room) => Result
-  deleteRoom: (id: string) => void
-  updateUserRole: (id: string, role: Role, studentCode?: string) => Result
-  toggleUserStatus: (id: string) => void
-  updateSettings: (s: Settings) => Result
-  validateSlot: (roomId: string, start: Date, end: Date, ignoreBookingId?: string) => Result
-  refreshData: () => Promise<void>
-  loginAsync: (email: string, password: string) => Promise<{ error: string | null; user?: User }>
-  registerAsync: (input: { fullName: string; email: string; password: string; studentCode: string }) => Promise<{ error: string | null; user?: User }>
-  createManagerAccount: (input: { fullName: string; email: string; password: string }) => Promise<string | null>
-  assignRoomSchedule: (input: {
-    roomId: string
-    start: Date
-    end: Date
-    title: string
-    purpose: string
-    category?: string
-    mode?: 'EVENT' | 'BLOCK'
-    attendeeCount?: number
-  }) => string | null
+  connection: 'connecting' | 'live' | 'offline'
+  sessionRecovery: 'checking' | 'offline' | null
+  retrySession(): Promise<void>
+  notify(message: string, tone?: Toast['tone']): void
+  login(email: string, password: string): Promise<Result>
+  startSession(auth: ApiAuth): void
+  register(input: { fullName: string; email: string; password: string; studentCode: string }): Promise<Result>
+  logout(): void
+  setVisibleRange(from: Date, to: Date): void
+  refreshData(): Promise<void>
+  refreshSettings(): Promise<void>
+  refreshMyBookings(): Promise<boolean>
+  refreshKeyDesk(): Promise<void>
+  createBooking(input: BookingInput): Promise<Result>
+  cancelBooking(id: string): Promise<Result>
+  approveBooking(id: string, note?: string): Promise<Result>
+  rejectBooking(id: string, note: string): Promise<Result>
+  checkoutKey(id: string, passCode: string): Promise<Result>
+  returnKey(id: string): Promise<Result>
+  createBlock(input: BlockInput): Promise<Result>
+  cancelBlock(roomId: string, expected?: BlockInterval): Promise<Result>
+  saveRoom(room: Room): Promise<Result>
+  setRoomStatus(id: string, status: RoomStatus): Promise<Result>
+  updateUserRole(id: string, role: Role, studentCode?: string): Promise<Result>
+  setUserStatus(id: string, status: AccountStatus): Promise<Result>
+  createManagerAccount(input: { fullName: string; email: string; password: string }): Promise<Result>
+  loadUsers(query: UserQuery): Promise<void>
+  loadAudit(query: AuditQuery): Promise<void>
+  updateSettings(settings: Settings): Promise<Result>
+  assignRoomSchedule(input: Slot & { title: string; purpose: string; category?: string; mode?: 'EVENT' | 'BLOCK'; attendeeCount?: number; displace?: boolean }): Promise<Result>
+  validateSlot(roomId: string, start: Date, end: Date, ignoreBookingId?: string): Result
+  user(id: string): User | undefined
+  room(id: string): Room | undefined
 }
 
 const Ctx = createContext<Store | null>(null)
+// One atomic storage item contains the bearer token, display identity and expiry.
+const TOKEN_KEY = 'tne_access_token'
+const EXPIRED = 'Session expired'
+const SESSION_CHANGED = 'The session changed. Please try again.'
+const INITIAL_SETTINGS: Settings = {
+  timezone: CAMPUS_TZ,
+  openTime: '08:00',
+  closeTime: '17:00',
+  maxDurationMinutes: 240,
+  maxAdvanceDays: 7,
+  maxActiveBookings: 3,
+}
 
-function loadLocal<T>(key: string, fallback: T): T {
+function readSession(serialized: string | null): Session | null {
+  if (!serialized) return null
   try {
-    const raw = localStorage.getItem(key)
-    if (!raw) return fallback
-    return JSON.parse(raw) as T
+    const session = JSON.parse(serialized) as Session
+    return session && typeof session.token === 'string' && session.token && Number.isFinite(session.expiresAt) ? session : null
   } catch {
-    return fallback
+    return null
   }
 }
 
-function loadUsers(): User[] {
-  const saved = loadLocal<User[]>('tne_v6_users', [])
-  if (!saved || saved.length === 0) return seedUsers
-
-  const merged = saved.map((u) => {
-    const lower = u.email.toLowerCase()
-    if (lower.startsWith('manager@') || lower.includes('d.tran@')) return { ...u, role: 'MANAGER' as Role }
-    if (lower.startsWith('admin@') || lower.includes('g.pham@')) return { ...u, role: 'ADMIN' as Role }
-    return u
-  })
-  for (const seed of seedUsers) {
-    const idx = merged.findIndex((u) => u.id === seed.id || u.email.toLowerCase() === seed.email.toLowerCase())
-    if (idx === -1) {
-      merged.push(seed)
-    } else if (seed.id === 'u_stu' || seed.id === 'u_mgr' || seed.id === 'u_adm') {
-      merged[idx] = { ...merged[idx], ...seed, role: seed.role }
-    }
-  }
-  return merged
+function sameIdentity(saved: Session | null, active: Session | null) {
+  return !!saved && !!active && saved.token === active.token && JSON.stringify(saved.user) === JSON.stringify(active.user)
 }
 
-function loadInitialUserId(users: User[]): string | null {
-  try {
-    const raw = localStorage.getItem(USER_KEY)
-    if (raw) {
-      const u = JSON.parse(raw)
-      if (u?.id && users.some((x) => x.id === u.id)) return u.id
-      if (u?.id) return u.id
-    }
-  } catch {}
-  return null
+function clearLegacyStorage() {
+  localStorage.removeItem('tne_current_user')
+  for (let i = localStorage.length - 1; i >= 0; i--) {
+    const key = localStorage.key(i)
+    if (key?.startsWith('tne_v')) localStorage.removeItem(key)
+  }
+}
+
+function defaultRange() {
+  const week = startOfWeek(new Date())
+  return { from: addDays(week, -1), to: addDays(week, 8) }
+}
+
+function rangeKey({ from, to }: CalendarRange) {
+  return `${+from}:${+to}`
+}
+
+function mergeCalendarRange<T extends { id: string; start: string; end: string }>(
+  current: T[], incoming: T[], { from, to }: CalendarRange, newer: CalendarRange[],
+) {
+  const protectedByNewerRead = (item: T) => newer.some((range) => overlaps(item.start, item.end, range.from, range.to))
+  const merged = new Map<string, T>()
+  const protectedIds = new Set<string>()
+  for (const item of current) {
+    if (protectedByNewerRead(item)) protectedIds.add(item.id)
+    if (protectedIds.has(item.id) || !overlaps(item.start, item.end, from, to)) merged.set(item.id, item)
+  }
+  for (const item of incoming) {
+    if (!protectedIds.has(item.id) && !protectedByNewerRead(item)) merged.set(item.id, item)
+  }
+  return [...merged.values()]
+}
+
+function upsert<T extends { id: string }>(entries: T[], item: T): T[] {
+  return entries.some((entry) => entry.id === item.id) ? entries.map((entry) => entry.id === item.id ? item : entry) : [...entries, item]
 }
 
 export function StoreProvider({ children }: { children: ReactNode }) {
-  const [users, setUsers] = useState<User[]>(loadUsers)
-  const [rooms, setRooms] = useState<Room[]>(() => loadLocal('tne_v5_rooms', seedRooms))
-  const [bookings, setBookings] = useState<Booking[]>(() => loadLocal('tne_v5_bookings', seedBookings()))
-  const [blocks, setBlocks] = useState<RoomBlock[]>(() => loadLocal('tne_v5_blocks', seedBlocks()))
-  const [settings, setSettings] = useState<Settings>(() => loadLocal('tne_v5_settings', seedSettings))
-  const [audit, setAudit] = useState<AuditLog[]>(() => loadLocal('tne_v5_audit', seedAudit()))
-  const [currentUserId, setCurrentUserId] = useState<string | null>(() => loadInitialUserId(users))
+  const [session, setSession] = useState<Session | null>(null)
+  const [sessionRecovery, setSessionRecovery] = useState<Store['sessionRecovery']>('checking')
+  const [users, setUsers] = useState<User[]>([])
+  const [usersTotal, setUsersTotal] = useState(0)
+  const [rooms, setRooms] = useState<Room[]>([])
+  const [bookings, setBookings] = useState<Booking[]>([])
+  const [myBookings, setMyBookings] = useState<Booking[]>([])
+  const [blocks, setBlocks] = useState<RoomBlock[]>([])
+  const [calendarUsers, setCalendarUsers] = useState<User[]>([])
+  const [deskUsers, setDeskUsers] = useState<User[]>([])
+  const [managerToday, setManagerToday] = useState<Booking[]>([])
+  const [overdueKeys, setOverdueKeys] = useState<Booking[]>([])
+  const [pendingQueue, setPendingQueue] = useState<Booking[]>([])
+  const [settings, setSettings] = useState<Settings | null>(null)
+  const [audit, setAudit] = useState<AuditLog[]>([])
+  const [auditTotal, setAuditTotal] = useState(0)
   const [toasts, setToasts] = useState<Toast[]>([])
-  const [apiConnected, setApiConnected] = useState<boolean>(false)
-  const [isLoading, setIsLoading] = useState<boolean>(false)
+  const [reads, setReads] = useState<Partial<Record<Read, boolean>>>({})
+  const activeSession = useRef<Session | null>(null)
+  const restoringStorage = useRef<string | null>(null)
+  const epoch = useRef(0)
+  const toastId = useRef(0)
+  const sequence = useRef(0)
+  const pending = useRef<Partial<Record<Read, number>>>({})
+  const calendarReads = useRef(new Map<string, CalendarRead>())
+  const personalBookings = useRef<Booking[] | null>(null)
+  const recentRanges = useRef<CalendarRange[]>([])
+  const userQuery = useRef<UserQuery | null>(null)
+  const auditQuery = useRef<AuditQuery | null>(null)
 
-  const toastSeq = useRef(0)
-  const logSeq = useRef(100)
-
-  // Sync to localStorage
-  useEffect(() => {
-    try {
-      localStorage.setItem('tne_v6_users', JSON.stringify(users))
-    } catch {}
-  }, [users])
-
-  useEffect(() => {
-    try {
-      localStorage.setItem('tne_v5_rooms', JSON.stringify(rooms))
-    } catch {}
-  }, [rooms])
-
-  useEffect(() => {
-    try {
-      localStorage.setItem('tne_v5_bookings', JSON.stringify(bookings))
-    } catch {}
-  }, [bookings])
-
-  useEffect(() => {
-    try {
-      localStorage.setItem('tne_v5_blocks', JSON.stringify(blocks))
-    } catch {}
-  }, [blocks])
-
-  useEffect(() => {
-    try {
-      localStorage.setItem('tne_v5_settings', JSON.stringify(settings))
-    } catch {}
-  }, [settings])
-
-  useEffect(() => {
-    try {
-      localStorage.setItem('tne_v5_audit', JSON.stringify(audit))
-    } catch {}
-  }, [audit])
-
-  const currentUser = useMemo(() => {
-    if (!currentUserId) return null
-    return users.find((u) => u.id === currentUserId) ?? null
-  }, [users, currentUserId])
-
-  const actor = currentUser?.id ?? 'anonymous'
-
-  const notify = useCallback((message: string, tone: Toast['tone'] = 'ok') => {
-    const id = ++toastSeq.current
-    setToasts((t) => [...t, { id, message, tone }])
-    setTimeout(() => setToasts((t) => t.filter((x) => x.id !== id)), 3600)
+  const addToast = useCallback((message: string, tone: Toast['tone'] = 'ok') => {
+    const id = ++toastId.current
+    setToasts((items) => [...items, { id, message, tone }])
+    window.setTimeout(() => setToasts((items) => items.filter((item) => item.id !== id)), 4500)
   }, [])
 
-  const log = useCallback(
-    (action: string, entity: string, metadata: Record<string, unknown>, actorId = actor) => {
-      const id = `log_${String(++logSeq.current).padStart(4, '0')}`
-      setAudit((a) => [{ id, ts: new Date().toISOString(), actorId, action, entity, metadata }, ...a])
-    },
-    [actor],
-  )
-
-  const patchBooking = useCallback((id: string, patch: Partial<Booking>) => {
-    setBookings((bs) => bs.map((b) => (b.id === id ? { ...b, ...patch } : b)))
+  const reset = useCallback(() => {
+    ++epoch.current
+    activeSession.current = null
+    restoringStorage.current = null
+    pending.current = {}
+    calendarReads.current.clear()
+    recentRanges.current = []
+    personalBookings.current = null
+    userQuery.current = null
+    auditQuery.current = null
+    setSession(null)
+    setUsers([])
+    setUsersTotal(0)
+    setRooms([])
+    setBookings([])
+    setMyBookings([])
+    setBlocks([])
+    setCalendarUsers([])
+    setDeskUsers([])
+    setManagerToday([])
+    setOverdueKeys([])
+    setPendingQueue([])
+    setSettings(null)
+    setAudit([])
+    setAuditTotal(0)
+    setToasts([])
+    setReads({})
   }, [])
 
-  const validateSlot = useCallback(
-    (roomId: string, start: Date, end: Date, ignoreBookingId?: string): Result => {
-      if (isWeekend(start) || isWeekend(end)) return 'Rooms are only available on workdays (Monday–Friday).'
-      const room = rooms.find((r) => r.id === roomId)
-      if (!room) return 'Room not found.'
-      if (room.status !== 'AVAILABLE') return `Room ${room.code} is ${room.status.toLowerCase()}.`
-      if (end <= start) return 'End time must be after start time.'
-      const lead = daysBetween(new Date(), start)
-      if (lead < settings.minAdvanceDays || lead > settings.maxAdvanceDays)
-        return `Bookings must be made ${settings.minAdvanceDays}–${settings.maxAdvanceDays} days in advance.`
-      const open = parseHM(settings.openTime)
-      const close = parseHM(settings.closeTime)
-      const sMin = start.getHours() * 60 + start.getMinutes()
-      const eMin = end.getHours() * 60 + end.getMinutes() || 24 * 60
-      if (sMin < open.h * 60 + open.m || eMin > close.h * 60 + close.m)
-        return `Outside opening hours (${settings.openTime}–${settings.closeTime}).`
-      if (durationMin(start, end) > settings.maxDurationMinutes)
-        return `Exceeds maximum duration of ${settings.maxDurationMinutes} minutes.`
+  const logout = useCallback(() => {
+    reset()
+    setSessionRecovery(null)
+    localStorage.removeItem(TOKEN_KEY)
+    clearLegacyStorage()
+  }, [reset])
 
-      // Check if current user already has a PENDING booking on that room overlapping this slot
-      const myPendingClash = bookings.find(
-        (b) =>
-          b.roomId === roomId &&
-          b.id !== ignoreBookingId &&
-          b.status === 'PENDING' &&
-          b.userId === currentUser?.id &&
-          overlaps(b.start, b.end, start, end),
-      )
-      if (myPendingClash) return 'You already have a pending request for this time window.'
+  const install = useCallback((next: Session) => {
+    activeSession.current = next
+    localStorage.setItem(TOKEN_KEY, JSON.stringify(next))
+    setSession(next)
+    setSessionRecovery(null)
+  }, [])
 
-      const clash = bookings.find(
-        (b) =>
-          b.roomId === roomId &&
-          b.id !== ignoreBookingId &&
-          (b.status === 'APPROVED' || b.status === 'KEY_CHECKED_OUT') &&
-          overlaps(b.start, b.end, start, end),
-      )
-      if (clash) return 'Overlaps an existing reservation.'
-      const blk = blocks.find((k) => k.active && k.roomId === roomId && overlaps(k.start, k.end, start, end))
-      if (blk) return `Room blocked: ${blk.reason}.`
-      return null
-    },
-    [rooms, settings, bookings, blocks, currentUser],
-  )
-
-  // Background refresh from REST API
-  const refreshData = useCallback(async () => {
-    try {
-      setIsLoading(true)
-      const [remoteRooms, remoteSettings, calRes] = await Promise.all([
-        apiGetRooms(),
-        apiGetSettings(),
-        apiGetCalendar(),
-      ])
-
-      if (remoteRooms && remoteRooms.length > 0) {
-        setRooms(remoteRooms)
-        setApiConnected(true)
-      }
-      if (remoteSettings) {
-        setSettings(remoteSettings)
-        setApiConnected(true)
-      }
-      if (calRes && (calRes.bookings.length > 0 || calRes.blocks.length > 0)) {
-        if (calRes.bookings.length > 0) {
-          const activeRooms = remoteRooms && remoteRooms.length > 0 ? remoteRooms : rooms
-          const mappedBookings = calRes.bookings.map((b) => {
-            const matchRoom = activeRooms.find((r) => r.id === b.roomId || r.code === b.roomId)
-            if (matchRoom) {
-              return { ...b, roomId: matchRoom.id }
-            }
-            return b
-          })
-          setBookings(mappedBookings)
-        }
-        if (calRes.blocks.length > 0) {
-          const activeRooms = remoteRooms && remoteRooms.length > 0 ? remoteRooms : rooms
-          const mappedBlocks = calRes.blocks.map((blk) => {
-            const matchRoom = activeRooms.find((r) => r.id === blk.roomId || r.code === blk.roomId)
-            if (matchRoom) {
-              return { ...blk, roomId: matchRoom.id }
-            }
-            return blk
-          })
-          setBlocks(mappedBlocks)
-        }
-        if (calRes.users && calRes.users.length > 0) {
-          setUsers((prev) => {
-            const map = new Map(prev.map((u) => [u.id, u]))
-            calRes.users.forEach((u) => {
-              const existing = map.get(u.id)
-              const preservedRole: Role =
-                existing?.role === 'ADMIN' || existing?.role === 'MANAGER' ? existing.role : u.role
-              map.set(u.id, { ...existing, ...u, role: preservedRole })
-            })
-            return Array.from(map.values())
-          })
-        }
-        setApiConnected(true)
-      }
-
-      // If user is Admin or Manager, also sync users and audit logs
-      if (currentUser?.role === 'ADMIN') {
-        const [remoteUsers, remoteAudit] = await Promise.all([
-          apiGetUsers(),
-          apiGetAuditLogs(),
-        ])
-        if (remoteUsers && remoteUsers.length > 0) {
-          setUsers((prev) => {
-            const map = new Map(prev.map((u) => [u.id, u]))
-            remoteUsers.forEach((u) => map.set(u.id, { ...map.get(u.id), ...u }))
-            return Array.from(map.values())
-          })
-        }
-        if (remoteAudit && remoteAudit.length > 0) {
-          setAudit(remoteAudit)
-        }
-      }
-    } catch {
-      // Offline fallback: keep local state
-    } finally {
-      setIsLoading(false)
+  const syncSession = useCallback(async () => {
+    const serialized = localStorage.getItem(TOKEN_KEY)
+    const saved = readSession(serialized)
+    if (sameIdentity(saved, activeSession.current) || (serialized !== null && serialized === restoringStorage.current)) return
+    reset()
+    clearLegacyStorage()
+    const started = epoch.current
+    if (!saved) {
+      if (serialized !== null) localStorage.removeItem(TOKEN_KEY)
+      setSessionRecovery(null)
+      return
     }
-  }, [currentUser?.role])
+    restoringStorage.current = serialized
+    setSessionRecovery('checking')
+    const result = await createApi(saved.token, () => {}).apiMe()
+    if (started !== epoch.current) return
+    if (localStorage.getItem(TOKEN_KEY) !== serialized) {
+      // The queued storage event will load the newer session.
+      restoringStorage.current = null
+      return
+    }
+    restoringStorage.current = null
+    if (!result.ok) {
+      if (result.status === 401) {
+        logout()
+        addToast(EXPIRED, 'error')
+      } else {
+        setSessionRecovery('offline')
+      }
+      return
+    }
+    install({ ...saved, user: result.data })
+  }, [addToast, install, logout, reset])
 
-  // Probe API connection on initial mount
   useEffect(() => {
-    refreshData().catch(() => {})
-  }, [refreshData])
+    const onStorage = (event: StorageEvent) => {
+      if (event.storageArea === localStorage && (event.key === TOKEN_KEY || event.key === null)) void syncSession()
+    }
+    window.addEventListener('storage', onStorage)
+    void syncSession()
+    return () => window.removeEventListener('storage', onStorage)
+  }, [syncSession])
+
+  const expire = useCallback((token: string, started: number) => {
+    if (started !== epoch.current) return
+    const saved = readSession(localStorage.getItem(TOKEN_KEY))
+    if (saved?.token !== token || !sameIdentity(saved, activeSession.current)) {
+      void syncSession()
+      return
+    }
+    logout()
+    addToast(EXPIRED, 'error')
+  }, [addToast, logout, syncSession])
+
+  useEffect(() => {
+    if (!session) return
+    const started = epoch.current
+    let timer: number
+    const check = () => {
+      const remaining = session.expiresAt - Date.now()
+      if (remaining <= 0) expire(session.token, started)
+      else timer = window.setTimeout(check, Math.min(remaining, 2_147_483_647))
+    }
+    check()
+    return () => window.clearTimeout(timer)
+  }, [expire, session])
+
+  const apiForSession = useCallback(() => {
+    const started = epoch.current
+    const current = activeSession.current
+    return createApi(current?.token ?? null, () => {
+      if (current) expire(current.token, started)
+    }, current?.user.id)
+  }, [expire])
+
+  const load = useCallback(async <T,>(
+    key: Read,
+    request: () => Promise<ApiResponse<T>>,
+    apply: (data: T) => void,
+    onError?: (message: string) => void,
+  ) => {
+    const started = epoch.current
+    const id = ++sequence.current
+    pending.current[key] = id
+    const result = await request()
+    if (started !== epoch.current || pending.current[key] !== id) return false
+    setReads((state) => state[key] === result.ok ? state : { ...state, [key]: result.ok })
+    if (result.ok) apply(result.data)
+    else onError?.(result.message)
+    return result.ok
+  }, [])
+
+  const refreshMyBookings = useCallback(async () => {
+    if (activeSession.current?.user.role !== 'USER') return false
+    const api = apiForSession()
+    const started = epoch.current
+    return load<Booking[]>('mine', async () => {
+      const items = new Map<string, Booking>()
+      for (let page = 1; ; page++) {
+        const result = await api.apiGetMyBookings(page)
+        if (!result.ok) return result
+        if (started !== epoch.current) return { ok: false, status: 0, message: SESSION_CHANGED }
+        for (const booking of result.data.items) items.set(booking.id, booking)
+        if (page * result.data.limit >= result.data.total || !result.data.items.length) return { ok: true, data: [...items.values()] }
+      }
+    }, (items) => {
+      personalBookings.current = items
+      setMyBookings(items)
+    })
+  }, [apiForSession, load])
+
+  const loadCalendarRange = useCallback(async (range: CalendarRange) => {
+    const key = rangeKey(range)
+    const started = epoch.current
+    const id = ++sequence.current
+    const previous = calendarReads.current.get(key)
+    const read = { range, started: id, applied: previous?.applied ?? 0, pending: true, ok: previous?.ok }
+    calendarReads.current.set(key, read)
+    const api = apiForSession()
+    const result = await api.apiGetCalendar(toCampusIso(range.from), toCampusIso(range.to))
+    if (started !== epoch.current || calendarReads.current.get(key)?.started !== id) return
+    read.pending = false
+    read.ok = result.ok
+    const statuses = recentRanges.current.map((entry) => calendarReads.current.get(rangeKey(entry))?.ok)
+    const connected = statuses.includes(false) ? false : statuses.every((status) => status === true) ? true : undefined
+    setReads((state) => state.calendar === connected ? state : { ...state, calendar: connected })
+    if (!result.ok) return
+    read.applied = id
+    // A slower response may fill the rest of its range, but not overwrite newer overlapping data.
+    const newer = [...calendarReads.current.values()].filter((entry) => entry.applied > id).map((entry) => entry.range)
+    const { bookings, blocks, users } = result.data
+    setBookings((items) => mergeCalendarRange(items, bookings, range, newer))
+    setBlocks((items) => mergeCalendarRange(items, blocks, range, newer))
+    setCalendarUsers((items) => [...new Map([...items, ...users].map((entry) => [entry.id, entry])).values()])
+    if (activeSession.current?.user.role === 'USER' && personalBookings.current) {
+      const inNewerRange = (booking: Booking) => newer.some(({ from, to }) => overlaps(booking.start, booking.end, from, to))
+      const incoming = new Set(bookings.filter((booking) => booking.isMine).map((booking) => booking.id))
+      const personal = personalBookings.current
+      const known = new Map(personal.map((booking) => [booking.id, booking.status]))
+      const changed = bookings.some((booking) => booking.isMine && !inNewerRange(booking) && known.get(booking.id) !== booking.status)
+      const removed = personal.some((booking) => booking.status !== 'CANCELLED' && booking.status !== 'REJECTED' &&
+        !incoming.has(booking.id) && overlaps(booking.start, booking.end, range.from, range.to) && !inNewerRange(booking))
+      if (changed || removed) await refreshMyBookings()
+    }
+  }, [apiForSession, refreshMyBookings])
+
+  const refreshCalendar = useCallback(async () => {
+    if (!recentRanges.current.length) recentRanges.current = [defaultRange()]
+    await Promise.all(recentRanges.current.map(loadCalendarRange))
+  }, [loadCalendarRange])
+
+  const setVisibleRange = useCallback((from: Date, to: Date) => {
+    if (!(to > from)) return
+    const paddedFrom = addDays(from, -1)
+    const upperLimit = addDays(paddedFrom, 90)
+    const paddedTo = addDays(to, 1)
+    const range = { from: paddedFrom, to: paddedTo < upperLimit ? paddedTo : upperLimit }
+    const key = rangeKey(range)
+    recentRanges.current = [range, ...recentRanges.current.filter((entry) => rangeKey(entry) !== key)].slice(0, 4)
+    if (!calendarReads.current.get(key)?.pending) void loadCalendarRange(range)
+  }, [loadCalendarRange])
+
+  const refreshKeyDesk = useCallback(async () => {
+    const role = activeSession.current?.user.role
+    if (!role || role === 'USER') return
+    const api = apiForSession()
+    const started = epoch.current
+    await Promise.all([
+      load('today', api.apiGetManagerToday, ({ bookings, users }) => {
+        setManagerToday(bookings)
+        setDeskUsers((items) => [...new Map([...items, ...users].map((entry) => [entry.id, entry])).values()])
+      }),
+      load('overdue', api.apiGetOverdueKeys, ({ bookings, users }) => {
+        setOverdueKeys(bookings)
+        setDeskUsers((items) => [...new Map([...items, ...users].map((entry) => [entry.id, entry])).values()])
+      }),
+      load('pending', async () => {
+        const bookings = new Map<string, Booking>()
+        const users = new Map<string, User>()
+        for (let page = 1; ; page++) {
+          const result = await api.apiGetPendingBookings(page)
+          if (!result.ok) return result
+          if (started !== epoch.current) return { ok: false, status: 0, message: SESSION_CHANGED } as const
+          for (const booking of result.data.bookings) bookings.set(booking.id, booking)
+          for (const user of result.data.users) users.set(user.id, user)
+          if (page * result.data.limit >= result.data.total || !result.data.bookings.length) {
+            return { ok: true, data: { bookings: [...bookings.values()].sort((a, b) => +new Date(a.start) - +new Date(b.start)), users: [...users.values()] } } as const
+          }
+        }
+      }, ({ bookings, users }) => {
+        setPendingQueue(bookings)
+        setDeskUsers((items) => [...new Map([...items, ...users].map((entry) => [entry.id, entry])).values()])
+      }),
+    ])
+  }, [apiForSession, load])
+
+  const loadUsers = useCallback(async (query: UserQuery) => {
+    if (activeSession.current?.user.role !== 'ADMIN') return
+    userQuery.current = query
+    const api = apiForSession()
+    await load('users', () => api.apiGetUsers(query), ({ items, total }) => {
+      setUsers(items)
+      setUsersTotal(total)
+    }, (message) => {
+      setUsers([])
+      setUsersTotal(0)
+      addToast(message, 'error')
+    })
+  }, [addToast, apiForSession, load])
+
+  const loadAudit = useCallback(async (query: AuditQuery) => {
+    if (activeSession.current?.user.role !== 'ADMIN') return
+    auditQuery.current = query
+    const api = apiForSession()
+    await load('audit', () => api.apiGetAuditLogs(query), ({ items, total }) => {
+      setAudit(items)
+      setAuditTotal(total)
+    }, (message) => {
+      setAudit([])
+      setAuditTotal(0)
+      addToast(message, 'error')
+    })
+  }, [addToast, apiForSession, load])
+
+  const refreshRooms = useCallback(async () => {
+    const role = activeSession.current?.user.role
+    const api = apiForSession()
+    await load('rooms', () => api.apiGetRooms(role === 'MANAGER' || role === 'ADMIN'), setRooms)
+  }, [apiForSession, load])
+
+  const refreshSettings = useCallback(async () => {
+    await load('settings', apiForSession().apiGetSettings, setSettings)
+  }, [apiForSession, load])
+
+  const refreshData = useCallback(async () => {
+    await Promise.all([
+      refreshCalendar(), refreshRooms(), refreshMyBookings(), refreshKeyDesk(),
+      refreshSettings(),
+      userQuery.current && loadUsers(userQuery.current), auditQuery.current && loadAudit(auditQuery.current),
+    ])
+  }, [loadAudit, loadUsers, refreshCalendar, refreshKeyDesk, refreshMyBookings, refreshRooms, refreshSettings])
+
+  useEffect(() => {
+    if (!sessionRecovery) void refreshData()
+  }, [refreshData, sessionRecovery, session])
+
+  useEffect(() => {
+    if (!session || session.user.role === 'USER') return
+    const timer = window.setInterval(() => void refreshKeyDesk(), 60_000)
+    return () => window.clearInterval(timer)
+  }, [refreshKeyDesk, session])
+
+  const renderedEpoch = epoch.current
+
+  const startSession = ({ accessToken, user, expiresIn }: ApiAuth) => {
+    if (renderedEpoch !== epoch.current) throw new Error(SESSION_CHANGED)
+    if (!accessToken || !user || !Number.isFinite(expiresIn) || expiresIn <= 0) {
+      throw new Error('The server returned an invalid session.')
+    }
+    const next = { token: accessToken, user: mapUser(user), expiresAt: Date.now() + expiresIn * 1000 }
+    reset()
+    clearLegacyStorage()
+    install(next)
+  }
+
+  const authenticate = async (request: (api: Api) => ReturnType<Api['apiLogin']>): Promise<Result> => {
+    if (renderedEpoch !== epoch.current) return SESSION_CHANGED
+    const started = epoch.current
+    const initialStorage = localStorage.getItem(TOKEN_KEY)
+    const result = await request(createApi(null, () => {}))
+    if (started !== epoch.current || localStorage.getItem(TOKEN_KEY) !== initialStorage) return SESSION_CHANGED
+    if (!result.ok) return result.message
+    try {
+      startSession(result.data)
+    } catch (error) {
+      if (error instanceof Error) return error.message
+      throw error
+    }
+    return null
+  }
+
+  const reconcileBookings = async () => {
+    await Promise.all([refreshCalendar(), refreshMyBookings(), refreshKeyDesk()])
+  }
+
+  const mutate = async <T,>(request: (api: Api) => Promise<ApiResponse<T>>, onSuccess?: (data: T) => void | Promise<void>): Promise<Result> => {
+    if (renderedEpoch !== epoch.current) return SESSION_CHANGED
+    const started = epoch.current
+    if (!activeSession.current) return 'Sign in to continue.'
+    const result = await request(apiForSession())
+    if (started !== epoch.current) return !result.ok && result.status === 401 ? result.message : SESSION_CHANGED
+    if (!result.ok) {
+      if (result.status === 409) await reconcileBookings()
+      return started === epoch.current ? result.message : SESSION_CHANGED
+    }
+    await onSuccess?.(result.data)
+    return started === epoch.current ? null : SESSION_CHANGED
+  }
+
+  const reconcileTransition = async (booking: Booking) => {
+    setBookings((items) => {
+      if (booking.status === 'CANCELLED' || booking.status === 'REJECTED') return items.filter((item) => item.id !== booking.id)
+      return items.map((item) => item.id === booking.id ? booking : item)
+    })
+    setMyBookings((items) => items.map((item) => item.id === booking.id ? booking : item))
+    if (activeSession.current?.user.role !== 'USER' && booking.status !== 'PENDING') {
+      setPendingQueue((items) => items.filter((item) => item.id !== booking.id))
+    }
+    setManagerToday((items) => items.map((item) => item.id === booking.id ? booking : item))
+    setOverdueKeys((items) => items.filter((item) => item.id !== booking.id || booking.status === 'KEY_CHECKED_OUT'))
+    await reconcileBookings()
+  }
+
+  const postBooking = (input: BookingInput) => mutate((api) => api.apiCreateBooking({
+    roomId: input.roomId, title: input.title.trim(), purpose: input.purpose.trim(), attendeeCount: input.attendeeCount,
+    startTime: toCampusIso(input.start), endTime: toCampusIso(input.end),
+  }), async (booking) => {
+    if (recentRanges.current.some(({ from, to }) => overlaps(booking.start, booking.end, from, to))) {
+      setBookings((items) => upsert(items, booking))
+    }
+    if (activeSession.current?.user.role === 'USER') setMyBookings((items) => upsert(items, booking))
+    await reconcileBookings()
+  })
+
+  const createBlock = (input: BlockInput) => mutate((api) => api.apiCreateRoomBlock({
+    roomId: input.roomId, startTime: toCampusIso(input.start), endTime: toCampusIso(input.end),
+    reason: input.reason.trim(), displaceBookings: input.displace,
+  }), async (block) => {
+    setBlocks((items) => upsert(items, block))
+    await reconcileBookings()
+  })
+
+  const refreshDirectory = async () => {
+    await Promise.all([userQuery.current && loadUsers(userQuery.current), auditQuery.current && loadAudit(auditQuery.current)])
+  }
+
+  const currentUser = session?.user ?? null
+  const connection = sessionRecovery === 'offline' || Object.values(reads).includes(false) ? 'offline' :
+    !sessionRecovery && reads.rooms && reads.calendar && reads.settings &&
+    (!currentUser || (currentUser.role === 'USER' ? reads.mine : reads.today && reads.overdue && reads.pending)) ? 'live' : 'connecting'
+  const settingsLoaded = reads.settings === true && settings !== null
 
   const store: Store = {
-    currentUser,
-    users,
-    rooms,
-    bookings,
-    blocks,
-    settings,
-    audit,
-    toasts,
-    apiConnected,
-    isLoading,
-    notify,
-    validateSlot,
-    refreshData,
-
-    async loginAsync(email: string, password: string) {
-      const normEmail = email.trim().toLowerCase()
-
-      // Try live API first
-      try {
-        const apiRes = await apiLogin(email, password)
-        if ('token' in apiRes && apiRes.user) {
-          setApiConnected(true)
-          setUsers((prev) => {
-            const exists = prev.some((u) => u.id === apiRes.user.id || u.email.toLowerCase() === normEmail)
-            if (exists) {
-              return prev.map((u) => (u.id === apiRes.user.id || u.email.toLowerCase() === normEmail ? { ...u, ...apiRes.user } : u))
-            }
-            return [...prev, apiRes.user]
-          })
-          setCurrentUserId(apiRes.user.id)
-          setStoredUser(apiRes.user)
-          log('AUTH_LOGIN', `user:${apiRes.user.id}`, { role: apiRes.user.role, method: 'API' }, apiRes.user.id)
-          notify(`Welcome back, ${apiRes.user.fullName}`)
-          refreshData().catch(() => {})
-          return { error: null, user: apiRes.user }
-        }
-      } catch {}
-
-      // Fallback: match local users with alias tolerance
-      const u = users.find((x) => {
-        const ue = x.email.toLowerCase()
-        if (ue === normEmail) return true
-        if (normEmail === 'student@tne.edu.vn' && (ue === 'linh.nguyen@student.uts.edu.au' || ue === 'student@tne.local')) return true
-        if (normEmail === 'manager@tne.edu.vn' && (ue === 'd.tran@uts-tne.edu.vn' || ue === 'manager@tne.local')) return true
-        if (normEmail === 'admin@tne.edu.vn' && (ue === 'g.pham@uts-tne.edu.vn' || ue === 'admin@tne.local')) return true
-        if (ue === 'student@tne.edu.vn' && (normEmail === 'linh.nguyen@student.uts.edu.au' || normEmail === 'student@tne.local')) return true
-        if (ue === 'manager@tne.edu.vn' && (normEmail === 'd.tran@uts-tne.edu.vn' || normEmail === 'manager@tne.local')) return true
-        if (ue === 'admin@tne.edu.vn' && (normEmail === 'g.pham@uts-tne.edu.vn' || normEmail === 'admin@tne.local')) return true
-        return false
-      })
-
-      if (!u) {
-        return { error: 'Invalid email or password.' }
-      }
-
-      const pwMatches =
-        u.password === password ||
-        (u.role === 'USER' && (password === 'Student123456!' || password === 'student' || password === 'Demo12345678!')) ||
-        (u.role === 'MANAGER' && (password === 'Manager123456!' || password === 'manager' || password === 'Demo12345678!')) ||
-        (u.role === 'ADMIN' && (password === 'Admin12345678!' || password === 'admin' || password === 'ChangeMe123!'))
-
-      if (!pwMatches) {
-        return { error: 'Invalid email or password.' }
-      }
-
-      if (u.status === 'SUSPENDED') {
-        return { error: 'This account is suspended. Contact the facilities office.' }
-      }
-
-      setCurrentUserId(u.id)
-      setStoredUser(u)
-      setStoredToken(`local_token_${u.id}`)
-      log('AUTH_LOGIN', `user:${u.id}`, { role: u.role, method: 'LOCAL' }, u.id)
-      notify(`Welcome back, ${u.fullName}`)
-      return { error: null, user: u }
+    currentUser, users, usersTotal, rooms, bookings, myBookings, blocks, managerToday, overdueKeys, pendingQueue,
+    settings: settings ?? INITIAL_SETTINGS, settingsLoaded, audit, auditTotal, toasts, connection,
+    sessionRecovery, retrySession: syncSession,
+    notify: (message, tone) => {
+      if (renderedEpoch === epoch.current) addToast(message, tone)
     },
-
-    async registerAsync(input) {
-      const code = input.studentCode.trim().toUpperCase()
-      if (!input.fullName.trim() || !input.email.trim() || !input.password || !code) {
-        return { error: 'All fields are required.' }
-      }
-      if (!/^\S+@\S+\.\S+$/.test(input.email)) {
-        return { error: 'Enter a valid email address.' }
-      }
-      if (input.password.length < 6) {
-        return { error: 'Password must be at least 6 characters.' }
-      }
-      if (!/^[A-Z]{2}\d{6}$/.test(code)) {
-        return { error: 'Student ID format: two letters + six digits (e.g. SE123456).' }
-      }
-
-      // Try API register
-      try {
-        const apiRes = await apiRegister(input)
-        if ('token' in apiRes && apiRes.user) {
-          setApiConnected(true)
-          setUsers((prev) => [...prev, apiRes.user])
-          setCurrentUserId(apiRes.user.id)
-          setStoredUser(apiRes.user)
-          log('USER_REGISTER', `user:${apiRes.user.id}`, { studentCode: code, role: 'USER', method: 'API' }, apiRes.user.id)
-          notify('Account created successfully.')
-          return { error: null, user: apiRes.user }
-        }
-      } catch {}
-
-      // Local fallback
-      if (users.some((u) => u.email.toLowerCase() === input.email.trim().toLowerCase())) {
-        return { error: 'Email is already registered.' }
-      }
-      if (users.some((u) => u.studentCode === code)) {
-        return { error: `Student ID ${code} is already registered.` }
-      }
-
-      const u: User = {
-        id: uid('u'),
-        fullName: input.fullName.trim(),
-        email: input.email.trim(),
-        password: input.password,
-        role: 'USER',
-        studentCode: code,
-        status: 'ACTIVE',
-        createdAt: new Date().toISOString(),
-      }
-      setUsers((us) => [...us, u])
-      setCurrentUserId(u.id)
-      setStoredUser(u)
-      setStoredToken(`local_token_${u.id}`)
-      log('USER_REGISTER', `user:${u.id}`, { studentCode: code, role: 'USER', method: 'LOCAL' }, u.id)
-      notify('Account created successfully.')
-      return { error: null, user: u }
+    login: (email, password) => authenticate((api) => api.apiLogin(email, password)),
+    startSession,
+    register: (input) => authenticate((api) => api.apiRegister(input)),
+    logout, refreshData, refreshSettings, refreshMyBookings, refreshKeyDesk, setVisibleRange, loadUsers, loadAudit,
+    createBooking: postBooking,
+    cancelBooking: (id) => mutate((api) => api.apiCancelBooking(id), reconcileTransition),
+    approveBooking: (id, note) => mutate((api) => api.apiApproveBooking(id, note), reconcileTransition),
+    rejectBooking: (id, note) => mutate((api) => api.apiRejectBooking(id, note), reconcileTransition),
+    checkoutKey: (id, passCode) => mutate((api) => api.apiCheckoutKey(id, passCode.trim()), reconcileTransition),
+    returnKey: (id) => mutate((api) => api.apiReturnKey(id), reconcileTransition),
+    createBlock,
+    cancelBlock: (roomId, expected) => mutate((api) => api.apiCancelRoomBlock(roomId, expected && {
+      startTime: expected.start.toISOString(), endTime: expected.end.toISOString(),
+    }), async () => {
+      setBlocks((items) => items.filter((block) => block.roomId !== roomId || (expected &&
+        (+new Date(block.start) !== +expected.start || +new Date(block.end) !== +expected.end))))
+      await reconcileBookings()
+    }),
+    saveRoom: (room) => mutate((api) => api.apiSaveRoom(room), async (saved) => {
+      setRooms((items) => upsert(items, saved))
+      await Promise.all([refreshRooms(), auditQuery.current && loadAudit(auditQuery.current)])
+    }),
+    setRoomStatus: (id, status) => mutate((api) => api.apiUpdateRoomStatus(id, status), async (saved) => {
+      setRooms((items) => upsert(items, saved))
+      await Promise.all([refreshRooms(), auditQuery.current && loadAudit(auditQuery.current)])
+    }),
+    updateUserRole: (id, role, studentCode) => mutate((api) => api.apiUpdateUserRole(id, role, studentCode), refreshDirectory),
+    setUserStatus: (id, status) => mutate((api) => api.apiUpdateUserStatus(id, status), refreshDirectory),
+    createManagerAccount: (input) => mutate((api) => api.apiCreateManager(input), refreshDirectory),
+    updateSettings: (value) => settingsLoaded ? mutate((api) => api.apiUpdateSettings(value), async (saved) => {
+      setReads((state) => ({ ...state, settings: true }))
+      delete pending.current.settings
+      setSettings(saved)
+      if (auditQuery.current) await loadAudit(auditQuery.current)
+    }) : Promise.resolve('Settings are unavailable. Reload them before saving.'),
+    assignRoomSchedule(input) {
+      const category = input.category || 'EVENT'
+      return input.mode === 'BLOCK'
+        ? createBlock({ ...input, reason: `[${category}] ${input.title}: ${input.purpose}`, displace: input.displace ?? false })
+        : postBooking({ ...input, title: `[${category}] ${input.title.trim()}`, attendeeCount: input.attendeeCount ?? 1 })
     },
-
-    login(email, password) {
-      const normEmail = email.trim().toLowerCase()
-      const u = users.find((x) => {
-        const ue = x.email.toLowerCase()
-        if (ue === normEmail) return true
-        if (normEmail === 'student@tne.edu.vn' && (ue === 'linh.nguyen@student.uts.edu.au' || ue === 'student@tne.local')) return true
-        if (normEmail === 'manager@tne.edu.vn' && (ue === 'd.tran@uts-tne.edu.vn' || ue === 'manager@tne.local')) return true
-        if (normEmail === 'admin@tne.edu.vn' && (ue === 'g.pham@uts-tne.edu.vn' || ue === 'admin@tne.local')) return true
-        if (ue === 'student@tne.edu.vn' && (normEmail === 'linh.nguyen@student.uts.edu.au' || normEmail === 'student@tne.local')) return true
-        if (ue === 'manager@tne.edu.vn' && (normEmail === 'd.tran@uts-tne.edu.vn' || normEmail === 'manager@tne.local')) return true
-        if (ue === 'admin@tne.edu.vn' && (normEmail === 'g.pham@uts-tne.edu.vn' || normEmail === 'admin@tne.local')) return true
-        return false
-      })
-
-      const pwMatches =
-        u &&
-        (u.password === password ||
-          (u.role === 'USER' && (password === 'Student123456!' || password === 'student' || password === 'Demo12345678!')) ||
-          (u.role === 'MANAGER' && (password === 'Manager123456!' || password === 'manager' || password === 'Demo12345678!')) ||
-          (u.role === 'ADMIN' && (password === 'Admin12345678!' || password === 'admin' || password === 'ChangeMe123!')))
-
-      if (!u || !pwMatches) return 'Invalid email or password.'
-      if (u.status === 'SUSPENDED') return 'This account is suspended. Contact the facilities office.'
-
-      setCurrentUserId(u.id)
-      setStoredUser(u)
-      setStoredToken(`local_token_${u.id}`)
-      log('AUTH_LOGIN', `user:${u.id}`, { role: u.role }, u.id)
-      notify(`Welcome back, ${u.fullName}`)
-
-      // Fire async api login in background if reachable
-      apiLogin(email, password).catch(() => {})
-      return null
-    },
-
-    register({ fullName, email, password, studentCode }) {
-      const code = studentCode.trim().toUpperCase()
-      if (!fullName.trim() || !email.trim() || !password || !code) return 'All fields are required.'
-      if (!/^\S+@\S+\.\S+$/.test(email)) return 'Enter a valid email address.'
-      if (password.length < 6) return 'Password must be at least 6 characters.'
-      if (!/^[A-Z]{2}\d{6}$/.test(code)) return 'Student ID format: two letters + six digits (e.g. SE123456).'
-      if (users.some((u) => u.email.toLowerCase() === email.trim().toLowerCase())) return 'Email is already registered.'
-      if (users.some((u) => u.studentCode === code)) return `Student ID ${code} is already registered.`
-
-      const u: User = {
-        id: uid('u'),
-        fullName: fullName.trim(),
-        email: email.trim(),
-        password,
-        role: 'USER',
-        studentCode: code,
-        status: 'ACTIVE',
-        createdAt: new Date().toISOString(),
-      }
-      setUsers((us) => [...us, u])
-      setCurrentUserId(u.id)
-      setStoredUser(u)
-      setStoredToken(`local_token_${u.id}`)
-      log('USER_REGISTER', `user:${u.id}`, { studentCode: code, role: 'USER' }, u.id)
-      notify('Account created.')
-
-      // Fire async api register in background if reachable
-      apiRegister({ fullName, email, password, studentCode }).catch(() => {})
-      return null
-    },
-
-    logout() {
-      if (currentUser) log('AUTH_LOGOUT', `user:${currentUser.id}`, {})
-      clearAuth()
-      setCurrentUserId(null)
-      notify('Signed out.')
-    },
-
-    previewAs(role) {
-      const base =
-        users.find((x) => x.role === role) ??
-        (role === 'USER' ? seedUsers[0] : role === 'MANAGER' ? seedUsers[1] : seedUsers[2])
-      const u: User = { ...base, role }
-      setUsers((prev) => {
-        const exists = prev.some((x) => x.id === u.id)
-        return exists ? prev.map((x) => (x.id === u.id ? u : x)) : [...prev, u]
-      })
-      setCurrentUserId(u.id)
-      setStoredUser(u)
-      setStoredToken(`preview_token_${u.id}`)
-      notify(`Switched to ${u.fullName} (${role})`)
-
-      const creds =
-        role === 'MANAGER'
-          ? { email: 'manager@tne.edu.vn', pw: 'Manager123456!' }
-          : role === 'ADMIN'
-            ? { email: 'admin@tne.edu.vn', pw: 'Admin12345678!' }
-            : { email: 'student@tne.edu.vn', pw: 'Student123456!' }
-      apiLogin(creds.email, creds.pw)
-        .then((res) => {
-          if ('token' in res && res.user) {
-            const authedUser: User = { ...res.user, role }
-            setApiConnected(true)
-            setUsers((prev) => {
-              const exists = prev.some((x) => x.id === authedUser.id || x.email.toLowerCase() === creds.email)
-              return exists
-                ? prev.map((x) => (x.id === authedUser.id || x.email.toLowerCase() === creds.email ? { ...x, ...authedUser } : x))
-                : [...prev, authedUser]
-            })
-            setCurrentUserId(authedUser.id)
-            setStoredUser(authedUser)
-          }
-        })
-        .catch(() => {})
-    },
-
-    async createManagerAccount(input) {
-      const fullName = input.fullName.trim()
-      const email = input.email.trim()
-      const password = input.password
-
-      if (!fullName || fullName.length < 2) return 'Full name is required (min 2 characters).'
-      if (!/^\S+@\S+\.\S+$/.test(email)) return 'Enter a valid email address.'
-      if (password.length < 8) return 'Password must be at least 8 characters.'
-      if (users.some((u) => u.email.toLowerCase() === email.toLowerCase())) {
-        return 'Email is already registered.'
-      }
-
-      let newId = uid('u_mgr')
-
-      // Call live API if connected
-      if (apiConnected) {
-        try {
-          const res = await apiCreateManager({ fullName, email, password })
-          if (res.user) {
-            newId = res.user.id
-          }
-        } catch {}
-      }
-
-      const newManager: User = {
-        id: newId,
-        fullName,
-        email,
-        password,
-        role: 'MANAGER',
-        status: 'ACTIVE',
-        createdAt: new Date().toISOString(),
-      }
-
-      setUsers((prev) => [...prev, newManager])
-      log('USER_CREATE_MANAGER', `user:${newManager.id}`, { fullName, email, role: 'MANAGER' })
-      notify(`Manager account created for ${fullName}.`)
-      return null
-    },
-
-    createBooking({ roomId, start, end, phone, title, purpose }) {
-      if (!currentUser) return 'Not signed in.'
-      const err = validateSlot(roomId, start, end)
-      if (err) return err
-      const room = rooms.find((r) => r.id === roomId)!
-      if (!/^\+?[\d\s().-]{8,20}$/.test(phone.trim())) return 'Enter a valid phone number.'
-      if (!title.trim()) return 'Booking title is required.'
-      if (!purpose.trim()) return 'Purpose is required.'
-      const active = bookings.filter((b) => b.userId === currentUser.id && ACTIVE_STATUSES.includes(b.status)).length
-      if (active >= settings.maxActiveBookings) return `You already hold ${active} active bookings (limit ${settings.maxActiveBookings}).`
-
-      const booking: Booking = {
-        id: uid('bk'),
-        roomId,
-        userId: currentUser.id,
-        start: start.toISOString(),
-        end: end.toISOString(),
-        phone: phone.trim(),
-        title: title.trim(),
-        purpose: purpose.trim(),
-        status: 'PENDING',
-        passCode: makePassCode(room.code),
-        createdAt: new Date().toISOString(),
-      }
-      setBookings((bs) => [...bs, booking])
-      log('BOOKING_CREATE', `booking:${booking.id}`, { room: room.code, status: 'PENDING', title: booking.title })
-      notify(`Request for Room ${room.code} sent to the manager approval queue.`)
-
-      if (apiConnected) {
-        apiCreateBooking({
-          roomId,
-          title: booking.title,
-          purpose: booking.purpose,
-          attendeeCount: 1,
-          startTime: booking.start,
-          endTime: booking.end,
-        }).catch(() => {})
-      }
-      return null
-    },
-
-    assignRoomSchedule({ roomId, start, end, title, purpose, category, mode = 'EVENT', attendeeCount }) {
-      if (mode === 'BLOCK') {
-        return store.createBlock({
-          roomId,
-          start,
-          end,
-          reason: `[${category || 'EVENT'}] ${title}: ${purpose}`,
-        })
-      }
-
-      const room = rooms.find((r) => r.id === roomId)
+    validateSlot(roomId, start, end, ignoreBookingId) {
+      const room = rooms.find((entry) => entry.id === roomId)
       if (!room) return 'Room not found.'
-      if (end <= start) return 'End time must be after start time.'
-
-      // Displace overlapping PENDING bookings
-      const displaced = bookings.filter(
-        (b) => b.roomId === roomId && b.status === 'PENDING' && overlaps(b.start, b.end, start, end),
-      )
-      if (displaced.length > 0) {
-        setBookings((bs) =>
-          bs.map((b) =>
-            displaced.some((d) => d.id === b.id)
-              ? { ...b, status: 'REJECTED', note: `Displaced by scheduled activity: ${title.trim()}` }
-              : b,
-          ),
-        )
-        if (apiConnected) {
-          displaced.forEach((d) => {
-            apiRejectBooking(d.id, `Displaced by scheduled activity: ${title.trim()}`).catch(() => {})
-          })
-        }
-      }
-
-      const newBooking: Booking = {
-        id: uid('bk_evt'),
-        roomId,
-        userId: currentUser?.id ?? 'u_mgr',
-        start: start.toISOString(),
-        end: end.toISOString(),
-        title: title.trim(),
-        purpose: purpose.trim(),
-        phone: '+84 90 000 0000',
-        status: 'APPROVED',
-        passCode: makePassCode(room.code),
-        category: category || 'EVENT',
-        attendeeCount: attendeeCount || room.capacity,
-        isEvent: true,
-        createdAt: new Date().toISOString(),
-        note: `Scheduled activity (${category || 'EVENT'}) assigned by ${currentUser?.fullName ?? 'Manager'}`,
-      }
-
-      setBookings((bs) => [...bs, newBooking])
-      log('SCHEDULE_ASSIGN', `room:${roomId}`, {
-        title: newBooking.title,
-        start: newBooking.start,
-        end: newBooking.end,
-        displacedCount: displaced.length,
-      })
-      notify(`Scheduled activity assigned to Room ${room.code}.`)
-
-      if (apiConnected) {
-        apiCreateBooking({
-          roomId,
-          title: newBooking.title,
-          purpose: newBooking.purpose,
-          attendeeCount: newBooking.attendeeCount,
-          startTime: newBooking.start,
-          endTime: newBooking.end,
-        }).then((created) => {
-          if (created) {
-            apiApproveBooking(created.id, newBooking.note).catch(() => {})
-          }
-        }).catch(() => {})
-      }
+      if (room.status !== 'AVAILABLE') return 'This room is not available.'
+      if (!settings) return 'Booking rules are unavailable.'
+      if (!Number.isFinite(+start) || !Number.isFinite(+end) || end <= start) return 'End time must be after start time.'
+      const now = new Date()
+      if (start <= now) return 'Start time must be in the future.'
+      if (start > addDays(now, settings.maxAdvanceDays)) return `Bookings can be made up to ${settings.maxAdvanceDays} days in advance.`
+      if (!sameDay(start, end) || isWeekend(start)) return 'Bookings must start and end on the same workday.'
+      const open = parseHM(settings.openTime)
+      const close = parseHM(settings.closeTime)
+      if (start < at(start, open.h, open.m) || end > at(end, close.h, close.m)) return `Choose a time between ${settings.openTime} and ${settings.closeTime}.`
+      if (durationMin(start, end) > settings.maxDurationMinutes) return `Bookings can last up to ${settings.maxDurationMinutes} minutes.`
+      if (blocks.some((block) => block.active && block.roomId === roomId && overlaps(block.start, block.end, start, end))) return 'This room is blocked during that time.'
+      if (bookings.some((booking) => booking.id !== ignoreBookingId && booking.roomId === roomId &&
+        ((!room.autoApprove && (booking.status === 'APPROVED' || booking.status === 'KEY_CHECKED_OUT')) || (booking.status === 'PENDING' && booking.isMine)) &&
+        overlaps(booking.start, booking.end, start, end))) return 'This room is already booked during that time.'
+      if (myBookings.some((booking) => booking.id !== ignoreBookingId && booking.roomId === roomId && booking.status === 'PENDING' && overlaps(booking.start, booking.end, start, end))) return 'You already have a pending request during that time.'
       return null
     },
-
-    cancelBooking(id) {
-      patchBooking(id, { status: 'CANCELLED' })
-      log('BOOKING_CANCEL', `booking:${id}`, {})
-      notify('Booking cancelled.')
-      if (apiConnected) {
-        apiCancelBooking(id).catch(() => {})
-      }
-    },
-
-    approveBooking(id, note) {
-      const target = bookings.find((b) => b.id === id)
-      const nowIso = new Date().toISOString()
-      const overlappingPending = target
-        ? bookings.filter(
-            (b) =>
-              b.id !== id &&
-              b.roomId === target.roomId &&
-              b.status === 'PENDING' &&
-              overlaps(b.start, b.end, target.start, target.end),
-          )
-        : []
-
-      setBookings((bs) =>
-        bs.map((b) => {
-          if (b.id === id) {
-            return { ...b, status: 'APPROVED', note: note?.trim() || undefined, reviewedAt: nowIso }
-          }
-          if (overlappingPending.some((p) => p.id === b.id)) {
-            return {
-              ...b,
-              status: 'REJECTED',
-              note: 'Slot awarded to another approved reservation.',
-              reviewedAt: nowIso,
-            }
-          }
-          return b
-        }),
-      )
-
-      log('BOOKING_APPROVE', `booking:${id}`, {
-        note: note?.trim() || null,
-        previous: 'PENDING',
-        next: 'APPROVED',
-        autoDeclinedCount: overlappingPending.length,
-      })
-      notify(
-        overlappingPending.length > 0
-          ? `Booking approved. Automatically declined ${overlappingPending.length} competing request(s).`
-          : 'Booking approved. Pass issued to student.',
-      )
-      if (apiConnected) {
-        apiApproveBooking(id, note).catch(() => {})
-      }
-    },
-
-    rejectBooking(id, note) {
-      if (!note.trim()) return 'A rejection note is required.'
-      patchBooking(id, { status: 'REJECTED', note: note.trim() })
-      log('BOOKING_REJECT', `booking:${id}`, { note: note.trim() })
-      notify('Booking rejected.')
-      if (apiConnected) {
-        apiRejectBooking(id, note.trim()).catch(() => {})
-      }
-      return null
-    },
-
-    checkoutKey(id) {
-      const bk = bookings.find((b) => b.id === id)
-      if (!bk || bk.status !== 'APPROVED') return
-      patchBooking(id, { status: 'KEY_CHECKED_OUT', checkedOutAt: new Date().toISOString() })
-      log('KEY_CHECKOUT', `booking:${id}`, { passCode: bk.passCode })
-      notify(`Key issued · ${users.find((u) => u.id === bk.userId)?.studentCode ?? bk.id}`)
-      if (apiConnected) {
-        apiCheckoutKey(id).catch(() => {})
-      }
-    },
-
-    returnKey(id) {
-      const bk = bookings.find((b) => b.id === id)
-      if (!bk || bk.status !== 'KEY_CHECKED_OUT') return
-      const late = new Date() > new Date(bk.end)
-      patchBooking(id, { status: 'COMPLETED', returnedAt: new Date().toISOString() })
-      log('KEY_RETURN', `booking:${id}`, { passCode: bk.passCode, late })
-      notify(`Key returned · ${users.find((u) => u.id === bk.userId)?.studentCode ?? bk.id}`)
-      if (apiConnected) {
-        apiReturnKey(id).catch(() => {})
-      }
-    },
-
-    createBlock({ roomId, start, end, reason }) {
-      if (!reason.trim()) return 'A reason is required.'
-      if (end <= start) return 'End must be after start.'
-      const blk: RoomBlock = {
-        id: uid('blk'),
-        roomId,
-        start: start.toISOString(),
-        end: end.toISOString(),
-        reason: reason.trim(),
-        createdBy: actor,
-        active: true,
-      }
-      const displaced = bookings.filter(
-        (b) => b.roomId === roomId && (b.status === 'PENDING' || b.status === 'APPROVED') && overlaps(b.start, b.end, start, end),
-      )
-      if (displaced.length) {
-        setBookings((bs) =>
-          bs.map((b) => (displaced.some((d) => d.id === b.id) ? { ...b, status: 'REJECTED', note: `Displaced by university event: ${reason.trim()}` } : b)),
-        )
-      }
-      setBlocks((ks) => [blk, ...ks])
-      log('ROOM_BLOCK_CREATE', `room:${roomId}`, { reason: blk.reason, start: blk.start, end: blk.end, displaced: displaced.map((d) => d.id) })
-      notify(displaced.length ? `Room blocked. ${displaced.length} booking(s) displaced.` : 'Room blocked for event.')
-
-      if (apiConnected) {
-        apiCreateRoomBlock({
-          roomId,
-          startTime: blk.start,
-          endTime: blk.end,
-          reason: blk.reason,
-        }).catch(() => {})
-      }
-      return null
-    },
-
-    cancelBlock(id) {
-      const blk = blocks.find((k) => k.id === id)
-      setBlocks((ks) => ks.map((k) => (k.id === id ? { ...k, active: false } : k)))
-      log('ROOM_BLOCK_CANCEL', `block:${id}`, {})
-      notify('Block cancelled. Slots released.')
-      if (apiConnected && blk) {
-        apiCancelRoomBlock(blk.roomId).catch(() => {})
-      }
-    },
-
-    deleteBlock(id) {
-      store.cancelBlock(id)
-    },
-
-    saveRoom(room) {
-      if (!/^\d{3}$/.test(room.code)) return 'Room code must be three digits.'
-      if (room.capacity < 1) return 'Capacity must be at least 1.'
-      if (!room.name.trim()) return 'Room name is required.'
-      const exists = rooms.find((r) => r.id === room.id)
-      if (rooms.some((r) => r.code === room.code && r.id !== room.id)) return `Room ${room.code} already exists.`
-      if (exists) {
-        const diff: Record<string, unknown> = {}
-        for (const k of Object.keys(room) as (keyof Room)[])
-          if (JSON.stringify(room[k]) !== JSON.stringify(exists[k])) diff[k] = { from: exists[k], to: room[k] }
-        setRooms((rs) => rs.map((r) => (r.id === room.id ? room : r)))
-        log('ROOM_UPDATE', `room:${room.id}`, diff)
-
-        if (apiConnected) {
-          apiUpdateRoom(room.id, encodeRoomToBackend(room)).catch(() => {})
-        }
-      } else {
-        setRooms((rs) => [...rs, room])
-        log('ROOM_CREATE', `room:${room.id}`, { code: room.code, capacity: room.capacity })
-
-        if (apiConnected) {
-          apiCreateRoom(encodeRoomToBackend(room)).catch(() => {})
-        }
-      }
-      notify(`Room ${room.code} saved.`)
-      return null
-    },
-
-    deleteRoom(id) {
-      const r = rooms.find((x) => x.id === id)
-      setRooms((rs) => rs.filter((x) => x.id !== id))
-      log('ROOM_DELETE', `room:${id}`, { code: r?.code })
-      notify(`Room ${r?.code} deleted.`)
-    },
-
-    updateUserRole(id, role, studentCode) {
-      const u = users.find((x) => x.id === id)
-      if (!u) return 'User not found.'
-      let code = u.studentCode
-      if (role === 'USER') {
-        code = (studentCode ?? u.studentCode ?? '').trim().toUpperCase()
-        if (!code) return 'Student ID is mandatory for USER role.'
-        if (!/^[A-Z]{2}\d{6}$/.test(code)) return 'Student ID format: two letters + six digits.'
-        if (users.some((x) => x.studentCode === code && x.id !== id)) return `Student ID ${code} is taken.`
-      }
-      setUsers((us) => us.map((x) => (x.id === id ? { ...x, role, studentCode: role === 'USER' ? code : x.studentCode } : x)))
-      log('USER_ROLE', `user:${id}`, { from: u.role, to: role, studentCode: role === 'USER' ? code : undefined })
-      notify(`${u.fullName} is now ${role}.`)
-
-      if (apiConnected) {
-        apiUpdateUserRole(id, role, code).catch(() => {})
-      }
-      return null
-    },
-
-    toggleUserStatus(id) {
-      const u = users.find((x) => x.id === id)
-      if (!u) return
-      const next = u.status === 'ACTIVE' ? 'SUSPENDED' : 'ACTIVE'
-      setUsers((us) => us.map((x) => (x.id === id ? { ...x, status: next } : x)))
-      log('USER_STATUS', `user:${id}`, { from: u.status, to: next })
-      notify(`${u.fullName} ${next === 'ACTIVE' ? 'reactivated' : 'suspended'}.`)
-
-      if (apiConnected) {
-        apiUpdateUserStatus(id, next).catch(() => {})
-      }
-    },
-
-    updateSettings(s) {
-      const o = parseHM(s.openTime)
-      const c = parseHM(s.closeTime)
-      if (o.h * 60 + o.m >= c.h * 60 + c.m) return 'Opening time must be earlier than closing time.'
-      if (s.minAdvanceDays > s.maxAdvanceDays) return 'Minimum lead time cannot exceed max advance days.'
-      if (s.maxDurationMinutes < 30) return 'Max duration must be at least 30 minutes.'
-      if (s.maxActiveBookings < 1) return 'Max active bookings must be at least 1.'
-      const diff: Record<string, unknown> = {}
-      for (const k of Object.keys(s) as (keyof Settings)[]) if (s[k] !== settings[k]) diff[k] = { from: settings[k], to: s[k] }
-      setSettings(s)
-      log('SETTINGS_UPDATE', 'settings:global', diff)
-      notify('System settings saved.')
-
-      if (apiConnected) {
-        apiUpdateSettings(s).catch(() => {})
-      }
-      return null
-    },
+    user: (id) => (currentUser && currentUser.id === id ? currentUser : users.find((entry) => entry.id === id) ?? calendarUsers.find((entry) => entry.id === id) ?? deskUsers.find((entry) => entry.id === id)),
+    room: (id) => rooms.find((entry) => entry.id === id),
   }
 
   return <Ctx.Provider value={store}>{children}</Ctx.Provider>
 }
 
 export function useStore() {
-  const s = useContext(Ctx)
-  if (!s) throw new Error('useStore outside provider')
-  return s
+  const store = useContext(Ctx)
+  if (!store) throw new Error('useStore outside provider')
+  return store
 }
 
 export function useLookups() {
-  const { users, rooms } = useStore()
-  return useMemo(
-    () => ({
-      user: (id: string) => users.find((u) => u.id === id),
-      room: (id: string) => rooms.find((r) => r.id === id),
-    }),
-    [users, rooms],
-  )
-}
-
-/** Bookable window helpers derived from settings */
-export function windowBounds(settings: Settings) {
-  const today = startOfDay(new Date())
-  return { first: addDays(today, settings.minAdvanceDays), last: addDays(today, settings.maxAdvanceDays) }
+  const { user, room } = useStore()
+  return { user, room }
 }

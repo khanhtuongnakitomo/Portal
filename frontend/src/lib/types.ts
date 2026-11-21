@@ -18,7 +18,6 @@ export interface User {
   id: string
   fullName: string
   email: string
-  password: string
   role: Role
   studentCode?: string
   status: AccountStatus
@@ -32,17 +31,17 @@ export interface Booking {
   start: string
   end: string
   title: string
-  phone: string
+  kind: 'STUDENT' | 'OFFICIAL'
+  isMine: boolean
   purpose: string
   status: BookingStatus
-  passCode: string
+  passCode: string | null
   note?: string
   createdAt: string
   checkedOutAt?: string
   returnedAt?: string
   category?: string
   attendeeCount?: number
-  isEvent?: boolean
 }
 
 export interface RoomBlock {
@@ -60,7 +59,6 @@ export interface Settings {
   openTime: string
   closeTime: string
   maxDurationMinutes: number
-  minAdvanceDays: number
   maxAdvanceDays: number
   maxActiveBookings: number
 }

@@ -1,10 +1,9 @@
-import { useEffect } from 'react'
-import { createPortal } from 'react-dom'
-import { Ban, Clock, MapPin, Undo2, User, X } from 'lucide-react'
+import { useState } from 'react'
+import { Ban, Clock, User, X } from 'lucide-react'
 import { useLookups, useStore } from '@/lib/store'
 import type { RoomBlock } from '@/lib/types'
-import { durationMin, fmtDate, fmtDuration, fmtRange } from '@/lib/time'
-import { Button, Eyebrow, cx } from '@/components/ui'
+import { durationMin, fmtDate, fmtDuration, fmtRange, fmtStamp, sameDay } from '@/lib/time'
+import { Button, Dialog, Eyebrow, cx } from '@/components/ui'
 
 interface BlockInspectorModalProps {
   block: RoomBlock | null
@@ -15,14 +14,8 @@ export function BlockInspectorModal({ block, onClose }: BlockInspectorModalProps
   const { cancelBlock, notify } = useStore()
   const { room, user } = useLookups()
 
-  useEffect(() => {
-    if (!block) return
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose()
-    }
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
-  }, [block, onClose])
+  const [pending, setPending] = useState(false)
+  const [error, setError] = useState<string | null>(null)
 
   if (!block) return null
 
@@ -32,22 +25,27 @@ export function BlockInspectorModal({ block, onClose }: BlockInspectorModalProps
   const e = new Date(block.end)
   const dur = durationMin(s, e)
 
-  const handleCancel = () => {
-    cancelBlock(block.id)
-    notify(`Room ${r?.code ?? ''} block cancelled. Slots released.`)
-    onClose()
+  const close = () => { if (!pending) onClose() }
+  const handleCancel = async () => {
+    if (pending) return
+    setError(null)
+    setPending(true)
+    try {
+      const error = await cancelBlock(block.roomId, { start: s, end: e })
+      if (error) {
+        setError(error)
+        notify(error, 'error')
+      } else {
+        notify('Room block cancelled. Slots released.')
+        onClose()
+      }
+    } finally {
+      setPending(false)
+    }
   }
 
-  return createPortal(
-    <div
-      role="dialog"
-      aria-modal="true"
-      aria-labelledby="block-inspector-title"
-      className="fixed inset-0 z-50 flex items-center justify-center p-4"
-    >
-      <div className="fixed inset-0 bg-ink/50 backdrop-blur-xs" onClick={onClose} />
-
-      <div className="relative z-10 w-full max-w-[480px] overflow-hidden rounded-lg border border-ink bg-paper shadow-2xl">
+  return (
+    <Dialog open onClose={close} labelledBy="block-inspector-title" className="max-w-[480px]">
         {/* Header */}
         <div className="flex items-center justify-between border-b border-rule bg-ice px-5 py-4">
           <div className="flex flex-col gap-0.5">
@@ -58,7 +56,8 @@ export function BlockInspectorModal({ block, onClose }: BlockInspectorModalProps
           </div>
           <button
             type="button"
-            onClick={onClose}
+            onClick={close}
+            disabled={pending}
             aria-label="Close"
             className="rounded-[4px] p-1.5 text-steel hover:bg-paper hover:text-ink"
           >
@@ -90,8 +89,7 @@ export function BlockInspectorModal({ block, onClose }: BlockInspectorModalProps
           <div className="flex flex-col gap-1.5 rounded-[4px] border border-rule bg-ice/40 p-3">
             <div className="flex items-center gap-2 font-mono text-[12px] text-ink font-semibold">
               <Clock size={14} className="text-steel" />
-              <span>{fmtDate(s)}</span>
-              <span>· {fmtRange(s, e)}</span>
+              <span>{sameDay(s, e) ? `${fmtDate(s)} · ${fmtRange(block.start, block.end)}` : `${fmtStamp(s)} – ${fmtStamp(e)}`}</span>
               <span className="rounded-[2px] bg-paper px-1.5 py-0.2 font-mono text-[10px] text-steel border border-rule">
                 {fmtDuration(dur)}
               </span>
@@ -118,21 +116,21 @@ export function BlockInspectorModal({ block, onClose }: BlockInspectorModalProps
             </p>
           )}
 
+          {error && <p role="alert" className="text-[13px] font-semibold text-plum">{error}</p>}
+
           {/* Action Footer */}
           <div className="mt-2 flex items-center justify-between border-t border-rule pt-4">
-            <Button variant="outline" size="sm" onClick={onClose}>
+            <Button variant="outline" size="sm" onClick={close} disabled={pending}>
               Close
             </Button>
 
             {block.active && (
-              <Button variant="plum" size="sm" onClick={handleCancel} className="gap-1.5">
+              <Button variant="plum" size="sm" onClick={handleCancel} disabled={pending} className="gap-1.5">
                 <Ban size={14} /> Cancel & Release Block
               </Button>
             )}
           </div>
         </div>
-      </div>
-    </div>,
-    document.body,
+    </Dialog>
   )
 }

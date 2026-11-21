@@ -1,14 +1,14 @@
 import 'reflect-metadata';
 import 'dotenv/config';
 import { createApp } from './app.js';
+import { validateEnvironment } from './config/environment.js';
 
-const port = Number(process.env.PORT || 3000);
-const prefix = (process.env.API_PREFIX || 'api/v1').replace(/^\/+|\/+$/g, '');
-
-const { app, prisma } = createApp();
+const environment = validateEnvironment(process.env);
+const { port, apiPrefix } = environment;
+const { app, prisma } = createApp(undefined, environment);
 
 const server = app.listen(port, () => {
-  console.info(`Express API listening on http://localhost:${port}/${prefix}`);
+  console.info(`Express API listening on http://localhost:${port}${apiPrefix}`);
 });
 
 function shutdown() {

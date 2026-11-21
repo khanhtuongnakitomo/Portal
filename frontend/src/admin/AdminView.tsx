@@ -1,5 +1,6 @@
 import { Fragment, useEffect, useMemo, useState } from 'react'
 import {
+  Archive,
   ArrowRight,
   ChevronDown,
   ChevronRight,
@@ -8,16 +9,10 @@ import {
   Pencil,
   Plus,
   Search,
-  ShieldCheck,
-  Trash2,
-  UserCheck,
-  UserPlus,
-  Users,
 } from 'lucide-react'
 import { ACTIVE_STATUSES, useLookups, useStore } from '@/lib/store'
 import type { Role, Room, RoomStatus, Settings, User } from '@/lib/types'
-import { fmtDate, fmtShort, fmtStamp, fmtTime, sameDay } from '@/lib/time'
-import { uid } from '@/lib/seed'
+import { CAMPUS_TZ, dayKey, fmtDate, fmtStamp } from '@/lib/time'
 import { Button, EmptyState, Eyebrow, Field, Input, Modal, Select, Tag, cx } from '@/components/ui'
 import { NavItem, PageHeader, TopNav } from '@/components/Shell'
 import { Reveal, ScrollRevealText, SplitText } from '@/components/effects'
@@ -26,33 +21,22 @@ import { OperationsWorkspace } from '@/manager/ManagerView'
 export type AdminTab = 'schedule' | 'users' | 'rooms' | 'settings' | 'audit'
 
 export function AdminView() {
-  const { rooms, users, bookings, audit } = useStore()
+  const { rooms, bookings } = useStore()
   const [tab, setTab] = useState<AdminTab>('schedule')
 
   const pending = useMemo(() => bookings.filter((b) => b.status === 'PENDING'), [bookings])
-  const now = new Date()
-  const today = useMemo(
-    () =>
-      bookings.filter(
-        (b) => sameDay(new Date(b.start), now) && ['APPROVED', 'COMPLETED', 'KEY_CHECKED_OUT'].includes(b.status),
-      ),
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [bookings],
-  )
   const scheduled = useMemo(
     () => bookings.filter((b) => ['APPROVED', 'KEY_CHECKED_OUT'].includes(b.status)).length,
     [bookings],
   )
 
-  const studentCount = useMemo(() => users.filter((u) => u.role === 'USER').length, [users])
-  const managerCount = useMemo(() => users.filter((u) => u.role === 'MANAGER').length, [users])
 
   const tabs: { id: AdminTab; n: string; label: string; count?: number; badge?: number }[] = [
     { id: 'schedule', n: '01', label: 'Schedule & Approvals', badge: pending.length },
-    { id: 'users', n: '02', label: 'Accounts (Students & Managers)', count: users.length },
-    { id: 'rooms', n: '03', label: 'Rooms (601, 602, 605)', count: rooms.length },
+    { id: 'users', n: '02', label: 'Accounts (Students & Managers)' },
+    { id: 'rooms', n: '03', label: 'Room inventory', count: rooms.length },
     { id: 'settings', n: '04', label: 'System settings' },
-    { id: 'audit', n: '05', label: 'Audit logs', count: audit.length },
+    { id: 'audit', n: '05', label: 'Audit logs' },
   ]
 
   return (
@@ -88,20 +72,18 @@ export function AdminView() {
             tab === 'schedule'
               ? 'Direct facilities schedule and approval queue mirroring manager operations. Review requests, monitor real-time room occupancy, and assign schedule overrides across rooms 601, 602, and 605.'
               : tab === 'users'
-                ? 'Directory of student and facility manager accounts. Filter and sort by role, manage activation status, and provision new Manager staff accounts.'
+                ? 'Directory of student and facility manager accounts. Search and filter by role, manage activation status, and provision new Manager staff accounts.'
                 : tab === 'rooms'
-                  ? 'Manage university rooms 601, 602, and 605. Configure capacity, amenities, and maintenance states. All room bookings require manager/admin approval.'
+                  ? 'Manage university rooms, capacity, amenities, approval policy, and availability.'
                   : tab === 'settings'
                     ? 'Global operating hours (08:00–17:00), advance reservation limits, and student booking allowances.'
                     : 'Cryptographically structured, append-only log of every mutation in the facilities ledger.'
           }
           right={
             <div className="flex flex-col items-end gap-3">
-              <Reveal stagger className="grid grid-cols-2 border-t border-l border-rule sm:grid-cols-4">
+              <Reveal stagger className="grid grid-cols-2 border-t border-l border-rule">
                 {[
                   ['PENDING', pending.length, pending.length ? 'text-accent' : ''],
-                  ['STUDENTS', studentCount, ''],
-                  ['MANAGERS', managerCount, 'text-accent'],
                   ['SCHEDULED', scheduled, ''],
                 ].map(([k, v, c]) => (
                   <div key={k as string} className="min-w-[110px] border-r border-b border-rule px-4 py-3 bg-paper">
@@ -180,60 +162,48 @@ function PanelHead({ eyebrow, title, right }: { eyebrow: string; title: string; 
 const TH = 'px-4 py-2.5 text-left font-mono text-[11px] font-semibold text-steel whitespace-nowrap'
 const TD = 'px-4 py-3 align-middle'
 
-/* ───────────── 02 · Accounts Directory (Sorted by Student & Manager) ───────────── */
+/* ───────────── 02 · Accounts Directory ───────────── */
 
-type AccountFilterTab = 'ALL' | 'STUDENTS' | 'MANAGERS' | 'ADMINS'
-type AccountSortMode = 'MANAGERS_FIRST' | 'STUDENTS_FIRST' | 'NEWEST' | 'NAME'
+const PAGE_SIZE = 20
+
+function Pager({ page, total, count, loading, onPage }: {
+  page: number
+  total: number
+  count: number
+  loading: boolean
+  onPage: (page: number) => void
+}) {
+  const lastPage = Math.max(1, Math.ceil(total / PAGE_SIZE))
+  return (
+    <div className="mt-3 flex flex-wrap items-center justify-between gap-2 font-mono text-[11px] text-steel">
+      <span aria-live="polite">{loading ? 'Loading…' : `Showing ${count} of ${total} matching results · Page ${page} of ${lastPage}`}</span>
+      <div className="flex gap-2">
+        <Button size="xs" variant="outline" disabled={loading || page <= 1} onClick={() => onPage(page - 1)}>Previous</Button>
+        <Button size="xs" variant="outline" disabled={loading || page >= lastPage} onClick={() => onPage(page + 1)}>Next</Button>
+      </div>
+    </div>
+  )
+}
 
 function UsersPanel() {
-  const { users, currentUser, toggleUserStatus } = useStore()
+  const { users, usersTotal, currentUser, loadUsers } = useStore()
   const [q, setQ] = useState('')
-  const [accountTab, setAccountTab] = useState<AccountFilterTab>('ALL')
-  const [sortMode, setSortMode] = useState<AccountSortMode>('MANAGERS_FIRST')
+  const [query, setQuery] = useState<{ page: number; search?: string; role?: Role }>({ page: 1 })
+  const [loadedQuery, setLoadedQuery] = useState<typeof query | null>(null)
   const [showManagerModal, setShowManagerModal] = useState(false)
+  const loading = loadedQuery !== query
 
-  const studentCount = useMemo(() => users.filter((u) => u.role === 'USER').length, [users])
-  const managerCount = useMemo(() => users.filter((u) => u.role === 'MANAGER').length, [users])
-  const adminCount = useMemo(() => users.filter((u) => u.role === 'ADMIN').length, [users])
+  useEffect(() => {
+    let current = true
+    void loadUsers(query).finally(() => { if (current) setLoadedQuery(query) })
+    return () => { current = false }
+  }, [loadUsers, query])
 
-  const filteredAndSortedList = useMemo(() => {
-    const s = q.trim().toLowerCase()
-    let list = users.filter((u) => {
-      if (accountTab === 'STUDENTS' && u.role !== 'USER') return false
-      if (accountTab === 'MANAGERS' && u.role !== 'MANAGER') return false
-      if (accountTab === 'ADMINS' && u.role !== 'ADMIN') return false
-      if (!s) return true
-      return (
-        u.fullName.toLowerCase().includes(s) ||
-        u.email.toLowerCase().includes(s) ||
-        u.studentCode?.toLowerCase().includes(s)
-      )
-    })
-
-    list = [...list].sort((a, b) => {
-      if (sortMode === 'MANAGERS_FIRST') {
-        const rank = (role: Role) => (role === 'MANAGER' ? 0 : role === 'USER' ? 1 : 2)
-        const diff = rank(a.role) - rank(b.role)
-        if (diff !== 0) return diff
-        return a.fullName.localeCompare(b.fullName)
-      }
-      if (sortMode === 'STUDENTS_FIRST') {
-        const rank = (role: Role) => (role === 'USER' ? 0 : role === 'MANAGER' ? 1 : 2)
-        const diff = rank(a.role) - rank(b.role)
-        if (diff !== 0) return diff
-        return a.fullName.localeCompare(b.fullName)
-      }
-      if (sortMode === 'NEWEST') {
-        return +new Date(b.createdAt) - +new Date(a.createdAt)
-      }
-      if (sortMode === 'NAME') {
-        return a.fullName.localeCompare(b.fullName)
-      }
-      return 0
-    })
-
-    return list
-  }, [users, accountTab, sortMode, q])
+  useEffect(() => {
+    if (loading || usersTotal === 0) return
+    const lastPage = Math.ceil(usersTotal / PAGE_SIZE)
+    if (query.page > lastPage) setQuery({ ...query, page: lastPage })
+  }, [loading, query, usersTotal])
 
   return (
     <section>
@@ -261,103 +231,27 @@ function UsersPanel() {
             <strong className="text-ink">Manager accounts can ONLY be created by System Administrator.</strong> Students self-register with Student ID.
           </span>
         </div>
-        <div className="flex items-center gap-3 font-mono text-[11px] text-steel">
-          <span>STUDENTS: <b className="text-ink">{studentCount}</b></span>
-          <span>•</span>
-          <span>MANAGERS: <b className="text-accent">{managerCount}</b></span>
-          <span>•</span>
-          <span>ADMINS: <b className="text-ink">{adminCount}</b></span>
-        </div>
       </div>
 
-      {/* Filter and Sort Toolbar */}
-      <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
-        {/* Filter Tabs */}
-        <div className="flex flex-wrap items-center gap-1.5">
-          <button
-            type="button"
-            onClick={() => setAccountTab('ALL')}
-            className={cx(
-              'rounded-[4px] px-3 py-1.5 font-mono text-[12px] font-semibold transition-all',
-              accountTab === 'ALL'
-                ? 'border border-ink bg-paper text-ink shadow-xs'
-                : 'text-steel hover:bg-ice hover:text-ink',
-            )}
-          >
-            ALL ACCOUNTS ({users.length})
-          </button>
-
-          <button
-            type="button"
-            onClick={() => setAccountTab('STUDENTS')}
-            className={cx(
-              'flex items-center gap-1.5 rounded-[4px] px-3 py-1.5 font-mono text-[12px] font-semibold transition-all',
-              accountTab === 'STUDENTS'
-                ? 'border border-accent bg-paper text-accent shadow-xs'
-                : 'text-steel hover:bg-ice hover:text-ink',
-            )}
-          >
-            <span className="h-1.5 w-1.5 rounded-full bg-accent" />
-            STUDENTS · USER ({studentCount})
-          </button>
-
-          <button
-            type="button"
-            onClick={() => setAccountTab('MANAGERS')}
-            className={cx(
-              'flex items-center gap-1.5 rounded-[4px] px-3 py-1.5 font-mono text-[12px] font-semibold transition-all',
-              accountTab === 'MANAGERS'
-                ? 'border border-ink bg-ink text-paper shadow-xs'
-                : 'text-steel hover:bg-ice hover:text-ink',
-            )}
-          >
-            <span className="h-1.5 w-1.5 rounded-full bg-white" />
-            MANAGERS · STAFF ({managerCount})
-          </button>
-
-          <button
-            type="button"
-            onClick={() => setAccountTab('ADMINS')}
-            className={cx(
-              'flex items-center gap-1.5 rounded-[4px] px-3 py-1.5 font-mono text-[12px] font-semibold transition-all',
-              accountTab === 'ADMINS'
-                ? 'border border-edge bg-paper text-ink shadow-xs'
-                : 'text-steel hover:bg-ice hover:text-ink',
-            )}
-          >
-            ADMINS ({adminCount})
-          </button>
+      <form className="mb-4 flex flex-wrap items-center gap-3" onSubmit={(event) => {
+        event.preventDefault()
+        setQuery((previous) => ({ ...previous, page: 1, search: q.trim() || undefined }))
+      }}>
+        <Select aria-label="Account role" value={query.role ?? ''} onChange={(event) => {
+          const role = (event.target.value || undefined) as Role | undefined
+          setQuery((previous) => ({ ...previous, page: 1, role }))
+        }} className="!w-auto font-mono">
+          <option value="">All roles</option>
+          <option value="USER">Students</option>
+          <option value="MANAGER">Managers</option>
+          <option value="ADMIN">Admins</option>
+        </Select>
+        <div className="relative flex-1">
+          <Search size={15} className="pointer-events-none absolute top-1/2 left-3 -translate-y-1/2 text-steel" />
+          <Input aria-label="Search accounts" value={q} onChange={(event) => setQ(event.target.value)} placeholder="Search name, email, or Student ID…" className="pl-9" />
         </div>
-
-        {/* Right: Search and Sort */}
-        <div className="flex flex-wrap items-center gap-3">
-          {accountTab === 'ALL' && (
-            <div className="flex items-center gap-1.5">
-              <span className="font-mono text-[11px] text-steel">SORT:</span>
-              <Select
-                value={sortMode}
-                onChange={(e) => setSortMode(e.target.value as AccountSortMode)}
-                className="!w-[170px] !py-1 font-mono !text-[12px]"
-              >
-                <option value="MANAGERS_FIRST">Managers First</option>
-                <option value="STUDENTS_FIRST">Students First</option>
-                <option value="NEWEST">Newest Joined</option>
-                <option value="NAME">Name (A-Z)</option>
-              </Select>
-            </div>
-          )}
-
-          <div className="relative min-w-[240px]">
-            <Search size={15} className="pointer-events-none absolute top-1/2 left-3 -translate-y-1/2 text-steel" />
-            <Input
-              value={q}
-              onChange={(e) => setQ(e.target.value)}
-              placeholder="Search name, email, or Student ID..."
-              className="pl-9 font-sans text-[13px]"
-            />
-          </div>
-        </div>
-      </div>
+        <Button type="submit" variant="outline">Search</Button>
+      </form>
 
       {/* Accounts Table */}
       <div className="overflow-x-auto rounded-lg border border-edge bg-paper">
@@ -372,18 +266,16 @@ function UsersPanel() {
             </tr>
           </thead>
           <tbody>
-            {filteredAndSortedList.length === 0 ? (
+            {loading ? (
+              <tr><td colSpan={5} className="p-8 text-center text-steel">Loading accounts…</td></tr>
+            ) : users.length === 0 ? (
               <tr>
                 <td colSpan={5} className="p-8 text-center">
                   <EmptyState
                     title="NO ACCOUNTS MATCHING"
-                    body={
-                      accountTab === 'MANAGERS'
-                        ? 'No manager accounts match this filter. Click "+ New Manager account" to provision staff.'
-                        : 'No accounts match the current query.'
-                    }
+                    body="No accounts match the current query."
                   />
-                  {accountTab === 'MANAGERS' && (
+                  {query.role === 'MANAGER' && (
                     <Button
                       variant="accent"
                       size="sm"
@@ -396,12 +288,11 @@ function UsersPanel() {
                 </td>
               </tr>
             ) : (
-              filteredAndSortedList.map((u) => (
+              users.map((u) => (
                 <UserRow
                   key={u.id}
                   u={u}
                   self={u.id === currentUser?.id}
-                  onToggle={() => toggleUserStatus(u.id)}
                 />
               ))
             )}
@@ -409,13 +300,14 @@ function UsersPanel() {
         </table>
       </div>
 
-      <CreateManagerModal open={showManagerModal} onClose={() => setShowManagerModal(false)} />
+      <Pager page={query.page} total={usersTotal} count={users.length} loading={loading} onPage={(page) => setQuery((previous) => ({ ...previous, page }))} />
+      {showManagerModal && <CreateManagerModal onClose={() => setShowManagerModal(false)} />}
     </section>
   )
 }
 
-function CreateManagerModal({ open, onClose }: { open: boolean; onClose: () => void }) {
-  const { createManagerAccount } = useStore()
+function CreateManagerModal({ onClose }: { onClose: () => void }) {
+  const { createManagerAccount, notify } = useStore()
   const [fullName, setFullName] = useState('')
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
@@ -425,22 +317,22 @@ function CreateManagerModal({ open, onClose }: { open: boolean; onClose: () => v
   const generateStrongPassword = () => {
     const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789!@#$%^&*'
     let pw = 'Mgr!'
-    for (let i = 0; i < 10; i++) pw += chars[Math.floor(Math.random() * chars.length)]
+    for (const value of crypto.getRandomValues(new Uint16Array(10))) pw += chars[value % chars.length]
     setPassword(pw)
   }
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
+    if (loading) return
     setError(null)
     setLoading(true)
     try {
       const err = await createManagerAccount({ fullName, email, password })
       if (err) {
         setError(err)
+        notify(err, 'error')
       } else {
-        setFullName('')
-        setEmail('')
-        setPassword('')
+        notify('Manager account created.')
         onClose()
       }
     } finally {
@@ -448,12 +340,12 @@ function CreateManagerModal({ open, onClose }: { open: boolean; onClose: () => v
     }
   }
 
-  if (!open) return null
+  const close = () => { if (!loading) onClose() }
 
   return (
-    <Modal open onClose={onClose} title="Create Manager account" eyebrow="ADMIN PRIVILEGE · PROVISION STAFF">
+    <Modal open onClose={close} title="Create Manager account" eyebrow="ADMIN PRIVILEGE · PROVISION STAFF">
       <form onSubmit={handleSubmit}>
-        <div className="flex flex-col gap-4 p-6">
+        <fieldset disabled={loading} className="flex min-w-0 flex-col gap-4 p-6">
           <div className="rounded-md border border-edge bg-ice p-3 text-[13px] leading-[1.5] text-graphite">
             <span className="font-semibold text-ink">Staff Provisioning Policy:</span> Only System Administrators can provision Manager accounts. Student accounts are created via self-registration with a valid Student ID.
           </div>
@@ -463,7 +355,6 @@ function CreateManagerModal({ open, onClose }: { open: boolean; onClose: () => v
               value={fullName}
               onChange={(e) => setFullName(e.target.value)}
               placeholder="Minh Hoang"
-              autoFocus
               required
             />
           </Field>
@@ -478,21 +369,10 @@ function CreateManagerModal({ open, onClose }: { open: boolean; onClose: () => v
             />
           </Field>
 
-          <Field
-            label="Initial password"
-            hint="min 8 chars"
-            action={
-              <button
-                type="button"
-                onClick={generateStrongPassword}
-                className="font-mono text-[11px] font-semibold text-accent hover:underline"
-              >
-                Generate strong
-              </button>
-            }
-          >
+          <Field label="Initial password" hint="min 8 chars">
             <Input
               type="text"
+              autoComplete="new-password"
               value={password}
               onChange={(e) => setPassword(e.target.value)}
               placeholder="••••••••••••"
@@ -500,13 +380,21 @@ function CreateManagerModal({ open, onClose }: { open: boolean; onClose: () => v
               required
             />
           </Field>
+          <button
+            type="button"
+            onClick={generateStrongPassword}
+            disabled={loading}
+            className="self-start font-mono text-[11px] font-semibold text-accent hover:underline"
+          >
+            Generate strong password
+          </button>
 
           {error && (
-            <div className="border-l-2 border-plum bg-plum/[0.06] px-3 py-2 text-[13px] font-medium text-plum">
+            <div role="alert" className="border-l-2 border-plum bg-plum/[0.06] px-3 py-2 text-[13px] font-medium text-plum">
               {error}
             </div>
           )}
-        </div>
+        </fieldset>
 
         <div className="flex justify-end gap-2 border-t border-rule px-6 py-4">
           <Button variant="ghost" type="button" onClick={onClose} disabled={loading}>
@@ -521,22 +409,58 @@ function CreateManagerModal({ open, onClose }: { open: boolean; onClose: () => v
   )
 }
 
-function UserRow({ u, self, onToggle }: { u: User; self: boolean; onToggle: () => void }) {
-  const { updateUserRole } = useStore()
+function UserRow({ u, self }: { u: User; self: boolean }) {
+  const { updateUserRole, setUserStatus, notify } = useStore()
   const [pendingRole, setPendingRole] = useState<Role | null>(null)
   const [code, setCode] = useState('')
   const [error, setError] = useState<string | null>(null)
+  const [busy, setBusy] = useState(false)
+
+  const updateRole = async (role: Role, studentCode?: string) => {
+    if (busy) return
+    setError(null)
+    setBusy(true)
+    try {
+      const error = await updateUserRole(u.id, role, studentCode)
+      if (error) {
+        setError(error)
+        notify(error, 'error')
+      } else {
+        setPendingRole(null)
+        notify('Account role updated.')
+      }
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const changeStatus = async () => {
+    if (busy || self) return
+    setBusy(true)
+    const status = u.status === 'ACTIVE' ? 'SUSPENDED' : 'ACTIVE'
+    try {
+      const error = await setUserStatus(u.id, status)
+      if (error) notify(error, 'error')
+      else notify(status === 'SUSPENDED' ? 'Account suspended.' : 'Account activated.')
+    } finally {
+      setBusy(false)
+    }
+  }
 
   const change = (role: Role) => {
-    if (role === u.role) return
+    if (busy || role === (pendingRole ?? u.role)) return
+    if (role === u.role) {
+      setPendingRole(null)
+      setError(null)
+      return
+    }
     if (role === 'USER' && !u.studentCode) {
       setPendingRole('USER')
       setCode('')
       setError(null)
       return
     }
-    const err = updateUserRole(u.id, role)
-    setError(err)
+    void updateRole(role)
   }
 
   const isAdmin = u.role === 'ADMIN'
@@ -598,7 +522,7 @@ function UserRow({ u, self, onToggle }: { u: User; self: boolean; onToggle: () =
             <>
               <Select
                 value={pendingRole ?? u.role}
-                disabled={self}
+                disabled={self || busy}
                 onChange={(e) => change(e.target.value as Role)}
                 className="!w-[130px] !py-1 font-mono !text-[12px]"
               >
@@ -612,8 +536,9 @@ function UserRow({ u, self, onToggle }: { u: User; self: boolean; onToggle: () =
 
         <td className={TD}>
           <button
-            disabled={self}
-            onClick={onToggle}
+            type="button"
+            disabled={self || busy}
+            onClick={changeStatus}
             className={cx(
               'flex items-center gap-2 rounded-md border px-2 py-1 font-mono text-[11px] font-semibold transition-colors disabled:cursor-not-allowed disabled:opacity-50',
               u.status === 'ACTIVE'
@@ -628,7 +553,7 @@ function UserRow({ u, self, onToggle }: { u: User; self: boolean; onToggle: () =
         </td>
 
         <td className={cx(TD, 'font-mono text-[12px] text-steel')}>
-          {fmtStamp(u.createdAt).slice(0, 10)}
+          {fmtDate(u.createdAt)}
         </td>
       </tr>
 
@@ -640,6 +565,7 @@ function UserRow({ u, self, onToggle }: { u: User; self: boolean; onToggle: () =
                 Assigning <span className="font-mono font-semibold text-ink">USER</span> to {u.fullName} requires a unique Student ID.
               </div>
               <Input
+                disabled={busy}
                 value={code}
                 onChange={(e) => setCode(e.target.value.toUpperCase().slice(0, 8))}
                 placeholder="SE000000"
@@ -648,15 +574,12 @@ function UserRow({ u, self, onToggle }: { u: User; self: boolean; onToggle: () =
               />
               <Button
                 size="sm"
-                onClick={() => {
-                  const err = updateUserRole(u.id, 'USER', code)
-                  setError(err)
-                  if (!err) setPendingRole(null)
-                }}
+                disabled={busy || !code.trim()}
+                onClick={() => updateRole('USER', code)}
               >
                 Assign role <ArrowRight size={14} />
               </Button>
-              <Button size="sm" variant="ghost" onClick={() => setPendingRole(null)}>
+              <Button size="sm" variant="ghost" disabled={busy} onClick={() => { setPendingRole(null); setError(null) }}>
                 Cancel
               </Button>
               {error && <span className="text-[12px] font-medium text-plum">{error}</span>}
@@ -677,20 +600,36 @@ const statusTone: Record<RoomStatus, 'accent' | 'meta' | 'neutral'> = {
 }
 
 function RoomsPanel() {
-  const { rooms, bookings, saveRoom, deleteRoom } = useStore()
+  const { rooms, bookings, setRoomStatus, notify } = useStore()
   const [editing, setEditing] = useState<Room | null>(null)
-  const [confirmDel, setConfirmDel] = useState<string | null>(null)
+  const [confirmArchive, setConfirmArchive] = useState<string | null>(null)
+  const [updatingStatus, setUpdatingStatus] = useState(false)
+
+  const changeStatus = async (room: Room, status: RoomStatus) => {
+    if (updatingStatus || room.status === status) return
+    setUpdatingStatus(true)
+    try {
+      const error = await setRoomStatus(room.id, status)
+      if (error) notify(error, 'error')
+      else {
+        notify(status === 'INACTIVE' ? `Room ${room.code} archived.` : `Room ${room.code} status updated.`)
+        setConfirmArchive(null)
+      }
+    } finally {
+      setUpdatingStatus(false)
+    }
+  }
 
   return (
     <section>
       <PanelHead
-        eyebrow="03 / ROOMS MANAGEMENT · ROOMS 601, 602, 605"
-        title="Rooms (601, 602, 605)"
+        eyebrow="03 / ROOM MANAGEMENT"
+        title="Room inventory"
         right={
           <Button
             onClick={() =>
               setEditing({
-                id: uid('r'),
+                id: '',
                 code: '601',
                 name: '',
                 floor: 6,
@@ -706,14 +645,6 @@ function RoomsPanel() {
         }
       />
 
-      {/* Auto-Approve Policy Notice */}
-      <div className="mb-4 flex items-center justify-between rounded-md border border-rule bg-ice px-4 py-2.5 font-mono text-[11px] text-steel">
-        <span className="flex items-center gap-2">
-          <span className="h-2 w-2 rounded-full bg-accent" />
-          ALL BOOKINGS GO THROUGH FACILITY MANAGER / ADMIN APPROVAL · NO AUTO-APPROVE
-        </span>
-        <span>ROOMS LIMITED TO 601, 602, 605</span>
-      </div>
 
       <div className="overflow-x-auto rounded-lg border border-edge bg-paper">
         <table className="w-full min-w-[760px] border-collapse">
@@ -745,7 +676,13 @@ function RoomsPanel() {
                   <td className={TD}>
                     <Select
                       value={r.status}
-                      onChange={(e) => saveRoom({ ...r, status: e.target.value as RoomStatus })}
+                      aria-label={`Status for room ${r.code}`}
+                      disabled={updatingStatus}
+                      onChange={(event) => {
+                        const status = event.target.value as RoomStatus
+                        if (status === 'INACTIVE') setConfirmArchive(r.id)
+                        else void changeStatus(r, status)
+                      }}
                       className="!w-[150px] !py-1 font-mono !text-[12px]"
                     >
                       <option>AVAILABLE</option>
@@ -757,20 +694,18 @@ function RoomsPanel() {
                     <Tag tone={act ? 'ink' : 'neutral'}>{String(act).padStart(2, '0')}</Tag>
                   </td>
                   <td className={cx(TD, 'text-right')}>
-                    {confirmDel === r.id ? (
+                    {confirmArchive === r.id && r.status !== 'INACTIVE' ? (
                       <div className="flex items-center justify-end gap-2">
-                        <span className="text-[12px] text-plum">{act ? `${act} active booking(s).` : ''} Delete?</span>
+                        <span className="text-[12px] text-plum">Archive room {r.code}?</span>
                         <Button
                           size="xs"
                           variant="plum"
-                          onClick={() => {
-                            deleteRoom(r.id)
-                            setConfirmDel(null)
-                          }}
+                          disabled={updatingStatus}
+                          onClick={() => changeStatus(r, 'INACTIVE')}
                         >
-                          Delete
+                          Confirm archive
                         </Button>
-                        <Button size="xs" variant="ghost" onClick={() => setConfirmDel(null)}>
+                        <Button size="xs" variant="ghost" disabled={updatingStatus} onClick={() => setConfirmArchive(null)}>
                           Keep
                         </Button>
                       </div>
@@ -779,14 +714,11 @@ function RoomsPanel() {
                         <Button size="xs" variant="outline" onClick={() => setEditing(r)}>
                           <Pencil size={12} /> Edit
                         </Button>
-                        <Button
-                          size="xs"
-                          variant="ghost"
-                          aria-label={`Delete room ${r.code}`}
-                          onClick={() => setConfirmDel(r.id)}
-                        >
-                          <Trash2 size={13} />
-                        </Button>
+                        {r.status !== 'INACTIVE' && (
+                          <Button size="xs" variant="ghost" disabled={updatingStatus} onClick={() => setConfirmArchive(r.id)}>
+                            <Archive size={13} /> Archive
+                          </Button>
+                        )}
                       </div>
                     )}
                   </td>
@@ -806,43 +738,24 @@ function RoomsPanel() {
         ))}
       </div>
 
-      <RoomEditor
-        room={editing}
-        onClose={() => setEditing(null)}
-        onSave={saveRoom}
-        isNew={!!editing && !rooms.some((r) => r.id === editing.id)}
-      />
+      {editing && <RoomEditor room={editing} onClose={() => setEditing(null)} />}
     </section>
   )
 }
 
-function RoomEditor({
-  room,
-  onClose,
-  onSave,
-  isNew,
-}: {
-  room: Room | null
-  onClose: () => void
-  onSave: (r: Room) => string | null
-  isNew: boolean
-}) {
-  const [draft, setDraft] = useState<Room | null>(room)
-  const [features, setFeatures] = useState('')
+function RoomEditor({ room, onClose }: { room: Room; onClose: () => void }) {
+  const { saveRoom, notify } = useStore()
+  const [draft, setDraft] = useState(room)
+  const [features, setFeatures] = useState(() => room.features.join(', '))
   const [error, setError] = useState<string | null>(null)
+  const [saving, setSaving] = useState(false)
 
-  useEffect(() => {
-    setDraft(room)
-    setFeatures(room?.features.join(', ') ?? '')
-    setError(null)
-  }, [room])
-
-  if (!room || !draft) return null
-  const up = (p: Partial<Room>) => setDraft((d) => (d ? { ...d, ...p } : d))
+  const up = (p: Partial<Room>) => setDraft((d) => ({ ...d, ...p }))
+  const close = () => { if (!saving) onClose() }
 
   return (
-    <Modal open onClose={onClose} title={isNew ? 'Create room' : `Edit room ${room.code}`} eyebrow={`ROOM RECORD · ${draft.id}`}>
-      <div className="grid grid-cols-2 gap-4 p-6">
+    <Modal open onClose={close} title={room.id ? `Edit room ${room.code}` : 'Create room'} eyebrow="ROOM RECORD">
+      <fieldset disabled={saving} className="grid grid-cols-2 gap-4 p-6">
         <Field label="Room code" hint="3 digits (601, 602, 605)">
           <Input
             value={draft.code}
@@ -871,17 +784,10 @@ function RoomEditor({
             className="font-mono"
           />
         </Field>
-        <Field label="Status">
-          <Select
-            value={draft.status}
-            onChange={(e) => up({ status: e.target.value as RoomStatus })}
-            className="font-mono"
-          >
-            <option>AVAILABLE</option>
-            <option>MAINTENANCE</option>
-            <option>INACTIVE</option>
-          </Select>
-        </Field>
+        <label className="flex items-center gap-2 self-center text-[13px] font-semibold text-ink">
+          <input type="checkbox" checked={draft.autoApprove} onChange={(event) => up({ autoApprove: event.target.checked })} />
+          Auto-approve clear student slots
+        </label>
         <Field label="Features" hint="comma separated" className="col-span-2">
           <Input
             value={features}
@@ -891,26 +797,38 @@ function RoomEditor({
         </Field>
 
         {error && (
-          <div className="col-span-2 border-l-2 border-plum bg-plum/[0.06] px-3 py-2 text-[13px] font-medium text-plum">
+          <div role="alert" className="col-span-2 border-l-2 border-plum bg-plum/[0.06] px-3 py-2 text-[13px] font-medium text-plum">
             {error}
           </div>
         )}
-      </div>
+      </fieldset>
 
       <div className="flex justify-end gap-2 border-t border-rule px-6 py-4">
-        <Button variant="ghost" onClick={onClose}>
+        <Button variant="ghost" onClick={close} disabled={saving}>
           Cancel
         </Button>
         <Button
           size="md"
-          onClick={() => {
-            const err = onSave({
-              ...draft,
-              autoApprove: false, // Strict governance: all bookings require manager approval
-              features: features.split(',').map((f) => f.trim()).filter(Boolean),
-            })
-            if (err) setError(err)
-            else onClose()
+          disabled={saving}
+          onClick={async () => {
+            if (saving) return
+            setError(null)
+            setSaving(true)
+            try {
+              const error = await saveRoom({
+                ...draft,
+                features: features.split(',').map((f) => f.trim()).filter(Boolean),
+              })
+              if (error) {
+                setError(error)
+                notify(error, 'error')
+              } else {
+                notify('Room saved.')
+                onClose()
+              }
+            } finally {
+              setSaving(false)
+            }
           }}
         >
           Save room <ArrowRight size={16} />
@@ -922,21 +840,18 @@ function RoomEditor({
 
 /* ───────────── 04 · System Settings ───────────── */
 
-const TIMEZONES = [
-  'Asia/Ho_Chi_Minh (UTC+07:00)',
-  'Asia/Singapore (UTC+08:00)',
-  'Australia/Sydney (UTC+10:00)',
-  'UTC (UTC+00:00)',
-]
-
 function SettingsPanel() {
-  const { settings, updateSettings } = useStore()
-  const [draft, setDraft] = useState<Settings>(settings)
+  const { settings, settingsLoaded, refreshSettings, updateSettings, notify } = useStore()
+  const [edit, setEdit] = useState<{ base: Settings; value: Settings } | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const [saving, setSaving] = useState(false)
+  const [retrying, setRetrying] = useState(false)
 
-  useEffect(() => setDraft(settings), [settings])
+  const draft = edit?.base === settings ? edit.value : settings
   const dirty = JSON.stringify(draft) !== JSON.stringify(settings)
-  const up = (p: Partial<Settings>) => setDraft((d) => ({ ...d, ...p }))
+  const up = (p: Partial<Settings>) => setEdit((current) => ({
+    base: settings, value: { ...(current?.base === settings ? current.value : settings), ...p },
+  }))
   const hours = Array.from({ length: 25 }, (_, h) => `${String(h).padStart(2, '0')}:00`)
   const num = (k: keyof Settings) => (e: React.ChangeEvent<HTMLInputElement>) =>
     up({ [k]: Number(e.target.value) } as Partial<Settings>)
@@ -946,22 +861,30 @@ function SettingsPanel() {
       <PanelHead
         eyebrow="04 / GLOBAL CONFIGURATION"
         title="System settings"
-        right={dirty ? <Tag tone="meta">UNSAVED CHANGES</Tag> : <Tag tone="accent">IN SYNC</Tag>}
+        right={settingsLoaded && (dirty ? <Tag tone="meta">UNSAVED CHANGES</Tag> : <Tag tone="accent">IN SYNC</Tag>)}
       />
+      {!settingsLoaded && (
+        <div className="mb-4 flex flex-wrap items-center gap-3 rounded-md border border-plum p-3 text-[13px]">
+          <p role="alert">Settings are unavailable. Reload them before saving.</p>
+          <Button variant="outline" size="sm" disabled={retrying} onClick={async () => {
+            setRetrying(true)
+            try { await refreshSettings() } finally { setRetrying(false) }
+          }}>
+            {retrying ? 'Loading…' : 'Retry settings'}
+          </Button>
+        </div>
+      )}
       <Reveal stagger className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_320px]">
-        <div className="rounded-lg border border-edge bg-paper">
+        <fieldset disabled={!settingsLoaded || saving} className="min-w-0 rounded-lg border border-edge bg-paper">
           <SettingGroup
             n="A"
             title="Locale & hours"
-            body="Defines the bookable operating band shown on every room calendar (08:00–17:00)."
+            body="Defines the bookable operating hours shown on every room calendar in campus time."
           >
-            <Field label="Timezone" className="sm:col-span-2">
-              <Select value={draft.timezone} onChange={(e) => up({ timezone: e.target.value })} className="font-mono">
-                {TIMEZONES.map((t) => (
-                  <option key={t}>{t}</option>
-                ))}
-              </Select>
-            </Field>
+            <div className="flex flex-col gap-1.5 sm:col-span-2">
+              <span className="text-[13px] font-semibold text-ink">Campus timezone</span>
+              <span className="font-mono text-[13px] text-steel">{CAMPUS_TZ} (UTC+07:00)</span>
+            </div>
             <Field label="Opening time">
               <Select value={draft.openTime} onChange={(e) => up({ openTime: e.target.value })} className="font-mono">
                 {hours.slice(0, 24).map((h) => (
@@ -998,15 +921,6 @@ function SettingsPanel() {
                 className="font-mono"
               />
             </Field>
-            <Field label="Min advance" hint="days">
-              <Input
-                type="number"
-                min={0}
-                value={draft.minAdvanceDays}
-                onChange={num('minAdvanceDays')}
-                className="font-mono"
-              />
-            </Field>
             <Field label="Max advance" hint="days">
               <Input
                 type="number"
@@ -1025,14 +939,29 @@ function SettingsPanel() {
           )}
 
           <div className="flex justify-end gap-2 border-t border-rule px-6 py-4">
-            <Button variant="ghost" disabled={!dirty} onClick={() => setDraft(settings)}>
+            <Button variant="ghost" disabled={!dirty || saving} onClick={() => { setEdit(null); setError(null) }}>
               Discard
             </Button>
-            <Button size="md" disabled={!dirty} onClick={() => setError(updateSettings(draft))}>
+            <Button size="md" disabled={!settingsLoaded || !dirty || saving} onClick={async () => {
+              if (!settingsLoaded || saving) return
+              setError(null)
+              setSaving(true)
+              try {
+                const error = await updateSettings({ ...draft, timezone: CAMPUS_TZ })
+                if (error) {
+                  setError(error)
+                  notify(error, 'error')
+                } else {
+                  notify('Settings saved.')
+                }
+              } finally {
+                setSaving(false)
+              }
+            }}>
               Save settings <ArrowRight size={16} />
             </Button>
           </div>
-        </div>
+        </fieldset>
 
         <aside className="flex flex-col gap-4 self-start rounded-lg bg-ice p-6">
           <Eyebrow>POLICY PREVIEW</Eyebrow>
@@ -1040,10 +969,8 @@ function SettingsPanel() {
             <SplitText text="What students will see" />
           </h3>
           <p className="text-[14px] leading-[1.5] text-graphite">
-            Rooms open <b className="font-semibold text-ink">{draft.openTime}–{draft.closeTime}</b>. Requests must be made{' '}
-            <b className="font-semibold text-ink">
-              {draft.minAdvanceDays}–{draft.maxAdvanceDays} days
-            </b>{' '}
+            Rooms open <b className="font-semibold text-ink">{draft.openTime}–{draft.closeTime}</b>. Requests can be made up to{' '}
+            <b className="font-semibold text-ink">{draft.maxAdvanceDays} days</b>{' '}
             ahead, last at most <b className="font-semibold text-ink">{draft.maxDurationMinutes} min</b>, and each student may hold{' '}
             <b className="font-semibold text-ink">{draft.maxActiveBookings}</b> active booking(s).
           </p>
@@ -1055,7 +982,7 @@ function SettingsPanel() {
                   'flex flex-1 items-center justify-center border-r border-rule font-mono text-[9px] last:border-0',
                   i === 0
                     ? 'bg-ink text-paper'
-                    : i >= draft.minAdvanceDays && i <= draft.maxAdvanceDays
+                    : i <= draft.maxAdvanceDays
                       ? 'bg-tint text-forest'
                       : 'hatch text-steel',
                 )}
@@ -1064,7 +991,7 @@ function SettingsPanel() {
               </div>
             ))}
           </div>
-          <div className="font-mono text-[11px] text-steel">TZ · {draft.timezone}</div>
+          <div className="font-mono text-[11px] text-steel">TZ · {CAMPUS_TZ}</div>
         </aside>
       </Reveal>
     </section>
@@ -1099,29 +1026,28 @@ function SettingGroup({
 /* ───────────── 05 · Immutable Audit Ledger ───────────── */
 
 function AuditPanel() {
-  const { audit } = useStore()
+  const { audit, auditTotal, loadAudit } = useStore()
   const { user } = useLookups()
-  const [q, setQ] = useState('')
-  const [action, setAction] = useState('ALL')
+  const [action, setAction] = useState('')
+  const [targetType, setTargetType] = useState('')
+  const [query, setQuery] = useState<{ page: number; action?: string; targetType?: string }>({ page: 1 })
+  const [loadedQuery, setLoadedQuery] = useState<typeof query | null>(null)
   const [open, setOpen] = useState<string | null>(null)
 
-  const actions = useMemo(() => ['ALL', ...Array.from(new Set(audit.map((a) => a.action))).sort()], [audit])
-  const list = audit.filter((a) => {
-    const s = q.trim().toLowerCase()
-    return (
-      (action === 'ALL' || a.action === action) &&
-      (!s ||
-        a.entity.toLowerCase().includes(s) ||
-        a.actorId.toLowerCase().includes(s) ||
-        JSON.stringify(a.metadata).toLowerCase().includes(s))
-    )
-  })
+  const loading = loadedQuery !== query
+
+  useEffect(() => {
+    let current = true
+    void loadAudit(query).finally(() => { if (current) setLoadedQuery(query) })
+    return () => { current = false }
+  }, [loadAudit, query])
 
   const exportJson = () => {
-    const blob = new Blob([JSON.stringify(list, null, 2)], { type: 'application/json' })
+    if (loading) return
+    const blob = new Blob([JSON.stringify(audit, null, 2)], { type: 'application/json' })
     const a = document.createElement('a')
     a.href = URL.createObjectURL(blob)
-    a.download = `audit-log-${fmtStamp(new Date()).slice(0, 10)}.json`
+    a.download = `audit-log-${dayKey(new Date())}-page-${query.page}.json`
     a.click()
     URL.revokeObjectURL(a.href)
   }
@@ -1141,28 +1067,25 @@ function AuditPanel() {
         eyebrow="05 / IMMUTABLE AUDIT LEDGER"
         title="Audit logs"
         right={
-          <Button variant="outline" onClick={exportJson}>
-            <Download size={14} /> Export JSON
+          <Button variant="outline" onClick={exportJson} disabled={loading || audit.length === 0}>
+            <Download size={14} /> Export current page (JSON)
           </Button>
         }
       />
 
-      <div className="mb-4 flex flex-wrap gap-3">
-        <div className="relative min-w-[260px] flex-1">
-          <Search size={15} className="pointer-events-none absolute top-1/2 left-3 -translate-y-1/2 text-steel" />
-          <Input
-            value={q}
-            onChange={(e) => setQ(e.target.value)}
-            placeholder="Search entity, actor or metadata"
-            className="pl-9 font-mono"
-          />
-        </div>
-        <Select value={action} onChange={(e) => setAction(e.target.value)} className="!w-[220px] font-mono">
-          {actions.map((a) => (
-            <option key={a}>{a}</option>
-          ))}
-        </Select>
-      </div>
+      <form className="mb-4 flex flex-wrap items-end gap-3" onSubmit={(event) => {
+        event.preventDefault()
+        setOpen(null)
+        setQuery({ page: 1, action: action.trim() || undefined, targetType: targetType.trim() || undefined })
+      }}>
+        <Field label="Action" hint="Exact match">
+          <Input maxLength={100} placeholder="e.g. BOOKING_APPROVED" value={action} onChange={(event) => setAction(event.target.value)} className="font-mono" />
+        </Field>
+        <Field label="Target type" hint="Exact match">
+          <Input maxLength={100} placeholder="e.g. Booking" value={targetType} onChange={(event) => setTargetType(event.target.value)} className="font-mono" />
+        </Field>
+        <Button type="submit" variant="outline">Apply filters</Button>
+      </form>
 
       <div className="overflow-x-auto rounded-lg border border-edge bg-paper">
         <table className="w-full min-w-[900px] border-collapse">
@@ -1178,7 +1101,9 @@ function AuditPanel() {
             </tr>
           </thead>
           <tbody>
-            {list.map((a) => {
+            {loading || audit.length === 0 ? (
+              <tr><td colSpan={7} className="p-8 text-center text-steel">{loading ? 'Loading audit entries…' : 'No audit entries match the current filters.'}</td></tr>
+            ) : audit.map((a) => {
               const isOpen = open === a.id
               const meta = JSON.stringify(a.metadata)
               return (
@@ -1197,7 +1122,7 @@ function AuditPanel() {
                     <td className={cx(TD, 'text-steel')}>{a.id}</td>
                     <td className={TD}>
                       <div className="font-medium text-meta">{a.actorId}</div>
-                      <div className="font-sans text-[11px] text-steel">{user(a.actorId)?.fullName ?? 'System'}</div>
+                      <div className="font-sans text-[11px] text-steel">{user(a.actorId)?.fullName}</div>
                     </td>
                     <td className={TD}>
                       <Tag tone={tone(a.action)}>{a.action}</Tag>
@@ -1236,9 +1161,10 @@ function AuditPanel() {
         </table>
       </div>
 
-      <div className="mt-3 font-mono text-[11px] text-steel">
-        SHOWING {list.length} OF {audit.length} ENTRIES · APPEND-ONLY
-      </div>
+      <Pager page={query.page} total={auditTotal} count={audit.length} loading={loading} onPage={(page) => {
+        setOpen(null)
+        setQuery((previous) => ({ ...previous, page }))
+      }} />
     </section>
   )
 }

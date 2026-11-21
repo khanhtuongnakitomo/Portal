@@ -1,7 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { X } from 'lucide-react'
-import { useLookups, useStore } from '@/lib/store'
+import { useStore } from '@/lib/store'
 import type { Booking } from '@/lib/types'
 import { durationMin, fmtDate, fmtDuration, fmtTime } from '@/lib/time'
 import { cx } from '@/components/ui'
@@ -15,10 +15,11 @@ export function StudentBookingPopover({
   anchor: HTMLElement
   onClose: () => void
 }) {
-  const { cancelBooking, currentUser } = useStore()
-  const { user, room } = useLookups()
+  const { cancelBooking, currentUser, user, room, notify } = useStore()
   const ref = useRef<HTMLDivElement>(null)
   const [pos, setPos] = useState<{ top: number; left: number; side: 'left' | 'right'; arrowTop: number } | null>(null)
+  const [pending, setPending] = useState(false)
+  const [error, setError] = useState<string | null>(null)
 
   const u = user(b.userId) ?? currentUser
   const r = room(b.roomId)
@@ -26,18 +27,22 @@ export function StudentBookingPopover({
   const isCollected = b.status === 'KEY_CHECKED_OUT'
   const isCompleted = b.status === 'COMPLETED'
   const isCancelled = b.status === 'CANCELLED' || b.status === 'REJECTED'
-  const canCancel = !isCollected && !isCompleted && !isCancelled
+  const canCancel = b.isMine && (b.status === 'PENDING' || b.status === 'APPROVED')
+  useEffect(() => {
+    ref.current?.focus({ preventScroll: true })
+    return () => { if (anchor.isConnected) anchor.focus({ preventScroll: true }) }
+  }, [anchor])
 
   useLayoutEffect(() => {
     const place = () => {
       if (!anchor.isConnected) return onClose()
       const a = anchor.getBoundingClientRect()
-      const w = 360
-      const h = ref.current?.offsetHeight ?? 380
+      const w = Math.min(360, window.innerWidth - 24)
+      const h = Math.min(ref.current?.offsetHeight ?? 380, window.innerHeight - 24)
       const gap = 10
       const side: 'left' | 'right' = a.right + gap + w <= window.innerWidth - 12 ? 'right' : 'left'
       const left = side === 'right' ? a.right + gap : Math.max(12, a.left - gap - w)
-      const top = Math.min(Math.max(12, a.top - 8), window.innerHeight - h - 12)
+      const top = Math.max(12, Math.min(a.top - 8, window.innerHeight - h - 12))
       const arrowTop = Math.min(Math.max(14, a.top + Math.min(a.height, 44) / 2 - top), h - 20)
       setPos({ top, left, side, arrowTop })
     }
@@ -68,10 +73,22 @@ export function StudentBookingPopover({
     }
   }, [anchor, onClose])
 
-  const handleCancel = () => {
-    if (!canCancel) return
-    cancelBooking(b.id)
-    onClose()
+  const handleCancel = async () => {
+    if (!canCancel || pending) return
+    setPending(true)
+    setError(null)
+    try {
+      const error = await cancelBooking(b.id)
+      if (error) {
+        setError(error)
+        notify(error, 'error')
+      } else {
+        notify('Reservation cancelled.')
+        onClose()
+      }
+    } finally {
+      setPending(false)
+    }
   }
 
   // Format timestamp: "FRI 06 NOV • 10:30 → 14:30 (4h)"
@@ -111,7 +128,8 @@ export function StudentBookingPopover({
       ref={ref}
       role="dialog"
       aria-label={`Booking ${b.title}`}
-      className="fixed z-50 w-[360px] rounded-lg border border-[#E0E0E0] bg-[#ffffff] shadow-nav"
+      tabIndex={-1}
+      className="fixed z-50 w-[min(360px,calc(100%-24px))] rounded-lg border border-[#E0E0E0] bg-[#ffffff] shadow-nav"
       style={{ top: pos?.top ?? -9999, left: pos?.left ?? -9999 }}
     >
       {pos && (
@@ -123,6 +141,7 @@ export function StudentBookingPopover({
           style={{ top: pos.arrowTop }}
         />
       )}
+      <div className="flex max-h-[calc(100dvh-26px)] flex-col overflow-y-auto">
 
       {/* Header */}
       <div className="flex items-start justify-between gap-3 border-b border-[#E0E0E0] px-5 pt-4 pb-3">
@@ -182,6 +201,13 @@ export function StudentBookingPopover({
           </div>
         </div>
 
+        {b.isMine && b.passCode && (b.status === 'APPROVED' || isCollected) && (
+          <div className="rounded-sm border border-accent bg-tint px-3 py-2">
+            <p className="font-mono text-[10px] font-semibold text-ink-blue">KEY PICKUP PASS CODE</p>
+            <p className="break-all font-mono text-[15px] font-semibold text-ink">{b.passCode}</p>
+          </div>
+        )}
+
         {/* Warning / status note if not cancellable */}
         {isCollected && (
           <div className="rounded-sm border border-plum/30 bg-plum/[0.05] px-3 py-2 text-[12px] font-mono text-plum">
@@ -195,16 +221,18 @@ export function StudentBookingPopover({
         )}
         {isCancelled && (
           <div className="rounded-sm border border-rule bg-ice px-3 py-2 text-[12px] font-mono text-steel">
-            This reservation has been cancelled
+            {b.status === 'REJECTED' ? 'This reservation was rejected' : 'This reservation was cancelled'}
           </div>
         )}
+        {b.note && <p className="text-[12px] text-graphite">Review note: {b.note}</p>}
+        {error && <p role="alert" className="text-[12px] text-plum">{error}</p>}
 
         {/* Action Buttons */}
         <div className="flex items-center justify-between gap-3 border-t border-[#E0E0E0] pt-3">
           <button
             type="button"
             onClick={handleCancel}
-            disabled={!canCancel}
+            disabled={!canCancel || pending}
             className={cx(
               'inline-flex items-center justify-center rounded-sm px-3 py-1.5 font-mono text-[12px] font-semibold transition-colors cursor-pointer',
               canCancel
@@ -212,7 +240,7 @@ export function StudentBookingPopover({
                 : 'border border-[#E0E0E0] bg-[#F4F5F7] text-steel/50 cursor-not-allowed',
             )}
           >
-            Cancel reservation
+            {pending ? 'Cancelling…' : 'Cancel reservation'}
           </button>
           <button
             type="button"
@@ -222,6 +250,7 @@ export function StudentBookingPopover({
             Close
           </button>
         </div>
+      </div>
       </div>
     </div>,
     document.body,

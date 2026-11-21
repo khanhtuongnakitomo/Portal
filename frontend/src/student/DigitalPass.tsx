@@ -4,6 +4,7 @@ import { fmtDate, fmtRange, fmtTime } from '@/lib/time'
 import { cx } from '@/components/ui'
 
 export function DigitalPass({ booking, room, holder, studentCode }: { booking: Booking; room?: Room; holder: string; studentCode?: string }) {
+  if (!booking.passCode || (booking.status !== 'APPROVED' && booking.status !== 'KEY_CHECKED_OUT')) return null
   const out = booking.status === 'KEY_CHECKED_OUT'
   const overdue = out && new Date() > new Date(booking.end)
   return (
@@ -31,6 +32,10 @@ export function DigitalPass({ booking, room, holder, studentCode }: { booking: B
             <div className="font-mono text-[11px] font-semibold text-meta">ROOM</div>
             <div className="font-display text-[56px] leading-[0.95] font-w450 text-ink">{room?.code}</div>
             <div className="text-[14px] font-semibold text-graphite">{room?.name}</div>
+          </div>
+          <div>
+            <div className="font-mono text-[10px] font-semibold text-steel">PASS CODE</div>
+            <div className="break-all font-mono text-[16px] font-semibold tracking-wide text-ink">{booking.passCode}</div>
           </div>
           <div className="grid grid-cols-2 gap-x-4 gap-y-1.5">
             <div>

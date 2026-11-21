@@ -18,6 +18,16 @@
   --color-slate: #2e3a4b; /* Event / room-restriction blocks */
   --color-reserved: #e3e7ed; /* Other students' reserved cards */
   --color-meta: #0f62fe; /* UTS Academic Blue — technical metadata */
+  --color-room-1: #1d4ed8;
+  --color-room-2: #047857;
+  --color-room-3: #6d28d9;
+  --color-danger: #b3261e;
+  --color-conflict-a: #0050a4;
+  --color-conflict-b: #8b2780;
+  --color-conflict-c: #08705c;
+  --color-conflict-d: #9b4b00;
+  --color-conflict-e: #5636ad;
+  --color-conflict-f: #a22454;
 
   --font-display: 'Manrope', ui-sans-serif, system-ui, sans-serif;
   --font-sans: 'Inter', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif;
@@ -96,6 +106,21 @@
 
 @utility hatch-plum {
   background-image: repeating-linear-gradient(135deg, rgb(84 59 78 / 0.08) 0 6px, rgb(84 59 78 / 0.22) 6px 7px);
+}
+
+@utility hatch-conflict {
+  background-color: rgb(179 38 30 / 0.08);
+  background-image: repeating-linear-gradient(135deg, transparent 0 5px, rgb(179 38 30 / 0.28) 5px 7px);
+}
+
+/* Inset so the indicator remains visible in clipped calendar columns. */
+@utility calendar-focus {
+  &:focus-visible {
+    outline: 2px solid var(--color-ink);
+    outline-offset: -2px;
+    box-shadow: inset 0 0 0 4px var(--color-paper);
+    z-index: 40;
+  }
 }
 
 @utility scrollbar-thin {

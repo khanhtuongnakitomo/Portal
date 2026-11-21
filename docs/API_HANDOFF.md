@@ -1,6 +1,6 @@
 # Frontend API handoff
 
-Tài liệu này dành cho team design/frontend. Hợp đồng chính xác nhất là Swagger tại `http://localhost:3000/api/v1/docs`.
+Tài liệu này là hợp đồng HTTP của Express API dành cho team design/frontend.
 
 ## Kết nối
 
@@ -17,7 +17,7 @@ Access token được trả trong JSON và gửi bằng:
 Authorization: Bearer <accessToken>
 ```
 
-Backend không có refresh token/cookie. `expiresIn` mặc định là `28800` giây (8 giờ); khi API trả `401` do token hết hạn, đưa người dùng về trang login. Logout là xóa token và user state ở frontend.
+Backend không có refresh token/cookie. `expiresIn` mặc định là `28800` giây (8 giờ). Nếu request có phiên đăng nhập nhận `401`, xóa phiên và đưa người dùng về trang login. Logout xóa token và toàn bộ dữ liệu của phiên ở frontend.
 
 ## Auth
 
@@ -70,15 +70,18 @@ Register/login đều trả:
 
 ## Demo accounts local
 
-Khi `.env` có `SEED_DEMO_USERS=true` và đã chạy `pnpm db:seed`:
+Xem [danh sách email demo và cách cấu hình](../backend/README.md#tài-khoản-demo-và-reset-local). Demo chỉ dùng với database local dùng thử.
 
-| Role    | Email               | Password source               |
-| ------- | ------------------- | ----------------------------- |
-| Admin   | `ADMIN_EMAIL`       | `ADMIN_PASSWORD` trong `.env` |
-| Manager | `manager@tne.local` | `DEMO_PASSWORD` trong `.env`  |
-| User    | `student@tne.local` | `DEMO_PASSWORD` trong `.env`  |
+## Developer mode
 
-Không bật demo users trên production.
+Chỉ bật cho môi trường phát triển local bằng `DEV_TOOLS_ENABLED=true`; xem [hướng dẫn bật và giới hạn truy cập](../backend/README.md#developer-mode). Các route sau nằm dưới `/api/v1`:
+
+- `GET /dev/status` → `{ enabled: true }`.
+- `GET /dev/accounts` → `{ accounts: [{ id, email, fullName, role, studentCode, kind }] }`, `kind` là `DEV`, `MOCK` hoặc `USER`.
+- `POST /dev/login` nhận `{ role }` (`USER`, `MANAGER`, `ADMIN`) hoặc `{ userId }` của tài khoản đang hoạt động; trả cùng cấu trúc như `/auth/login`, với audit action `DEV_LOGIN`.
+- `POST /dev/mock-data` nhận `{ days? }` (1–10 ngày làm việc, mặc định 5), trả `{ created: { students, bookings, blocks }, skipped }`.
+- `DELETE /dev/mock-data` → `{ deleted: { bookings, users, blocks } }`. Xóa booking và lịch sử của tài khoản mock/dev, block do mock staff tạo và tài khoản mock; giữ lại ba tài khoản dev.
+  Dữ liệu khác được giữ lại; các trường tham chiếu tới tài khoản mock đã xóa được chuyển sang `dev.admin@dev.local`.
 
 ## Enums dùng trong UI
 
@@ -112,6 +115,8 @@ GET /rooms
 GET /bookings/calendar?from=2026-11-09T00:00:00%2B07:00&to=2026-11-16T00:00:00%2B07:00
 ```
 
+Không gửi `Authorization` để xem ẩn danh. Bearer token hợp lệ xác định người xem; header có mặt nhưng không hợp lệ, hết hạn hoặc thuộc tài khoản bị đình chỉ thì trả `401`, không tự chuyển sang chế độ ẩn danh.
+
 Response có hai danh sách:
 
 ```json
@@ -119,10 +124,13 @@ Response có hai danh sách:
   "bookings": [
     {
       "id": "booking-uuid",
+      "roomId": "room-uuid",
       "title": "Project discussion",
       "startTime": "2026-11-10T02:00:00.000Z",
       "endTime": "2026-11-10T04:00:00.000Z",
       "status": "APPROVED",
+      "kind": "STUDENT",
+      "isMine": false,
       "room": { "id": "room-uuid", "name": "Room 1" }
     }
   ],
@@ -139,7 +147,11 @@ Response có hai danh sách:
 }
 ```
 
-Block được gộp trong room nên `blocks[].id` chính là `roomId`. Public calendar không trả thông tin sinh viên.
+- Mỗi booking luôn có `id`, `roomId`, `room: { id, name }`, `title`, `startTime`, `endTime`, `status`, `kind`, `isMine`.
+- `kind` là `OFFICIAL` nếu chủ booking có role `MANAGER` hoặc `ADMIN`, nếu không là `STUDENT`. Không xác định loại dựa vào tiêu đề. `isMine` chỉ là `true` khi người xem là chủ booking.
+- Chỉ chủ booking, `MANAGER` và `ADMIN` mới nhận thêm `userId`, `purpose`, `attendeeCount`, `reviewNote`, `createdAt`, `keyCheckedOutAt`, `keyReturnedAt` và `user: { id, fullName, email, role, studentCode }`.
+- Lịch không bao giờ trả `passCode`, kể cả với chủ booking hoặc staff.
+- Block được gộp trong room nên `blocks[].id` chính là `roomId`.
 
 ### 2. Tạo booking
 
@@ -159,7 +171,8 @@ Authorization: Bearer ...
 }
 ```
 
-Phòng bật `autoApprove` trả booking `APPROVED`; còn lại trả `PENDING`.
+- Với sinh viên, nếu phòng bật `autoApprove=true`, booking được tạo ở `APPROVED` khi không có booking `PENDING`, `APPROVED` hoặc `KEY_CHECKED_OUT` nào giao với khoảng đó; nếu có booking giao nhau thì booking mới là `PENDING`. Phòng không bật `autoApprove` tạo booking ở `PENDING`; khung giờ đã được giữ chỗ độc quyền vẫn trả `409`.
+- Booking do `MANAGER` hoặc `ADMIN` tạo ở trạng thái `APPROVED` nếu khung giờ hợp lệ và khả dụng.
 
 ### 3. Booking cá nhân và digital pass
 
@@ -170,9 +183,14 @@ GET /bookings/:id/pass
 PATCH /bookings/:id/cancel
 ```
 
-Digital pass khả dụng ở `APPROVED` và `KEY_CHECKED_OUT`, trả `passCode`, holder, room, thời gian và `status`. QR có thể encode `passCode` hoặc `bookingId`; manager vẫn xác nhận qua API.
+- `/bookings/me` trả lịch sử của tài khoản đang đăng nhập ở mọi trạng thái (gồm `REJECTED`, `CANCELLED`, `COMPLETED`), phân trang `{ items, total, page, limit }`.
+- `/bookings/:id` chỉ dành cho chủ booking, `MANAGER` hoặc `ADMIN`. Endpoint này và `/bookings/me` trả `kind`.
+- Các phản hồi booking cho chủ booking hoặc staff (kể cả tạo booking, danh sách staff và chuyển trạng thái) chỉ có `passCode` khác `null` ở `APPROVED` hoặc `KEY_CHECKED_OUT`. Lịch không trả trường này.
+- `/bookings/:id/pass` dành cho chủ booking, `MANAGER` hoặc `ADMIN`; trả `passCode`, holder, room, thời gian và `status` cho `APPROVED` hoặc `KEY_CHECKED_OUT`. Trạng thái khác trả `409`. QR có thể encode `passCode` hoặc `bookingId`; manager vẫn xác nhận qua API.
 
 ## Luồng Manager
+
+`MANAGER` và `ADMIN` có thể gọi `GET /admin/rooms` để đọc toàn bộ phòng, kể cả phòng `MAINTENANCE` và `INACTIVE`. Tạo và cập nhật phòng vẫn chỉ dành cho `ADMIN`.
 
 ### Approval queue
 
@@ -194,9 +212,11 @@ PATCH /manager/bookings/:id/key-return
 GET /manager/bookings/overdue-keys
 ```
 
-- `key-checkout`: `APPROVED → KEY_CHECKED_OUT`.
+- `key-checkout`: `APPROVED → KEY_CHECKED_OUT`. Body yêu cầu `passCode` dạng chuỗi và nhận `note` tùy chọn. Mã được so sánh không phân biệt hoa/thường; mã sai trả `400` với thông báo `Pass code does not match`.
 - `key-return`: `KEY_CHECKED_OUT → COMPLETED`.
 - Overdue list gồm booking `KEY_CHECKED_OUT` có `endTime` trong quá khứ.
+
+Approve, reject, cancel, checkout và return đều kiểm tra trạng thái booking tại lúc ghi. Nếu các thao tác cạnh tranh cho cùng một lần chuyển trạng thái, tối đa một thao tác thành công; thao tác thua trả `409`.
 
 ### Chặn lịch phòng
 
@@ -211,11 +231,15 @@ PATCH /manager/room-blocks/:roomId/cancel
   "roomId": "uuid",
   "startTime": "2026-11-11T13:00:00+07:00",
   "endTime": "2026-11-11T17:00:00+07:00",
-  "reason": "Department workshop"
+  "reason": "Department workshop",
+  "displaceBookings": false
 }
 ```
 
-Mỗi phòng chỉ lưu một block hiện tại/gần nhất. Muốn tạo block mới khi block ACTIVE chưa kết thúc, manager phải cancel block hiện tại. Backend từ chối block nếu còn booking giữ slot giao với khoảng đó.
+- `displaceBookings` không bắt buộc, mặc định `false`. Với `false`, booking `PENDING` hoặc `APPROVED` giao với block sẽ làm request trả `409`.
+- Với `true`, các booking `PENDING` và `APPROVED` giao với block chuyển thành `REJECTED`, có ghi lịch sử và audit log. Booking `KEY_CHECKED_OUT` giao với block luôn làm request trả `409`, bất kể tùy chọn.
+- Mỗi phòng chỉ lưu một block hiện tại/gần nhất. Nếu đã có block `ACTIVE` chưa hết hạn, tạo block mới luôn trả `409` (kể cả khi hai khoảng không giao nhau); phải cancel block cũ trước.
+- Khi cancel, có thể gửi cả `startTime` và `endTime` (chuỗi ISO) của block đang hiển thị. Nếu khoảng thời gian không còn khớp với block `ACTIVE`, API trả `409` với thông báo `Room block has changed; refresh and try again`. Không gửi body để hủy block `ACTIVE` hiện tại mà không đối chiếu khoảng thời gian.
 
 ## Luồng Admin
 
@@ -244,6 +268,8 @@ Settings gồm timezone, giờ mở/đóng cửa, thời lượng tối đa, s�
 
 ## Error handling
 
+Mọi lỗi API trả JSON `{ statusCode, message, error }`:
+
 ```json
 {
   "statusCode": 409,
@@ -252,11 +278,13 @@ Settings gồm timezone, giờ mở/đóng cửa, thời lượng tối đa, s�
 }
 ```
 
-- `400`: dữ liệu hoặc khung giờ không hợp lệ.
-- `401`: chưa đăng nhập/token hết hạn; chuyển về login.
+- `400`: JSON sai cú pháp, trường không được hỗ trợ hoặc dữ liệu/khung giờ không hợp lệ.
+- `401`: thiếu token trên route bắt buộc xác thực, hoặc token không hợp lệ/hết hạn/tài khoản bị đình chỉ.
 - `403`: sai role hoặc không sở hữu booking.
-- `404`: resource không tồn tại.
+- `404`: resource hoặc route dưới API prefix không tồn tại.
 - `409`: trùng lịch, room bị block hoặc state đã thay đổi.
+- `413`: JSON body vượt giới hạn 100 KiB.
+- `429`: `/auth/login` giới hạn 10 lần/phút theo IP và email, `/auth/register` 5 lần/phút theo IP. Dùng `Retry-After` để biết còn bao nhiêu giây trước khi thử lại.
 
 ## Frontend acceptance checklist
 

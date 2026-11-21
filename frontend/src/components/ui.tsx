@@ -1,4 +1,5 @@
-import { useEffect, useMemo, type ButtonHTMLAttributes, type InputHTMLAttributes, type ReactNode, type SelectHTMLAttributes, type TextareaHTMLAttributes } from 'react'
+import { useId, useLayoutEffect, useMemo, useRef, type ButtonHTMLAttributes, type InputHTMLAttributes, type ReactNode, type SelectHTMLAttributes, type TextareaHTMLAttributes } from 'react'
+import { createPortal } from 'react-dom'
 import { X } from 'lucide-react'
 import type { BookingStatus } from '@/lib/types'
 
@@ -133,6 +134,73 @@ export function Tag({ children, tone = 'neutral', className }: { children: React
   return <span className={cx('inline-flex items-center gap-1 rounded-sm border px-1.5 py-[2px] font-mono text-[11px] font-bold leading-[1.4] whitespace-nowrap', t, className)}>{children}</span>
 }
 
+export function Dialog({
+  open,
+  onClose,
+  labelledBy,
+  children,
+  className,
+}: {
+  open: boolean
+  onClose: () => void
+  labelledBy: string
+  children: ReactNode
+  className?: string
+}) {
+  const ref = useRef<HTMLDialogElement>(null)
+
+  useLayoutEffect(() => {
+    const dialog = ref.current
+    if (!open || !dialog) return
+    const opener = document.activeElement
+    // Native modal dialogs place the rest of the document in an inert state.
+    dialog.showModal()
+    return () => {
+      dialog.close()
+      if (opener instanceof HTMLElement && opener.isConnected) opener.focus({ preventScroll: true })
+    }
+  }, [open])
+
+  if (!open) return null
+  return createPortal(
+    <dialog
+      ref={ref}
+      aria-labelledby={labelledBy}
+      aria-modal="true"
+      className={cx('fixed inset-0 m-auto w-[calc(100%_-_2rem)] max-h-[calc(100dvh_-_2rem)] overflow-auto rounded-lg border border-ink bg-paper p-0 text-ink shadow-nav backdrop:bg-ink/50 backdrop:backdrop-blur-xs', className)}
+      onCancel={(event) => {
+        event.preventDefault()
+        onClose()
+      }}
+      onClick={(event) => {
+        if (event.target !== event.currentTarget) return
+        const rect = event.currentTarget.getBoundingClientRect()
+        if (event.clientX < rect.left || event.clientX >= rect.right || event.clientY < rect.top || event.clientY >= rect.bottom) onClose()
+      }}
+      onKeyDown={(event) => {
+        if (event.key !== 'Tab') return
+        const dialog = event.currentTarget
+        const stops = Array.from(dialog.querySelectorAll<HTMLElement>(
+          'a[href], button, input, select, textarea, summary, [tabindex], [contenteditable="true"]',
+        )).filter((el) => el.tabIndex >= 0 && !el.matches(':disabled') && el.getClientRects().length && getComputedStyle(el).visibility === 'visible')
+        const first = stops[0]
+        const last = stops[stops.length - 1]
+        const active = document.activeElement
+        if (!first || !last) {
+          event.preventDefault()
+        } else if (!stops.some((el) => el === active) || (event.shiftKey ? active === first : active === last)) {
+          event.preventDefault()
+          const next = event.shiftKey ? last : first
+          next.focus()
+        }
+      }}
+    >
+      {children}
+    </dialog>,
+    document.body,
+  )
+}
+
 export function Modal({
   open,
   onClose,
@@ -148,29 +216,20 @@ export function Modal({
   children: ReactNode
   width?: string
 }) {
-  useEffect(() => {
-    if (!open) return
-    const h = (e: KeyboardEvent) => e.key === 'Escape' && onClose()
-    window.addEventListener('keydown', h)
-    return () => window.removeEventListener('keydown', h)
-  }, [open, onClose])
-  if (!open) return null
+  const titleId = useId()
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-      <div className="absolute inset-0 bg-ink/30 backdrop-blur-[1px]" onClick={onClose} />
-      <div role="dialog" aria-modal="true" className={cx('relative w-full overflow-hidden rounded-lg border border-ink bg-paper shadow-nav', width)}>
-        <div className="flex items-start justify-between border-b border-rule px-6 pt-5 pb-4">
-          <div className="flex flex-col gap-2">
-            {eyebrow && <Eyebrow>{eyebrow}</Eyebrow>}
-            <h2 className="font-display text-feature font-w450 text-ink">{title}</h2>
-          </div>
-          <button onClick={onClose} aria-label="Close" className="-mr-2 rounded-md p-1.5 text-steel hover:bg-ice hover:text-ink">
-            <X size={18} strokeWidth={1.5} />
-          </button>
+    <Dialog open={open} onClose={onClose} labelledBy={titleId} className={width}>
+      <div className="flex items-start justify-between border-b border-rule px-6 pt-5 pb-4">
+        <div className="flex flex-col gap-2">
+          {eyebrow && <Eyebrow>{eyebrow}</Eyebrow>}
+          <h2 id={titleId} className="font-display text-feature font-w450 text-ink">{title}</h2>
         </div>
-        {children}
+        <button type="button" onClick={onClose} aria-label="Close" className="-mr-2 rounded-md p-1.5 text-steel hover:bg-ice hover:text-ink">
+          <X size={18} strokeWidth={1.5} />
+        </button>
       </div>
-    </div>
+      {children}
+    </Dialog>
   )
 }
 

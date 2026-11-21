@@ -1,10 +1,10 @@
 import { useEffect, useMemo } from 'react'
-import { ChevronLeft, ChevronRight, Plus, Sparkles } from 'lucide-react'
-import { useLookups, useStore } from '@/lib/store'
-import type { Booking, Room, RoomBlock } from '@/lib/types'
-import { addDays, at, fmtDate, fmtShort, fmtTime, overlaps, parseHM, sameDay, startOfDay } from '@/lib/time'
-import { Button, StatusChip, cx } from '@/components/ui'
-import { extractEventBadge, isOfficialEvent } from '@/student/WeekCalendar'
+import { ChevronLeft, ChevronRight, Plus } from 'lucide-react'
+import { ACTIVE_STATUSES, useStore } from '@/lib/store'
+import type { Booking, RoomBlock } from '@/lib/types'
+import { addDays, at, durationMin, fmtDate, fmtRange, fmtTime, isWeekend, overlaps, parseHM, sameDay, startOfDay } from '@/lib/time'
+import { conflictBands, conflictMap, CONFLICT_COLORS } from '@/lib/conflicts'
+import { Button, cx } from '@/components/ui'
 import type { AssignModalInitial } from './AssignActivityModal'
 
 interface DayMatrixViewProps {
@@ -15,31 +15,6 @@ interface DayMatrixViewProps {
   onBlockClick: (blk: RoomBlock, el: HTMLElement) => void
 }
 
-function getPrevWorkday(d: Date): Date {
-  const dow = d.getDay()
-  if (dow === 1) return addDays(d, -3) // Mon -> Fri
-  if (dow === 0) return addDays(d, -2) // Sun -> Fri
-  if (dow === 6) return addDays(d, -1) // Sat -> Fri
-  return addDays(d, -1)
-}
-
-function getNextWorkday(d: Date): Date {
-  const dow = d.getDay()
-  if (dow === 5) return addDays(d, 3) // Fri -> Mon
-  if (dow === 6) return addDays(d, 2) // Sat -> Mon
-  if (dow === 0) return addDays(d, 1) // Sun -> Mon
-  return addDays(d, 1)
-}
-
-function snapToWorkday(d: Date): Date {
-  const dow = d.getDay()
-  if (dow === 6) return addDays(d, 2)
-  if (dow === 0) return addDays(d, 1)
-  return d
-}
-
-const HOURS = [8, 9, 10, 11, 12, 13, 14, 15, 16] // 08:00 to 17:00 (9 hours)
-
 export function DayMatrixView({
   selectedDay,
   onChangeDay,
@@ -47,74 +22,75 @@ export function DayMatrixView({
   onBookingClick,
   onBlockClick,
 }: DayMatrixViewProps) {
-  const { rooms, bookings, blocks, settings } = useStore()
-  const { user } = useLookups()
+  const { rooms, bookings, blocks, settings, setVisibleRange, user } = useStore()
   const now = new Date()
+  const dayStart = useMemo(() => startOfDay(selectedDay), [selectedDay])
+  const closed = isWeekend(dayStart)
 
-  const open = parseHM(settings.openTime)
-  const close = parseHM(settings.closeTime)
+  const { openTime, closeTime } = settings
+  const { dayOpen, dayClose, rows } = useMemo(() => {
+    const open = parseHM(openTime)
+    const close = parseHM(closeTime)
+    const firstMinute = open.h * 60 + open.m
+    const lastMinute = close.h * 60 + close.m
+    const start = at(dayStart, 0, firstMinute)
+    const end = at(dayStart, 0, lastMinute)
+    const rows = []
+    for (let minute = firstMinute; minute < lastMinute;) {
+      const nextHour = (Math.floor(minute / 60) + 1) * 60
+      const next = Math.min(lastMinute, nextHour)
+      rows.push({ start: at(dayStart, 0, minute), end: at(dayStart, 0, next) })
+      minute = next
+    }
+    return { dayOpen: start, dayClose: end, rows }
+  }, [dayStart, openTime, closeTime])
 
-  const isToday = sameDay(selectedDay, now)
-  const isPast = startOfDay(selectedDay) < startOfDay(now)
+  const isToday = sameDay(dayStart, now)
+  const isPast = dayStart < startOfDay(now)
 
-  // Auto-snap weekends to workdays
   useEffect(() => {
-    const dow = selectedDay.getDay()
-    if (dow === 0 || dow === 6) {
-      onChangeDay(snapToWorkday(selectedDay))
-    }
-  }, [selectedDay, onChangeDay])
+    setVisibleRange(dayStart, addDays(dayStart, 1))
+  }, [dayStart, setVisibleRange])
 
-  // Filter bookings and blocks for the selected day
-  const dayBookings = useMemo(() => {
-    return bookings.filter(
-      (b) =>
-        sameDay(new Date(b.start), selectedDay) &&
-        ['PENDING', 'APPROVED', 'KEY_CHECKED_OUT', 'COMPLETED'].includes(b.status),
-    )
-  }, [bookings, selectedDay])
+  const conflicts = useMemo(() => conflictMap(bookings), [bookings])
 
-  const dayBlocks = useMemo(() => {
-    return blocks.filter((k) => k.active && sameDay(new Date(k.start), selectedDay))
-  }, [blocks, selectedDay])
-
-  // Compute occupancy per room for this day
-  const roomOccupancyStats = useMemo(() => {
-    const stats: Record<string, { busyHours: number; pct: number; pendingCount: number }> = {}
-    for (const r of rooms) {
-      const rBookings = dayBookings.filter((b) => b.roomId === r.id)
-      const rBlocks = dayBlocks.filter((k) => k.roomId === r.id)
-      const pendingCount = rBookings.filter((b) => b.status === 'PENDING').length
-
-      let busyHours = 0
-      for (const h of HOURS) {
-        const slotStart = at(selectedDay, h, 0)
-        const slotEnd = at(selectedDay, h + 1, 0)
-        const hasBk = rBookings.some((b) => overlaps(new Date(b.start), new Date(b.end), slotStart, slotEnd))
-        const hasBlk = rBlocks.some((k) => overlaps(new Date(k.start), new Date(k.end), slotStart, slotEnd))
-        if (hasBk || hasBlk) busyHours++
-      }
-      stats[r.id] = {
-        busyHours,
-        pct: Math.min(100, Math.round((busyHours / HOURS.length) * 100)),
-        pendingCount,
-      }
-    }
-    return stats
-  }, [rooms, dayBookings, dayBlocks, selectedDay])
+  const schedules = useMemo(() => {
+    const dayBookings = bookings
+      .filter((b) => (ACTIVE_STATUSES.includes(b.status) || b.status === 'COMPLETED') && overlaps(b.start, b.end, dayOpen, dayClose))
+      .map((b) => ({ booking: b, start: new Date(b.start), end: new Date(b.end) }))
+    const dayBlocks = blocks
+      .filter((b) => b.active && overlaps(b.start, b.end, dayOpen, dayClose))
+      .map((b) => {
+        const start = new Date(b.start)
+        const end = new Date(b.end)
+        return { block: b, start: start < dayOpen ? dayOpen : start, end: end > dayClose ? dayClose : end }
+      })
+    return rooms.map((room) => {
+      const roomBookings = dayBookings.filter(({ booking }) => booking.roomId === room.id)
+      const roomBlock = dayBlocks.find(({ block }) => block.roomId === room.id)
+      const cells = rows.map(({ start, end }) => ({
+        bookings: roomBookings.filter((b) => overlaps(b.start, b.end, start, end)),
+        block: roomBlock && overlaps(roomBlock.start, roomBlock.end, start, end) ? roomBlock : undefined,
+      }))
+      const busyMinutes = cells.reduce((minutes, cell, i) =>
+        minutes + (cell.bookings.length || cell.block ? durationMin(rows[i].start, rows[i].end) : 0), 0)
+      const pct = Math.round((busyMinutes / Math.max(1, durationMin(dayOpen, dayClose))) * 100)
+      const pendingCount = roomBookings.filter(({ booking }) => booking.status === 'PENDING').length
+      return { room, cells, busyMinutes, pct, pendingCount }
+    })
+  }, [bookings, blocks, rooms, rows, dayOpen, dayClose])
 
   return (
     <div className="flex flex-col rounded-lg border border-ink bg-paper">
       {/* Date Navigation & Matrix Header */}
-      <div className="flex flex-wrap items-center justify-between gap-3 border-b border-rule bg-ice/40 px-4 py-3">
-        {/* Day Navigator (Workdays Only) */}
+      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-rule bg-ice/40 px-3 py-2">
         <div className="flex items-center gap-2">
           <Button
             variant="outline"
             size="xs"
             className="!rounded-md !p-1.5"
-            aria-label="Previous workday"
-            onClick={() => onChangeDay(getPrevWorkday(selectedDay))}
+            aria-label="Previous day"
+            onClick={() => onChangeDay(addDays(dayStart, -1))}
           >
             <ChevronLeft size={16} />
           </Button>
@@ -123,8 +99,8 @@ export function DayMatrixView({
             variant="outline"
             size="xs"
             className="!rounded-md !p-1.5"
-            aria-label="Next workday"
-            onClick={() => onChangeDay(getNextWorkday(selectedDay))}
+            aria-label="Next day"
+            onClick={() => onChangeDay(addDays(dayStart, 1))}
           >
             <ChevronRight size={16} />
           </Button>
@@ -133,13 +109,13 @@ export function DayMatrixView({
             variant={isToday ? 'dark' : 'outline'}
             size="xs"
             className="!rounded-md"
-            onClick={() => onChangeDay(snapToWorkday(startOfDay(now)))}
+            onClick={() => onChangeDay(startOfDay(now))}
           >
             Today
           </Button>
 
           <div className="ml-2 flex items-center gap-2 font-mono text-[13px] font-bold text-ink">
-            <span>{fmtDate(selectedDay)}</span>
+            <span>{fmtDate(dayStart)}</span>
             {isToday && (
               <span className="rounded-[2px] bg-accent px-1.5 py-0.5 font-mono text-[10px] font-bold text-paper">
                 LIVE TODAY
@@ -150,14 +126,19 @@ export function DayMatrixView({
                 ARCHIVED
               </span>
             )}
+            {closed && (
+              <span className="rounded-[2px] border border-edge bg-paper px-1.5 py-0.5 font-mono text-[10px] text-steel">
+                WEEKEND · CLOSED
+              </span>
+            )}
           </div>
         </div>
 
         {/* Legend */}
-        <div className="flex flex-wrap items-center gap-3 font-mono text-[11px] text-graphite">
+        <div className="flex flex-wrap items-center gap-3 font-mono text-[10px] text-graphite">
           <span className="flex items-center gap-1.5">
             <span className="h-2.5 w-2.5 rounded-[1px] border border-dashed border-rule bg-paper" />
-            Free (Click to assign)
+            Free
           </span>
           <span className="flex items-center gap-1.5">
             <span className="h-2.5 w-2.5 rounded-[1px] border border-dashed border-plum bg-plum/[0.08]" />
@@ -173,11 +154,15 @@ export function DayMatrixView({
           </span>
           <span className="flex items-center gap-1.5">
             <span className="h-2.5 w-2.5 rounded-[1px] border-2 border-accent bg-paper" />
-            Scheduled Event
+            Event
           </span>
           <span className="flex items-center gap-1.5">
             <span className="h-2.5 w-2.5 rounded-[1px] hatch-slate border border-ink" />
             Block
+          </span>
+          <span className="flex items-center gap-1.5">
+            <span className="h-2.5 w-2.5 rounded-[1px] hatch-conflict border-2 border-danger" />
+            Conflict
           </span>
         </div>
       </div>
@@ -185,48 +170,43 @@ export function DayMatrixView({
       {/* Matrix Table Container */}
       <div className="scrollbar-thin overflow-x-auto">
         <div
-          className="grid min-w-[960px] divide-x divide-rule"
+          className="grid min-w-[760px] divide-x divide-rule"
           style={{
-            gridTemplateColumns: `110px repeat(${rooms.length}, minmax(240px, 1fr))`,
+            gridTemplateColumns: rooms.length
+              ? `88px repeat(${rooms.length}, minmax(220px, 1fr))`
+              : '88px',
           }}
         >
           {/* Header Row: Room Columns */}
-          <div className="sticky top-0 z-20 flex flex-col justify-end border-b border-ink bg-ice px-3 py-3">
-            <span className="font-mono text-[11px] font-bold text-ink">HOUR / ROOM</span>
-            <span className="font-mono text-[10px] text-steel">08:00 — 17:00</span>
+          <div className="sticky top-0 z-20 flex flex-col justify-end border-b border-ink bg-ice px-2 py-1.5">
+            <span className="font-mono text-[10px] font-bold text-ink">HOUR / ROOM</span>
+            <span className="font-mono text-[9px] text-steel">{fmtRange(dayOpen, dayClose)} ICT</span>
           </div>
 
-          {rooms.map((r) => {
-            const st = roomOccupancyStats[r.id] ?? { busyHours: 0, pct: 0, pendingCount: 0 }
+          {schedules.map(({ room: r, busyMinutes, pct, pendingCount }) => {
             return (
-              <div key={r.id} className="sticky top-0 z-20 flex flex-col gap-1 border-b border-ink bg-ice px-3.5 py-3">
-                <div className="flex items-center justify-between">
-                  <span className="font-mono text-[15px] font-bold text-ink">RM {r.code}</span>
-                  <div className="flex items-center gap-1">
-                    <span className="font-mono text-[11px] text-steel">Cap {r.capacity}</span>
-                    {st.pendingCount > 0 && (
+              <div key={r.id} className="sticky top-0 z-20 flex flex-col gap-0.5 border-b border-ink bg-ice px-2.5 py-1.5">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="truncate font-mono text-[13px] font-bold text-ink">RM {r.code} <span className="font-sans text-[11px] font-normal text-graphite">{r.name}</span></span>
+                  <div className="flex shrink-0 items-center gap-1">
+                    <span className="font-mono text-[10px] text-steel">Cap {r.capacity}</span>
+                    {pendingCount > 0 && (
                       <span className="rounded-sm border border-dashed border-plum bg-plum/[0.08] px-1 font-mono text-[10px] font-bold text-plum">
-                        {st.pendingCount} PEND
+                        {pendingCount} PEND
                       </span>
                     )}
                   </div>
                 </div>
 
-                <div className="truncate text-[11px] text-graphite">{r.name}</div>
-
-                {/* Room Occupancy Bar for this Day */}
-                <div className="mt-1 flex flex-col gap-1">
-                  <div className="flex items-center justify-between font-mono text-[9px] text-steel">
-                    <span>{st.busyHours}h / {HOURS.length}h</span>
-                    <span>{st.pct}% OCCUPIED</span>
-                  </div>
-                  <div className="h-1.5 w-full overflow-hidden rounded-[1px] bg-rule">
+                <div className="flex items-center gap-2 font-mono text-[9px] text-steel">
+                  <span className="shrink-0">{Math.round(busyMinutes / 6) / 10}h / {durationMin(dayOpen, dayClose) / 60}h · {pct}%</span>
+                  <div className="h-1 flex-1 overflow-hidden rounded-[1px] bg-rule">
                     <div
                       className={cx(
                         'h-full transition-all duration-300',
-                        st.pct > 75 ? 'bg-plum' : st.pct > 0 ? 'bg-accent' : 'bg-transparent',
+                        pct > 75 ? 'bg-plum' : pct > 0 ? 'bg-accent' : 'bg-transparent',
                       )}
-                      style={{ width: `${st.pct}%` }}
+                      style={{ width: `${pct}%` }}
                     />
                   </div>
                 </div>
@@ -235,222 +215,179 @@ export function DayMatrixView({
           })}
 
           {/* Hour Rows */}
-          {HOURS.map((h) => {
-            const startHourStr = `${String(h).padStart(2, '0')}:00`
-            const endHourStr = `${String(h + 1).padStart(2, '0')}:00`
-            const slotStart = at(selectedDay, h, 0)
-            const slotEnd = at(selectedDay, h + 1, 0)
+          {rows.map(({ start, end }, i) => {
+            const startHourStr = fmtTime(start)
+            const endHourStr = fmtTime(end)
 
             return (
-              <div key={h} className="contents">
+              <div key={startHourStr} className="contents">
                 {/* Time Axis Cell */}
-                <div className="flex flex-col justify-center border-b border-rule bg-paper/60 px-3 py-2.5 font-mono text-steel">
-                  <span className="text-[12px] font-bold text-ink">{startHourStr}</span>
-                  <span className="text-[10px]">→ {endHourStr}</span>
+                <div className="flex items-center gap-1.5 border-b border-rule bg-paper/60 px-2 py-1 font-mono text-steel">
+                  <span className="text-[11px] font-bold text-ink">{startHourStr}</span>
+                  <span className="text-[9px]">→ {endHourStr}</span>
                 </div>
 
                 {/* Room Cells for this Hour */}
-                {rooms.map((r) => {
-                  const bks = dayBookings.filter(
-                    (b) => b.roomId === r.id && overlaps(new Date(b.start), new Date(b.end), slotStart, slotEnd),
-                  )
-                  const blks = dayBlocks.filter(
-                    (k) => k.roomId === r.id && overlaps(new Date(k.start), new Date(k.end), slotStart, slotEnd),
-                  )
+                {schedules.map(({ room: r, cells }) => {
+                  const { bookings: bks, block } = cells[i]
+                  const location = `Room ${r.code}, ${fmtDate(dayStart)}`
+                  const range = fmtRange(start, end)
 
-                  const booking = bks[0]
-                  const block = blks[0]
-
-                  // CASE 1: ROOM BLOCK
                   if (block) {
+                    const blockRange = fmtRange(block.start, block.end)
                     return (
-                      <div
+                      <button
                         key={r.id}
-                        className="group relative flex cursor-pointer flex-col justify-between border-b border-rule hatch-slate p-2.5 text-paper transition-all hover:ring-2 hover:ring-accent"
-                        onClick={(e) => onBlockClick(block, e.currentTarget)}
-                        title={`Blocked: ${block.reason} (Click to inspect or cancel)`}
+                        type="button"
+                        className="calendar-focus group relative flex min-h-9 cursor-pointer flex-col justify-center border-b border-rule hatch-slate px-2 py-1 text-left text-paper transition-all hover:ring-2 hover:ring-accent"
+                        onClick={(e) => onBlockClick(block.block, e.currentTarget)}
+                        aria-label={`Inspect block: ${location} ${blockRange}, ${block.block.reason}`}
                       >
-                        <div className="flex items-center justify-between font-mono text-[10px] font-bold">
-                          <span className="flex items-center gap-1">
-                            <span className="h-1.5 w-1.5 rounded-full bg-paper" />
-                            ROOM BLOCK
-                          </span>
-                          <span className="text-white/70">
-                            {fmtTime(block.start)}–{fmtTime(block.end)}
-                          </span>
-                        </div>
-                        <div className="mt-1 line-clamp-2 text-[12px] font-medium leading-tight">
-                          {block.reason}
-                        </div>
-                        <div className="mt-1 flex items-center justify-between font-mono text-[10px] text-white/75">
-                          <span>CLICK TO MANAGE</span>
-                        </div>
-                      </div>
+                        <span className="flex items-center justify-between font-mono text-[10px] font-bold">
+                          <span>ROOM BLOCK</span>
+                          <span className="text-white/80">{blockRange}</span>
+                        </span>
+                        <span className="line-clamp-1 text-[11px] font-medium leading-tight">{block.block.reason}</span>
+                      </button>
                     )
                   }
 
-                  // CASE 2: BOOKING (SINGLE OR MULTIPLE COMPETING PENDING)
-                  if (bks.length > 0) {
-                    if (bks.length === 1) {
-                      const booking = bks[0]
-                      const u = user(booking.userId)
-                      const isEvent = isOfficialEvent(booking)
-                      const badge = extractEventBadge(booking.title)
-                      const isPending = booking.status === 'PENDING'
-                      const isKeyOut = booking.status === 'KEY_CHECKED_OUT'
-                      const isApproved = booking.status === 'APPROVED'
-
-                      return (
-                        <div
-                          key={r.id}
-                          data-booking-id={booking.id}
-                          className={cx(
-                            'group relative flex cursor-pointer flex-col justify-between border-b border-rule p-2.5 transition-all hover:shadow-md',
-                            isEvent
-                              ? 'border-l-4 border-l-accent bg-paper text-ink shadow-xs'
-                              : isPending
-                                ? 'border-dashed border-plum bg-plum/[0.04] text-ink hover:bg-plum/[0.08]'
-                                : isApproved
-                                  ? 'bg-ink text-paper'
-                                  : isKeyOut
-                                    ? 'bg-accent text-paper'
-                                    : 'bg-ice text-graphite',
-                          )}
-                          onClick={(e) => onBookingClick(booking, e.currentTarget)}
-                          title={`${booking.title} · ${booking.status} (Click to review)`}
-                        >
-                          {/* Top row: Status / Badge & Time */}
-                          <div className="flex items-center justify-between gap-1 font-mono text-[10px] font-bold">
-                            {isEvent ? (
-                              <span className="rounded-[2px] bg-accent px-1.5 py-0.5 text-[9px] text-paper">
-                                {badge?.tag ? `${badge.tag} · EVENT` : 'EVENT'}
-                              </span>
-                            ) : (
-                              <span className="truncate">
-                                {u?.studentCode ?? 'SE184022'}
-                              </span>
-                            )}
-
-                            <span className={cx('shrink-0 text-[10px]', isEvent ? 'text-accent' : 'opacity-85')}>
-                              {isPending
-                                ? 'PENDING REVIEW'
-                                : isKeyOut
-                                  ? 'KEY OUT'
-                                  : isApproved
-                                    ? 'APPROVED'
-                                    : booking.status}
-                            </span>
-                          </div>
-
-                          {/* Title / Name */}
-                          <div className="mt-1 flex flex-col">
-                            <span className={cx('truncate text-[12px] font-bold', isEvent ? 'text-ink' : '')}>
-                              {badge?.cleanTitle || booking.title}
-                            </span>
-                            {!isEvent && (
-                              <span className="truncate text-[11px] opacity-80">
-                                {u?.fullName}
-                              </span>
-                            )}
-                          </div>
-
-                          {/* Bottom Row */}
-                          <div className="mt-1.5 flex items-center justify-between font-mono text-[10px] opacity-75">
-                            <span>
-                              {fmtTime(booking.start)}–{fmtTime(booking.end)}
-                            </span>
-                            <span className="underline group-hover:opacity-100">
-                              {isPending ? 'REVIEW →' : 'INSPECT'}
-                            </span>
-                          </div>
-                        </div>
-                      )
-                    }
-
-                    // Multiple competing requests overlapping this room & hour slot
+                  if (bks.length) {
+                    const hatch = conflictBands(bks.map(({ booking }) => booking))
+                      .map((band) => ({ start: band.start > start ? band.start : start, end: band.end < end ? band.end : end }))
+                      .filter((band) => band.start < band.end)
                     return (
-                      <div key={r.id} className="flex flex-col gap-1.5 border-b border-rule bg-ice/30 p-1.5">
-                        <div className="flex items-center justify-between font-mono text-[9px] font-bold text-plum">
-                          <span>⚡ {bks.length} COMPETING REQS</span>
-                          <span>CLICK TO REVIEW</span>
-                        </div>
-                        {bks.map((booking, idx) => {
-                          const u = user(booking.userId)
-                          const isPending = booking.status === 'PENDING'
-                          const isApproved = booking.status === 'APPROVED'
-                          const isKeyOut = booking.status === 'KEY_CHECKED_OUT'
+                      <div key={r.id} className="relative flex flex-col gap-1 border-b border-rule bg-ice/30 p-1">
+                        {hatch.length > 0 && (
+                          <div className="pointer-events-none absolute inset-0 hatch-conflict" aria-hidden="true">
+                            <span className="absolute right-1 bottom-0.5 z-10 bg-paper/95 px-0.5 font-mono text-[8px] font-bold text-danger">
+                              {hatch.map((band) => `CONFLICT ${fmtRange(band.start, band.end)}`).join(' · ')}
+                            </span>
+                          </div>
+                        )}
+                        {bks.map(({ booking, start: bStart, end: bEnd }) => {
+                          if (i > 0 && bStart < start) {
+                            const colorClass = booking.kind === 'OFFICIAL'
+                              ? 'border-rule border-l-4 border-l-accent bg-paper text-ink'
+                              : booking.status === 'PENDING'
+                                ? 'border-dashed border-plum bg-paper text-ink'
+                                : booking.status === 'APPROVED'
+                                  ? 'border-ink bg-ink text-paper'
+                                  : booking.status === 'KEY_CHECKED_OUT'
+                                    ? 'border-accent bg-accent text-paper'
+                                    : 'border-rule bg-ice text-graphite'
+                            return (
+                              <button
+                                key={booking.id}
+                                type="button"
+                                data-booking-id={booking.id}
+                                onClick={(e) => onBookingClick(booking, e.currentTarget)}
+                                aria-label={`Inspect booking (continuation): ${location} ${fmtRange(bStart, bEnd)}, continues until ${fmtTime(bEnd)}`}
+                                className={cx(
+                                  'calendar-focus relative z-[1] flex min-h-5 flex-1 cursor-pointer items-center rounded-sm border px-1.5 text-left font-mono text-[10px]',
+                                  colorClass,
+                                )}
+                              >
+                                ↳ continues until {fmtTime(bEnd)}
+                              </button>
+                            )
+                          }
+                          const official = booking.kind === 'OFFICIAL'
+                          const pending = booking.status === 'PENDING'
+                          const approved = booking.status === 'APPROVED'
+                          const keyOut = booking.status === 'KEY_CHECKED_OUT'
+                          const holder = booking.userId ? user(booking.userId) : undefined
+                          const title = official || booking.userId ? booking.title : pending ? 'Pending request' : 'Reserved'
+                          const status = pending ? 'PENDING' : keyOut ? 'KEY OUT' : booking.status
+                          const bookingRange = fmtRange(bStart, bEnd)
+                          const conflict = conflicts.get(booking.id)
+                          const colors = conflict && CONFLICT_COLORS[conflict.letter]
+                          const conflictLabel = conflict?.rivals
+                            .map((rival) => {
+                              const name = rival.userId ? user(rival.userId)?.fullName : undefined
+                              return `conflicts with ${conflicts.get(rival.id)?.letter}: ${name ?? 'another booking'} ${fmtRange(rival.start, rival.end)}`
+                            })
+                            .join('; ')
                           return (
-                            <div
+                            <button
                               key={booking.id}
+                              type="button"
                               data-booking-id={booking.id}
                               onClick={(e) => onBookingClick(booking, e.currentTarget)}
+                              aria-label={`Inspect booking: ${location} ${bookingRange}, ${title}, ${status}${conflictLabel ? `; ${conflictLabel}` : ''}`}
                               className={cx(
-                                'group flex cursor-pointer flex-col justify-between rounded-[3px] border p-1.5 transition-all hover:shadow-xs',
-                                isPending
-                                  ? 'border-dashed border-plum/80 bg-plum/[0.08] hover:bg-plum/[0.15] text-ink'
-                                  : isApproved
-                                    ? 'border-ink bg-ink text-paper'
-                                    : isKeyOut
-                                      ? 'border-accent bg-accent text-paper'
-                                      : 'border-rule bg-paper text-graphite',
+                                'calendar-focus group relative z-[1] flex flex-1 cursor-pointer flex-col justify-center overflow-hidden rounded-sm border px-1.5 py-1 text-left transition-all hover:shadow-md',
+                                conflict && 'pl-3 outline-2 outline-solid outline-danger -outline-offset-2',
+                                official
+                                  ? 'border-rule border-l-4 border-l-accent bg-paper text-ink shadow-xs'
+                                  : pending
+                                    ? 'border-dashed border-plum bg-paper text-ink hover:bg-plum/[0.08]'
+                                    : approved
+                                      ? 'border-ink bg-ink text-paper'
+                                      : keyOut
+                                        ? 'border-accent bg-accent text-paper'
+                                        : 'border-rule bg-ice text-graphite',
                               )}
-                              title={`${booking.title} · ${booking.status} (Click to inspect / resolve)`}
                             >
-                              <div className="flex items-center justify-between gap-1 font-mono text-[9px] font-bold">
-                                <span className="truncate">
-                                  {isPending ? `⚡ #${idx + 1} · ` : ''}
-                                  {u?.studentCode ?? 'STUDENT'}
+                              {colors && <span aria-hidden="true" className={cx('absolute inset-y-0 left-0 w-1', colors.bar)} />}
+                              <span className="flex items-center justify-between gap-1 font-mono text-[10px] font-bold">
+                                <span className="flex min-w-0 items-center gap-1">
+                                  {conflict && <span className={cx('shrink-0 rounded-sm px-1', colors?.badge)}>{conflict.letter}</span>}
+                                  <span className={cx('truncate', official && 'rounded-sm bg-ink px-1 text-[9px] text-paper')}>
+                                    {official ? booking.category ?? 'EVENT' : holder?.studentCode}
+                                  </span>
                                 </span>
-                                <span className="opacity-80">
-                                  {fmtTime(booking.start)}–{fmtTime(booking.end)}
-                                </span>
-                              </div>
-                              <div className="truncate text-[10px] font-medium opacity-90">
-                                {u?.fullName}
-                              </div>
-                            </div>
+                                <span className="shrink-0">{status} · {bookingRange}</span>
+                              </span>
+                              <span className="truncate text-[11px] font-bold">
+                                {title}{!official && holder ? ` · ${holder.fullName}` : ''}
+                              </span>
+                            </button>
                           )
                         })}
                       </div>
                     )
                   }
 
-                  // CASE 3: FREE SLOT
+                  const elapsed = end <= now
+                  if (closed) {
+                    return (
+                      <div
+                        key={r.id}
+                        className="flex min-h-9 items-center justify-between border-b border-rule bg-ice px-2 font-mono text-[10px] text-steel hatch"
+                        aria-label={`Closed: ${location} ${range}`}
+                      >
+                        <span className="font-semibold">CLOSED</span>
+                        <span>{range}</span>
+                      </div>
+                    )
+                  }
                   return (
-                    <div
+                    <button
                       key={r.id}
+                      type="button"
+                      disabled={elapsed}
                       onClick={() =>
-                        !isPast &&
                         onAssignSlot({
                           roomId: r.id,
-                          date: selectedDay,
+                          date: dayStart,
                           startTime: startHourStr,
                           endTime: endHourStr,
                         })
                       }
                       className={cx(
-                        'group flex cursor-pointer flex-col justify-between border-b border-rule bg-paper p-2.5 transition-colors',
-                        isPast
-                          ? 'cursor-not-allowed opacity-50 bg-ice/30'
-                          : 'hover:border-accent hover:bg-tint/30',
+                        'calendar-focus group relative flex min-h-9 items-center justify-between gap-2 border-b border-rule bg-paper px-2 py-1 text-left transition-colors',
+                        elapsed ? 'cursor-not-allowed bg-ice/30' : 'cursor-pointer hover:border-accent hover:bg-tint/30',
                       )}
-                      title={isPast ? 'Past hour cannot be scheduled' : `Free slot · Click to assign RM ${r.code} (${startHourStr}–${endHourStr})`}
+                      aria-label={`${elapsed ? 'Past slot' : 'Assign activity'}: ${location} ${range}`}
                     >
-                      <div className="flex items-center justify-between font-mono text-[10px] text-steel">
-                        <span className="group-hover:text-accent font-semibold">FREE</span>
-                        <span>{startHourStr}–{endHourStr}</span>
-                      </div>
-
-                      <div className="my-auto flex items-center justify-center py-1 opacity-0 transition-opacity group-hover:opacity-100">
-                        <span className="flex items-center gap-1 rounded-[3px] border border-accent bg-paper px-2 py-0.5 font-mono text-[11px] font-bold text-accent shadow-xs">
-                          <Plus size={11} strokeWidth={2.5} /> Assign Activity
+                      <span className="font-mono text-[10px] font-semibold text-steel">{elapsed ? 'PAST' : 'FREE'} · {range}</span>
+                      {!elapsed && (
+                        <span className="flex items-center gap-1 rounded-sm border border-ink-blue bg-paper px-1.5 py-0.5 font-mono text-[10px] font-bold text-ink-blue opacity-0 transition-opacity group-hover:opacity-100 group-focus-visible:opacity-100">
+                          <Plus size={10} strokeWidth={2.5} /> Assign
                         </span>
-                      </div>
-
-                      <div className="font-mono text-[9px] text-steel/50">
-                        RM {r.code} · Available
-                      </div>
-                    </div>
+                      )}
+                    </button>
                   )
                 })}
               </div>
