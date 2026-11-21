@@ -23,16 +23,23 @@ frontend/                React 19 + TypeScript + Tailwind CSS v4 Frontend
 docs/API_HANDOFF.md      Hợp đồng API và luồng tích hợp frontend
 docs/TNE_PORTAL_ERD.dbml ERD chi tiết để import vào dbdiagram.io
 DESIGN.md                Tài liệu Design System & Style Guide chi tiết
-.github/workflows/       CI kiểm tra backend
+.github/workflows/       CI kiểm tra backend và frontend
 ```
 
 ---
+
+Backend hiện đã triển khai ERD v2, Resend email outbox cho manager và email kết quả duyệt/từ chối cho sinh viên, migration nâng cấp dữ liệu, unit test, PostgreSQL E2E test và CI GitHub Actions. Hai mẫu email sinh viên có tại [docs/BOOKING_EMAILS.md](docs/BOOKING_EMAILS.md).
 
 ## 🏛️ Vai trò người dùng (Roles)
 
 - `USER`: Sinh viên xem lịch, tạo/hủy booking, theo dõi trạng thái và hiển thị digital pass.
 - `MANAGER`: Duyệt booking, quản lý giao/trả chìa, cảnh báo chìa quá hạn và chặn phòng theo lịch.
 - `ADMIN`: Toàn quyền manager cộng quản lý user, role, trạng thái phòng và chính sách hệ thống.
+
+Manager/Admin dùng cùng một tài khoản để chuyển giữa **Đặt phòng cá nhân** và **Quản lý phòng**
+trên thanh điều hướng. Yêu cầu cá nhân áp dụng chính sách tự duyệt của phòng và nhận email
+kết quả; hoạt động chính thức được tạo từ màn quản lý. Đăng nhập/đăng ký cần API xác nhận thành công, không tạo tài khoản
+hoặc phiên đăng nhập giả khi API từ chối.
 
 ---
 
@@ -79,4 +86,6 @@ Xem [hướng dẫn backend](backend/README.md) và [tài khoản demo / `pnpm d
 - **Icons:** `lucide-react`
 - **Typography:** IBM Plex Mono, Inter, Manrope
 - **Motion:** React Bits-inspired restrained animations (`BlurText`, `SplitText`, `Reveal`, `ScrollRevealText`, `ShinyText`)
-- **Backend:** Express 5, Prisma ORM, PostgreSQL, Docker
+- **Backend:** Express 5, Prisma ORM, PostgreSQL, Docker, Resend
+
+Backend bám theo product overview ban đầu của Portal: room schedule, approval queue, email booking mới cho manager, digital pass, key tracker, overdue alerts, room blocking và fair-use limits.

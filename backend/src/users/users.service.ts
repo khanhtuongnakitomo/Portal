@@ -8,6 +8,7 @@ import { Role, UserStatus } from '../generated/prisma/client.js';
 import { PrismaService } from '../prisma/prisma.service.js';
 import type { CreateManagerDto } from './dto/create-manager.dto.js';
 import type { ListUsersDto } from './dto/list-users.dto.js';
+import type { UpdateProfileDto } from './dto/update-profile.dto.js';
 import type { UpdateUserRoleDto } from './dto/update-user-role.dto.js';
 import type { UpdateUserStatusDto } from './dto/update-user-status.dto.js';
 
@@ -31,6 +32,20 @@ export class UsersService {
       select: publicUserSelect,
     });
     return this.toPublicUser(user);
+  }
+
+  async updateProfile(id: string, { fullName }: UpdateProfileDto) {
+    return this.prisma.$transaction(async (tx) => {
+      const user = await tx.user.update({
+        where: { id },
+        data: { fullName },
+        select: publicUserSelect,
+      });
+      await tx.auditLog.create({
+        data: { actorId: id, action: 'USER_PROFILE_UPDATED', targetType: 'User', targetId: id },
+      });
+      return this.toPublicUser(user);
+    });
   }
 
   async createManager(dto: CreateManagerDto, actorId: string) {

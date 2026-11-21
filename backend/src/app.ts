@@ -25,6 +25,7 @@ import { Role } from './generated/prisma/client.js';
 import { authRateLimit } from './middleware/auth-rate-limit.middleware.js';
 import { createAuthMiddleware } from './middleware/auth.middleware.js';
 import { errorMiddleware } from './middleware/error.middleware.js';
+import { NotificationsService } from './notifications/notifications.service.js';
 import { PrismaService } from './prisma/prisma.service.js';
 import { CancelRoomBlockDto } from './room-blocks/dto/cancel-room-block.dto.js';
 import { CreateRoomBlockDto } from './room-blocks/dto/create-room-block.dto.js';
@@ -38,6 +39,7 @@ import { UpdateSettingsDto } from './settings/dto/update-settings.dto.js';
 import { SettingsService } from './settings/settings.service.js';
 import { CreateManagerDto } from './users/dto/create-manager.dto.js';
 import { ListUsersDto } from './users/dto/list-users.dto.js';
+import { UpdateProfileDto } from './users/dto/update-profile.dto.js';
 import { UpdateUserRoleDto } from './users/dto/update-user-role.dto.js';
 import { UpdateUserStatusDto } from './users/dto/update-user-status.dto.js';
 import { UsersService } from './users/users.service.js';
@@ -62,8 +64,9 @@ export function createApp(
   const authService = new AuthService(prisma, environment.jwt);
   const usersService = new UsersService(prisma);
   const roomsService = new RoomsService(prisma);
-  const bookingsService = new BookingsService(prisma);
-  const roomBlocksService = new RoomBlocksService(prisma);
+  const notificationsService = new NotificationsService();
+  const bookingsService = new BookingsService(prisma, notificationsService);
+  const roomBlocksService = new RoomBlocksService(prisma, notificationsService);
   const settingsService = new SettingsService(prisma);
   const auditService = new AuditService(prisma);
 
@@ -129,6 +132,15 @@ export function createApp(
     wrap(async (req, res) => {
       const result = await usersService.me(req.user!.id);
       res.json(result);
+    }),
+  );
+
+  router.patch(
+    '/users/me',
+    authenticate,
+    wrap(async (req, res) => {
+      const dto = await validateDto(UpdateProfileDto, req.body);
+      res.json(await usersService.updateProfile(req.user!.id, dto));
     }),
   );
 

@@ -68,6 +68,13 @@ Register/login đều trả:
 }
 ```
 
+### Hồ sơ cá nhân
+
+`GET /users/me` trả hồ sơ của người đang đăng nhập. `PATCH /users/me` yêu cầu bearer token,
+chỉ nhận `{ "fullName": "Nguyen Van B" }` (chuỗi 2–120 ký tự sau khi trim), và trả cùng
+cấu trúc với `GET /users/me`. Thành công ghi audit `USER_PROFILE_UPDATED`. Mọi trường
+khác trả `400`; `studentCode` chỉ admin có thể đổi qua `/admin/users/:id/role`.
+
 ## Demo accounts local
 
 Xem [danh sách email demo và cách cấu hình](../backend/README.md#tài-khoản-demo-và-reset-local). Demo chỉ dùng với database local dùng thử.
@@ -148,7 +155,7 @@ Response có hai danh sách:
 ```
 
 - Mỗi booking luôn có `id`, `roomId`, `room: { id, name }`, `title`, `startTime`, `endTime`, `status`, `kind`, `isMine`.
-- `kind` là `OFFICIAL` nếu chủ booking có role `MANAGER` hoặc `ADMIN`, nếu không là `STUDENT`. Không xác định loại dựa vào tiêu đề. `isMine` chỉ là `true` khi người xem là chủ booking.
+- `kind` là `OFFICIAL` cho hoạt động chính thức (`isEvent=true`) và `STUDENT` cho booking cá nhân của mọi role, kể cả staff. Không xác định loại dựa vào tiêu đề hoặc role. `isMine` chỉ là `true` khi người xem là chủ booking.
 - Chỉ chủ booking, `MANAGER` và `ADMIN` mới nhận thêm `userId`, `purpose`, `attendeeCount`, `reviewNote`, `createdAt`, `keyCheckedOutAt`, `keyReturnedAt` và `user: { id, fullName, email, role, studentCode }`.
 - Lịch không bao giờ trả `passCode`, kể cả với chủ booking hoặc staff.
 - Block được gộp trong room nên `blocks[].id` chính là `roomId`.
@@ -166,13 +173,15 @@ Authorization: Bearer ...
   "title": "Group study",
   "purpose": "Prepare final presentation",
   "attendeeCount": 6,
+  "isEvent": false,
   "startTime": "2026-11-10T09:00:00+07:00",
   "endTime": "2026-11-10T11:00:00+07:00"
 }
 ```
 
-- Với sinh viên, nếu phòng bật `autoApprove=true`, booking được tạo ở `APPROVED` khi không có booking `PENDING`, `APPROVED` hoặc `KEY_CHECKED_OUT` nào giao với khoảng đó; nếu có booking giao nhau thì booking mới là `PENDING`. Phòng không bật `autoApprove` tạo booking ở `PENDING`; khung giờ đã được giữ chỗ độc quyền vẫn trả `409`.
-- Booking do `MANAGER` hoặc `ADMIN` tạo ở trạng thái `APPROVED` nếu khung giờ hợp lệ và khả dụng.
+- `isEvent=false` tạo booking cá nhân ở mọi role, áp dụng cùng giới hạn và chính sách của phòng. Nếu phòng bật `autoApprove`, booking được duyệt ngay khi không có booking `PENDING`, `APPROVED` hoặc `KEY_CHECKED_OUT` chồng giờ; nếu chồng giờ, yêu cầu mới ở `PENDING`. Không được tạo yêu cầu trùng với yêu cầu `PENDING` của chính mình. Phòng không bật `autoApprove` tạo yêu cầu ở `PENDING` hoặc trả `409` nếu đã có booking giữ slot độc quyền.
+- `isEvent=true` chỉ dành cho `MANAGER`/`ADMIN` tạo hoạt động chính thức (`APPROVED`); `USER` gửi `true` nhận `403`. Nếu không gửi trường này: `USER` tạo booking cá nhân, staff tạo hoạt động chính thức. Giới hạn số booking cá nhân không tính hoạt động chính thức.
+- Booking `PENDING` tạo email outbox cho từng manager `ACTIVE`; duyệt (kể cả tự duyệt) hoặc từ chối tạo email kết quả cho chủ booking cá nhân. Hoạt động chính thức không gửi email chờ duyệt hay kết quả cho chủ hoạt động. Worker gửi email sau khi transaction thành công.
 
 ### 3. Booking cá nhân và digital pass
 
@@ -201,6 +210,14 @@ PATCH /manager/bookings/:id/reject
 ```
 
 Approve nhận `note` tùy chọn; reject yêu cầu `note`.
+
+Email booking mới liên kết tới `${FRONTEND_URL}/#/manager`, khớp hash router của frontend hiện tại và mở hàng đợi phê duyệt sau khi manager đăng nhập. Người nhận lấy từ các tài khoản `MANAGER` đang `ACTIVE`; frontend không gọi API gửi email riêng hoặc tự chọn người nhận.
+
+Khi duyệt/từ chối thành công, backend tạo email outbox cho sinh viên sở hữu booking trong
+cùng transaction (`BOOKING_APPROVED` / `BOOKING_REJECTED`). Áp dụng cả các booking bị tự
+từ chối do hoạt động chính thức, lịch cạnh tranh hoặc khóa phòng. Worker gửi qua Resend
+sau commit, link `${FRONTEND_URL}/#/student`; API và payload review giữ nguyên.
+Mẫu email và hướng dẫn triển khai: [BOOKING_EMAILS.md](BOOKING_EMAILS.md).
 
 ### Key tracker
 

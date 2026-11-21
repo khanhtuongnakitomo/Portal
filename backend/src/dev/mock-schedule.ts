@@ -204,6 +204,7 @@ function bookingAndHistory(
       id,
       roomId: room.id,
       userId,
+      isEvent: official === true,
       title,
       purpose,
       status,

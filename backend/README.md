@@ -12,6 +12,7 @@ Express API
    ├── Auth + RBAC
    ├── Booking/key state machine
    ├── Manager/Admin workflows
+   ├── PostgreSQL email outbox + Resend worker
    └── Prisma
          │ PostgreSQL protocol
          ▼
@@ -32,6 +33,9 @@ Frontend không truy cập database trực tiếp. Schema `app` không được 
 - Manager/Admin đặt một khoảng block cho từng phòng; block và schedule lock được lưu trong `rooms`.
 - Admin quản lý user/role/status, phòng, chính sách và audit log.
 - DTO validation, Helmet, CORS allowlist, giới hạn request đăng nhập/đăng ký và health checks.
+- Booking `PENDING` tạo email outbox cho từng manager đang hoạt động; worker gửi qua Resend với retry và idempotency key.
+- Sinh viên nhận email khi booking được duyệt hoặc bị từ chối, gồm lý do khi có. Xem [hai mẫu email](../docs/BOOKING_EMAILS.md).
+- Manager/Admin có thể gửi yêu cầu cá nhân bằng `isEvent=false`, áp dụng giới hạn và chính sách tự duyệt của phòng như sinh viên. Hoạt động chính thức dùng `isEvent=true`, chỉ dành cho manager/admin. Email kết quả gửi cho chủ booking cá nhân ở mọi role.
 - Row lock theo phòng và PostgreSQL exclusion constraint chống booking trùng lịch khi request đồng thời.
 
 ## Chạy local
@@ -90,6 +94,101 @@ Trên môi trường phát triển, có thể đặt `DEV_TOOLS_ENABLED=true` tr
 
 Mở frontend Vite qua `localhost`, `127.0.0.1` hoặc `[::1]` để chọn tài khoản, tạo lịch đặt phòng mẫu hoặc xóa dữ liệu mẫu. Không dùng tunnel hay proxy công khai: API chỉ chấp nhận kết nối loopback, không có `CF-Connecting-IP`, và mọi địa chỉ trong `X-Forwarded-For` (nếu có) phải là loopback. Khi tắt cờ, các route `/dev` trả `404`.
 
+### macOS không dùng Docker
+
+```sh
+brew install postgresql@17
+brew services start postgresql@17
+"$(brew --prefix postgresql@17)/bin/createdb" tne_portal
+cd backend
+cp .env.example .env
+```
+
+PostgreSQL do Homebrew tạo dùng username macOS hiện tại (`whoami`). Đổi cả
+`DATABASE_URL` và `DIRECT_URL` trong `.env` thành
+`postgresql://<macOS-username>@localhost:5432/tne_portal?schema=app`, rồi chạy:
+
+```sh
+pnpm install --frozen-lockfile
+pnpm prisma:generate
+pnpm db:deploy
+pnpm db:seed
+pnpm start:dev
+```
+
+Mở terminal khác, chạy `cd frontend && npm ci && npm run dev -- --host 127.0.0.1`
+từ repo root. Vào `http://localhost:5173`; Vite tự proxy `/api` đến backend port 3000.
+
+## Email thông báo qua Resend
+
+Mặc định local và CI có `EMAIL_NOTIFICATIONS_ENABLED=false`: booking vẫn tạo các row trong `notification_outbox`, nhưng worker không gọi dịch vụ bên ngoài. Để bật gửi thật:
+
+1. Tạo API key trong Resend.
+2. Xác minh domain gửi và cấu hình SPF/DKIM theo Resend.
+3. Điền `RESEND_API_KEY`, `EMAIL_FROM`, `FRONTEND_URL` và đặt `EMAIL_NOTIFICATIONS_ENABLED=true` trong môi trường chạy backend.
+4. Khởi động lại backend và tạo một booking ở phòng không bật `autoApprove`.
+
+Khi được bật, worker sẽ xử lý cả những row `PENDING` đã tạo trước đó. Trước lần bật đầu tiên trên môi trường dùng chung, kiểm tra hàng đợi để tránh gửi email thử nghiệm cũ.
+
+`FRONTEND_URL` được dùng để tạo link `${FRONTEND_URL}/#/manager` trong email,
+khớp hash router hiện tại. Manager đăng nhập để xem hàng đợi phê duyệt.
+Email kết quả cho sinh viên mở `${FRONTEND_URL}/#/student`. Các sự kiện
+`BOOKING_APPROVED` và `BOOKING_REJECTED` dùng chung worker với email booking mới.
+Quy tắc gửi và hai mẫu có sẵn tại [BOOKING_EMAILS.md](../docs/BOOKING_EMAILS.md).
+
+### Test Gmail khi chưa có domain riêng
+
+Không cần Gmail SMTP hoặc mật khẩu ứng dụng Google. Resend gửi email, Gmail là nơi nhận.
+
+1. Đăng nhập Resend bằng Gmail muốn nhận thử; tạo key với **Sending access**.
+2. Tạo `backend/.env.local` (đã gitignore):
+
+   ```dotenv
+   EMAIL_NOTIFICATIONS_ENABLED=true
+   RESEND_API_KEY=re_your_private_key
+   EMAIL_FROM="TNE Portal Local <onboarding@resend.dev>"
+   FRONTEND_URL=http://localhost:5173
+   ```
+
+3. Trong Portal, đăng nhập admin, tạo tài khoản manager bằng **đúng Gmail của chủ tài khoản Resend**.
+   Suspend các manager demo khác trên database local để hàng đợi không thử gửi tới địa chỉ mẫu.
+   Người nhận luôn lấy từ các user `MANAGER` có trạng thái `ACTIVE` trong database.
+4. Khởi động lại backend (`pnpm start:dev`), đăng nhập student và tạo booking mới.
+   Chọn ngày làm việc cách ít nhất 2 ngày, tối đa 7 ngày, trong giờ mở cửa.
+5. Chờ tối đa một chu kỳ worker (15 giây), kiểm tra Gmail Inbox/Spam và Resend Emails.
+   Row outbox `SENT` kèm `provider_message_id` nghĩa là Resend đã nhận request;
+   xác nhận trong Gmail hoặc sự kiện `Delivered` để biết email đã tới nơi.
+   Frontend chỉ báo booking được lưu sau khi API thành công; việc gửi email do worker backend xử lý.
+
+Backend, Prisma CLI và seed đều đọc `.env.local` trước `.env`; biến môi trường từ shell/hosting
+được ưu tiên cao nhất. API key chỉ nằm ở backend, không thêm biến `VITE_RESEND_API_KEY`.
+
+Theo [giới hạn domain thử của Resend](https://resend.com/docs/knowledge-base/403-error-resend-dev-domain),
+`onboarding@resend.dev` chỉ gửi tới email chủ tài khoản Resend. Nếu gặp `403`, kiểm tra
+người nhận hoặc domain gửi. `401` thường do API key không hợp lệ. Worker lưu lỗi trong
+`notification_outbox.last_error` và retry; khắc phục cấu hình trước khi gửi lại.
+
+### Chuyển cấu hình email lên môi trường chính thức
+
+Code có thể push lên repo mà không kèm `.env`, `.env.local` hoặc tài khoản thử.
+Trên hosting backend, cấu hình secret `RESEND_API_KEY` riêng; xác minh domain gửi trong
+Resend rồi đổi `EMAIL_FROM` sang địa chỉ thuộc domain đó, đặt `FRONTEND_URL` thành URL
+HTTPS của Portal và bật `EMAIL_NOTIFICATIONS_ENABLED=true`. Đảm bảo manager có email thật,
+kiểm tra hàng đợi cũ trước khi bật và giữ tiến trình backend chạy để worker xử lý email.
+Không dùng domain `resend.dev` để gửi cho nhiều manager ở production.
+
+Luồng gửi:
+
+```text
+Booking PENDING + active MANAGERs
+  -> notification_outbox (cùng database transaction)
+  -> worker claim bằng FOR UPDATE SKIP LOCKED
+  -> Resend API
+  -> SENT hoặc retry exponential tối đa EMAIL_MAX_ATTEMPTS
+```
+
+Worker chạy mỗi 15 giây, tự phục hồi row `PROCESSING` bị treo quá 5 phút và dùng `dedupe_key` làm Resend idempotency key. Không có API key nào được lưu trong database hoặc commit lên Git.
+
 ## Xác thực
 
 `POST /auth/register` và `POST /auth/login` trả:
@@ -119,7 +218,7 @@ Các bảng nghiệp vụ:
 
 - `users`, `student_profiles`, `manager_profiles`, `admin_profiles`
 - `rooms`, `bookings`, `booking_status_history`
-- `audit_logs`, `system_settings`
+- `notification_outbox`, `audit_logs`, `system_settings`
 
 Migration `20261103000000_apply_erd_v2` nâng schema v1 lên v2 và giữ dữ liệu tương thích. Migration sẽ dừng nếu một phòng đang có nhiều hơn một `room_blocks` ACTIVE, vì schema mới chỉ lưu một block trên mỗi phòng.
 
@@ -149,6 +248,7 @@ Supabase/PostgreSQL dùng extension `btree_gist` cho exclusion constraint. Khi S
 | ---------- | ----------------------------------------- | ------------------------- |
 | POST       | `/auth/register`                          | Public                    |
 | POST       | `/auth/login`                             | Public                    |
+| GET/PATCH  | `/users/me`                               | Đã đăng nhập              |
 | GET        | `/rooms`                                  | Public                    |
 | GET        | `/bookings/calendar`                      | Xác thực tùy chọn         |
 | POST       | `/bookings`                               | Đã đăng nhập              |
@@ -186,7 +286,7 @@ pnpm build
 pnpm audit --prod
 ```
 
-E2E test chạy luồng đăng ký → booking → approve → giao/trả chìa → room block. GitHub Actions tự dựng PostgreSQL 17, chạy migration và test trên mỗi push/PR có thay đổi backend.
+E2E test chạy toàn bộ luồng đăng ký → booking → email outbox → approve → giao/trả chìa → room block. GitHub Actions tự dựng PostgreSQL 17, chạy các migration và test trên mỗi push/PR có thay đổi backend.
 
 ## Lưu ý dependency
 
@@ -196,6 +296,6 @@ E2E test chạy luồng đăng ký → booking → approve → giao/trả chìa 
 
 - Email verification, quên mật khẩu và SMTP/provider của trường.
 - Giới hạn request ở reverse proxy cho các deployment nhiều process hoặc instance.
-- Email/push notification cho thay đổi trạng thái và chìa quá hạn.
+- Email cảnh báo chìa quá hạn; email kết quả duyệt/từ chối cho sinh viên đã có.
 - Backup, monitoring, alerting và kiểm thử restore.
 - Chính sách retention dữ liệu sinh viên và phê duyệt của nhà trường.

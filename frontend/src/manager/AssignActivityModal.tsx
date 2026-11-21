@@ -1,8 +1,9 @@
+import { useI18n } from '@/lib/i18n'
 import { useEffect, useMemo, useState } from 'react'
 import { Check, Clock, Sparkles, TriangleAlert, X } from 'lucide-react'
 import { useLookups, useStore } from '@/lib/store'
 import type { Room } from '@/lib/types'
-import { addDays, durationMin, ensureWorkday, fmtDate, fmtDuration, fmtRange, fmtTime, fromLocalInput, isWeekend, overlaps, parseHM, startOfDay, toLocalInput } from '@/lib/time'
+import { addDays, durationMin, fmtDate, fmtDuration, fmtRange, fromLocalInput, isWeekend, overlaps, parseHM, startOfDay, toLocalInput } from '@/lib/time'
 import { Button, Dialog, Eyebrow, Field, Input, StatusChip, cx } from '@/components/ui'
 import { CATEGORY_PRESETS, type ActivityCategory } from './types'
 
@@ -43,8 +44,9 @@ export function AssignActivityModal({ isOpen, ...props }: AssignActivityModalPro
 }
 
 function AssignmentDraft({ initial, onClose, onSuccess }: Omit<AssignActivityModalProps, 'isOpen'>) {
-  const { rooms, bookings, blocks, settings, notify, assignRoomSchedule, setVisibleRange } = useStore()
+  const { rooms, bookings, pendingQueue, blocks, settings, notify, assignRoomSchedule, setVisibleRange } = useStore()
   const { user } = useLookups()
+  const { t, locale } = useI18n()
 
   const timeOptions = useMemo(
     () => generateTimeOptions(settings.openTime, settings.closeTime),
@@ -53,7 +55,7 @@ function AssignmentDraft({ initial, onClose, onSuccess }: Omit<AssignActivityMod
 
   const [mode, setMode] = useState<'EVENT' | 'BLOCK'>(initial?.mode ?? 'EVENT')
   const [roomId, setRoomId] = useState(initial?.roomId || rooms[0]?.id || '')
-  const [dateStr, setDateStr] = useState(() => toLocalInput(ensureWorkday(initial?.date ?? new Date())).slice(0, 10))
+  const [dateStr, setDateStr] = useState(() => toLocalInput(initial?.date ?? new Date()).slice(0, 10))
   const [startTime, setStartTime] = useState(() =>
     initial?.startTime ?? (timeOptions.slice(0, -1).includes('09:00') ? '09:00' : settings.openTime),
   )
@@ -94,7 +96,9 @@ function AssignmentDraft({ initial, onClose, onSuccess }: Omit<AssignActivityMod
   // Overlap and displacement detection
   const { overlappingBookings, overlappingBlocks } = useMemo(() => {
     if (!isValidRange || !startDate || !endDate || !roomId) return { overlappingBookings: [], overlappingBlocks: [] }
-    const bks = bookings.filter(
+    const byId = new Map(bookings.map((booking) => [booking.id, booking]))
+    for (const booking of pendingQueue) byId.set(booking.id, booking)
+    const bks = [...byId.values()].filter(
       (b) =>
         b.roomId === roomId &&
         (b.status === 'PENDING' || b.status === 'APPROVED' || b.status === 'KEY_CHECKED_OUT') &&
@@ -104,11 +108,14 @@ function AssignmentDraft({ initial, onClose, onSuccess }: Omit<AssignActivityMod
       (k) => k.active && k.roomId === roomId && overlaps(new Date(k.start), new Date(k.end), startDate, endDate),
     )
     return { overlappingBookings: bks, overlappingBlocks: blks }
-  }, [bookings, blocks, roomId, startDate, endDate, isValidRange])
+  }, [bookings, pendingQueue, blocks, roomId, startDate, endDate, isValidRange])
 
+  const checkedOut = overlappingBookings.some((b) => b.status === 'KEY_CHECKED_OUT')
+  const existingBlock = blocks.some((block) => block.active && block.roomId === roomId && Date.parse(block.end) > Date.now())
   const displaceable = overlappingBookings.filter((b) => b.status !== 'KEY_CHECKED_OUT')
   const bookingIds = displaceable.map((b) => b.id).sort().join(',')
   const displace = mode === 'BLOCK' && bookingIds !== '' && bookingIds === confirmedBookings
+  const blockUnavailable = mode === 'BLOCK' && (checkedOut || existingBlock || (!!bookingIds && !displace))
   const close = () => { if (!isSubmitting) onClose() }
 
   const selectedRoom: Room | undefined = rooms.find((r) => r.id === roomId)
@@ -133,28 +140,28 @@ function AssignmentDraft({ initial, onClose, onSuccess }: Omit<AssignActivityMod
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
-    if (isSubmitting) return
+    if (isSubmitting || blockUnavailable) return
     setError(null)
 
     if (weekend) {
-      setError('Activities can only be scheduled on workdays (Monday–Friday).')
+      setError(t('staff.weekdaysOnly'))
       return
     }
 
     if (!isValidRange || !startDate || !endDate) {
-      setError('End time must be strictly after start time.')
+      setError(t('staff.badTimeOrder'))
       return
     }
 
     if (!title.trim()) {
-      setError('Activity title is required.')
+      setError(t('staff.titleRequired'))
       return
     }
 
     // If Mode 1 (EVENT) and there is a conflict, warn the manager
     if (mode === 'EVENT' && (overlappingBookings.length > 0 || overlappingBlocks.length > 0)) {
       setError(
-        'This slot has overlapping reservations or blocks. To displace existing bookings with priority, switch to "Full Room Override / Block" mode.',
+        t('staff.eventConflictError'),
       )
       return
     }
@@ -162,7 +169,7 @@ function AssignmentDraft({ initial, onClose, onSuccess }: Omit<AssignActivityMod
     setIsSubmitting(true)
 
     const activityTitle = title.trim()
-    const fullPurpose = notes.trim() || `${category} scheduled by Facilities Desk`
+    const fullPurpose = notes.trim() || t('staff.defaultPurpose', { category: t(`staff.category_${category}`) })
 
     try {
       const err = await assignRoomSchedule({
@@ -183,7 +190,7 @@ function AssignmentDraft({ initial, onClose, onSuccess }: Omit<AssignActivityMod
         return
       }
 
-      notify(`Room ${selectedRoom?.code ?? ''} scheduled for ${category} successfully.`)
+      notify(t('staff.assignedSuccess', { code: selectedRoom?.code ?? '—' }))
       onSuccess?.()
       onClose()
     } finally {
@@ -197,20 +204,20 @@ function AssignmentDraft({ initial, onClose, onSuccess }: Omit<AssignActivityMod
         <div className="flex items-center justify-between border-b border-rule bg-ice px-6 py-4">
           <div className="flex flex-col gap-0.5">
             <div className="flex items-center gap-2">
-              <Eyebrow>FACILITIES DESK · SCHEDULE ASSIGNMENT</Eyebrow>
+              <Eyebrow>{t('staff.assignEyebrow')}</Eyebrow>
               <span className="inline-flex items-center gap-1 rounded-[2px] bg-accent/10 px-1.5 py-0.5 font-mono text-[10px] font-bold text-accent">
-                <Sparkles size={11} /> DESK CONTROL
+                <Sparkles size={11} /> {t('staff.deskControl')}
               </span>
             </div>
             <h2 id="assign-modal-title" className="font-display text-[20px] font-w450 text-ink">
-              Assign room schedule or event
+              {t('staff.assignTitle')}
             </h2>
           </div>
           <button
             type="button"
             onClick={close}
             disabled={isSubmitting}
-            aria-label="Close modal"
+            aria-label={t('staff.closeModal')}
             className="rounded-[4px] p-1.5 text-steel transition-colors hover:bg-paper hover:text-ink"
           >
             <X size={18} />
@@ -223,9 +230,9 @@ function AssignmentDraft({ initial, onClose, onSuccess }: Omit<AssignActivityMod
             {/* Mode Switcher */}
             <div>
               <div className="mb-1.5 flex items-center justify-between font-mono text-[11px] font-semibold text-steel uppercase">
-                <span>Scheduling Mode</span>
+                <span>{t('staff.scheduleMode')}</span>
                 <span className="text-[10px] text-graphite">
-                  {mode === 'EVENT' ? 'Direct approved calendar slot' : 'University priority override'}
+                  {mode === 'EVENT' ? t('staff.directApproval') : t('staff.priorityOverride')}
                 </span>
               </div>
               <div className="grid grid-cols-2 gap-1 rounded-[4px] border border-rule bg-ice p-1">
@@ -239,8 +246,8 @@ function AssignmentDraft({ initial, onClose, onSuccess }: Omit<AssignActivityMod
                       : 'text-steel hover:text-ink',
                   )}
                 >
-                  <span className="text-[13px]">Activity Schedule</span>
-                  <span className="font-mono text-[10px] text-accent">APPROVED EVENT</span>
+                  <span className="text-[13px]">{t('staff.activitySchedule')}</span>
+                  <span className="font-mono text-[10px] text-accent">{t('staff.approvedEvent')}</span>
                 </button>
                 <button
                   type="button"
@@ -252,8 +259,8 @@ function AssignmentDraft({ initial, onClose, onSuccess }: Omit<AssignActivityMod
                       : 'text-steel hover:text-ink',
                   )}
                 >
-                  <span className="text-[13px]">Full Room Override</span>
-                  <span className="font-mono text-[10px] text-plum">DISPLACEMENT REQUIRES CONFIRMATION</span>
+                  <span className="text-[13px]">{t('staff.roomOverride')}</span>
+                  <span className="font-mono text-[10px] text-plum">{t('staff.displaceRequires')}</span>
                 </button>
               </div>
             </div>
@@ -261,9 +268,9 @@ function AssignmentDraft({ initial, onClose, onSuccess }: Omit<AssignActivityMod
             {/* Room Selector */}
             <div>
               <div className="mb-1.5 flex items-center justify-between font-mono text-[11px] font-semibold text-steel uppercase">
-                <span>Assigned Room</span>
+                <span>{t('staff.assignedRoom')}</span>
                 <span className="font-mono text-[11px] text-ink font-bold">
-                  RM {selectedRoom?.code} · Cap {selectedRoom?.capacity}
+                  {selectedRoom && `${t('staff.roomNumber', { code: selectedRoom.code })} · ${t('staff.capacity', { count: selectedRoom.capacity })}`}
                 </span>
               </div>
               <div className="grid grid-cols-3 gap-2">
@@ -282,8 +289,8 @@ function AssignmentDraft({ initial, onClose, onSuccess }: Omit<AssignActivityMod
                       )}
                     >
                       <div className="flex items-center justify-between">
-                        <span className="font-mono text-[14px] font-bold">RM {r.code}</span>
-                        <span className="font-mono text-[11px] text-steel">Cap {r.capacity}</span>
+                        <span className="font-mono text-[14px] font-bold">{t('staff.roomNumber', { code: r.code })}</span>
+                        <span className="font-mono text-[11px] text-steel">{t('staff.capacity', { count: r.capacity })}</span>
                       </div>
                       <span className="truncate text-[11px] text-steel">{r.name}</span>
                     </button>
@@ -295,27 +302,26 @@ function AssignmentDraft({ initial, onClose, onSuccess }: Omit<AssignActivityMod
             {/* Activity Category Chips */}
             <div>
               <div className="mb-1.5 flex items-center justify-between font-mono text-[11px] font-semibold text-steel uppercase">
-                <span>Activity Category</span>
-                <span className="font-mono text-[10px] text-accent">1-CLICK PRESET</span>
+                <span>{t('staff.activityCategory')}</span>
+                <span className="font-mono text-[10px] text-accent">{t('staff.categoryPreset')}</span>
               </div>
               <div className="grid grid-cols-3 gap-2 sm:grid-cols-6">
                 {CATEGORY_PRESETS.map((p) => {
-                  const isCat = category === p.category
+                  const isCat = category === p
                   return (
                     <button
-                      key={p.category}
+                      key={p}
                       type="button"
-                      onClick={() => setCategory(p.category)}
+                      onClick={() => setCategory(p)}
                       className={cx(
                         'flex flex-col items-center justify-center rounded-[3px] border py-2 px-1 text-center transition-all',
                         isCat
                           ? 'border-ink bg-ink text-paper font-semibold shadow-xs'
                           : 'border-rule bg-paper text-graphite hover:border-ink hover:text-ink',
                       )}
-                      title={p.sublabel}
+                      title={t(`staff.categoryHint_${p}`)}
                     >
-                      <span className="font-mono text-[11px] font-bold">{p.tag}</span>
-                      <span className="text-[10px] opacity-80">{p.label}</span>
+                      <span className="font-mono text-[11px] font-bold">{t(`staff.category_${p}`)}</span>
                     </button>
                   )
                 })}
@@ -325,7 +331,7 @@ function AssignmentDraft({ initial, onClose, onSuccess }: Omit<AssignActivityMod
             {/* Date & Time Range */}
             <div className="rounded-[4px] border border-rule bg-ice/40 p-3.5">
               <div className="grid gap-3 sm:grid-cols-3">
-                <Field label="Date" error={weekend ? 'Workdays only (Mon–Fri)' : undefined}>
+                <Field label={t('staff.date')} error={weekend ? t('staff.workday') : undefined}>
                   <Input
                     type="date"
                     value={dateStr}
@@ -334,7 +340,7 @@ function AssignmentDraft({ initial, onClose, onSuccess }: Omit<AssignActivityMod
                   />
                 </Field>
 
-                <Field label="Start Hour">
+                <Field label={t('staff.startHour')}>
                   <select
                     value={startTime}
                     onChange={(e) => { setStartTime(e.target.value); setConfirmedBookings('') }}
@@ -349,7 +355,7 @@ function AssignmentDraft({ initial, onClose, onSuccess }: Omit<AssignActivityMod
                   </select>
                 </Field>
 
-                <Field label="End Hour">
+                <Field label={t('staff.endHour')}>
                   <select
                     value={endTime}
                     onChange={(e) => { setEndTime(e.target.value); setConfirmedBookings('') }}
@@ -369,29 +375,25 @@ function AssignmentDraft({ initial, onClose, onSuccess }: Omit<AssignActivityMod
               {weekend && (
                 <div className="mt-3 flex items-center gap-2 rounded-[3px] border border-plum/40 bg-plum/10 p-2.5 font-mono text-[11px] font-semibold text-plum">
                   <TriangleAlert size={14} className="shrink-0" />
-                  <span>Activities can only be scheduled on workdays (Monday–Friday).</span>
+                  <span>{t('staff.weekdaysOnly')}</span>
                 </div>
               )}
 
               {/* Quick Duration Shortcuts */}
               <div className="mt-3 flex flex-wrap items-center gap-1.5 border-t border-rule/70 pt-2.5">
                 <span className="mr-1 flex items-center gap-1 font-mono text-[10px] font-semibold text-steel uppercase">
-                  <Clock size={11} /> Quick Duration:
+                  <Clock size={11} /> {t('staff.quickDuration')}
                 </span>
                 {[
-                  { label: '1h', h: 1 },
-                  { label: '1.5h', h: 1.5 },
-                  { label: '2h', h: 2 },
-                  { label: '3h', h: 3 },
-                  { label: '4h', h: 4 },
-                ].map((q) => (
+                  1, 1.5, 2, 3, 4
+                ].map((hours) => (
                   <button
-                    key={q.label}
+                    key={hours}
                     type="button"
-                    onClick={() => applyDuration(q.h)}
+                    onClick={() => applyDuration(hours)}
                     className="rounded-[2px] border border-edge bg-paper px-2 py-0.5 font-mono text-[11px] text-graphite hover:border-ink hover:text-ink"
                   >
-                    {q.label}
+                    {fmtDuration(hours * 60, locale)}
                   </button>
                 ))}
                 <button
@@ -399,41 +401,41 @@ function AssignmentDraft({ initial, onClose, onSuccess }: Omit<AssignActivityMod
                   onClick={applyFullDay}
                   className="rounded-[2px] border border-accent/40 bg-accent/5 px-2 py-0.5 font-mono text-[11px] font-semibold text-accent hover:bg-accent hover:text-paper"
                 >
-                  Full Day ({settings.openTime}–{settings.closeTime})
+                  {t('staff.fullDay', { range: `${settings.openTime}–${settings.closeTime}` })}
                 </button>
                 <div className="ml-auto font-mono text-[11px] font-bold text-ink">
-                  {isValidRange ? fmtDuration(durationMinutes) : 'Invalid Range'}
+                  {isValidRange ? fmtDuration(durationMinutes, locale) : t('staff.invalidRange')}
                 </div>
               </div>
             </div>
 
             {/* Title & Organizer Info */}
-            <Field label="Activity Title" hint="Required">
+            <Field label={t('staff.activityTitle')} hint={t('staff.required')}>
               <Input
                 value={title}
                 onChange={(e) => setTitle(e.target.value)}
-                placeholder="e.g. Software Architecture - Midterm Examination"
+                placeholder={t('staff.activityTitleExample')}
                 className="bg-paper"
               />
             </Field>
 
             <div className="grid gap-3 sm:grid-cols-2">
-              <Field label="Organizer / Instructor Notes" hint="Optional">
+              <Field label={t('staff.organiserNotes')} hint={t('staff.optional')}>
                 <Input
                   value={notes}
                   onChange={(e) => setNotes(e.target.value)}
-                  placeholder="e.g. Prof. David Miller · SE Dept"
+                  placeholder={t('staff.organiserNotesExample')}
                   className="bg-paper"
                 />
               </Field>
-              <Field label="Estimated Attendees" hint="Optional">
+              <Field label={t('staff.estimatedAttendees')} hint={t('staff.optional')}>
                 <Input
                   type="number"
                   min={1}
                   max={selectedRoom?.capacity ?? 100}
                   value={attendees}
                   onChange={(e) => setAttendees(e.target.value)}
-                  placeholder={`Max ${selectedRoom?.capacity ?? 40}`}
+                  placeholder={t('staff.maxAttendees', { count: selectedRoom?.capacity ?? 100 })}
                   className="font-mono bg-paper"
                 />
               </Field>
@@ -441,15 +443,15 @@ function AssignmentDraft({ initial, onClose, onSuccess }: Omit<AssignActivityMod
 
             {/* Live Conflict & Displacement Status Banner */}
             <div className="flex flex-col gap-2">
-              {!startDate || !endDate || !isValidRange ? null : overlappingBookings.length === 0 && overlappingBlocks.length === 0 ? (
+              {!startDate || !endDate || !isValidRange ? null : overlappingBookings.length === 0 && overlappingBlocks.length === 0 && !(mode === 'BLOCK' && existingBlock) ? (
                 <div className="flex items-center gap-2 rounded-[4px] border border-[#0F62FE]/30 bg-tint/20 px-3.5 py-2.5 text-[12px] text-ink">
-                  <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-accent text-paper">
+                  <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-sm bg-accent text-paper">
                     <Check size={12} strokeWidth={2.5} />
                   </span>
                   <div className="flex flex-col">
-                    <span className="font-mono text-[11px] font-bold text-accent">NO KNOWN CONFLICTS</span>
+                    <span className="font-mono text-[11px] font-bold text-accent">{t('staff.noConflicts')}</span>
                     <span className="text-[12px] text-steel">
-                      No conflicts shown on {fmtDate(startDate)} ({fmtTime(startDate)}–{fmtTime(endDate)}). The server checks again on submission.
+                      {t('staff.noConflictsHint', { date: fmtDate(startDate, locale), time: fmtRange(startDate, endDate) })}
                     </span>
                   </div>
                 </div>
@@ -457,7 +459,7 @@ function AssignmentDraft({ initial, onClose, onSuccess }: Omit<AssignActivityMod
                 <div className="flex items-start gap-2.5 rounded-[4px] border border-plum/40 bg-plum/10 px-3.5 py-2.5 text-[12px] text-ink">
                   <TriangleAlert size={16} className="mt-0.5 shrink-0 text-plum" />
                   <div className="flex flex-col gap-1.5">
-                    <span className="font-mono text-[11px] font-bold text-plum">SLOT CONFLICT DETECTED</span>
+                    <span className="font-mono text-[11px] font-bold text-plum">{t('staff.slotConflictLabel')}</span>
                     <ul className="flex flex-col gap-1.5">
                       {overlappingBookings.map((b) => (
                         <li key={b.id} className="flex flex-wrap items-center gap-x-2 gap-y-1">
@@ -466,12 +468,12 @@ function AssignmentDraft({ initial, onClose, onSuccess }: Omit<AssignActivityMod
                         </li>
                       ))}
                     </ul>
-                    {overlappingBookings.some((b) => b.status === 'KEY_CHECKED_OUT') && <span>Receive checked-out keys before blocking this slot.</span>}
-                    {overlappingBlocks.length > 0 && <span>Cancel the current room block before creating another.</span>}
-                    {displaceable.length > 0 && (
+                    {checkedOut && <span>{t('staff.keysBeforeBlock')}</span>}
+                    {existingBlock && <span>{t('staff.blockExists')}</span>}
+                    {displaceable.length > 0 && !checkedOut && !existingBlock && (
                       <label className="flex items-center gap-2 font-semibold">
                         <input type="checkbox" checked={displace} onChange={(event) => setConfirmedBookings(event.target.checked ? bookingIds : '')} />
-                        Decline {displaceable.length} overlapping {displaceable.length === 1 ? 'booking' : 'bookings'}
+                        {t('staff.blockDisplacement', { count: displaceable.length })}
                       </label>
                     )}
                   </div>
@@ -480,10 +482,9 @@ function AssignmentDraft({ initial, onClose, onSuccess }: Omit<AssignActivityMod
                 <div className="flex items-start gap-2.5 rounded-[4px] border border-plum/40 bg-plum/10 px-3.5 py-2.5 text-[12px] text-plum">
                   <TriangleAlert size={16} className="mt-0.5 shrink-0 text-plum" />
                   <div className="flex flex-col gap-0.5">
-                    <span className="font-mono text-[11px] font-bold">SLOT CONFLICT DETECTED</span>
+                    <span className="font-mono text-[11px] font-bold">{t('staff.slotConflictLabel')}</span>
                     <span>
-                      {overlappingBookings.length} booking(s) and {overlappingBlocks.length} block(s) overlap this slot.
-                      Choose an open slot, or switch to <b>Full Room Override</b> mode above.
+                      {t('staff.eventConflictHint', { bookings: overlappingBookings.length, blocks: overlappingBlocks.length })}
                     </span>
                   </div>
                 </div>
@@ -500,21 +501,21 @@ function AssignmentDraft({ initial, onClose, onSuccess }: Omit<AssignActivityMod
           {/* Action Buttons */}
           <div className="mt-6 flex items-center justify-between border-t border-rule pt-4">
             <Button type="button" variant="outline" onClick={close} disabled={isSubmitting}>
-              Cancel
+              {t('staff.cancel')}
             </Button>
 
             <Button
               type="submit"
               variant={mode === 'BLOCK' ? 'dark' : 'accent'}
-              disabled={isSubmitting || !roomId || !isValidRange || !title.trim() || weekend}
+              disabled={isSubmitting || !roomId || !isValidRange || !title.trim() || weekend || blockUnavailable}
               className="gap-2"
             >
               <Check size={14} />
               {isSubmitting
-                ? 'Assigning Schedule...'
+                ? t('staff.assigning')
                 : mode === 'BLOCK'
-                  ? `Confirm Room Override (RM ${selectedRoom?.code})`
-                  : `Assign ${category} Schedule`}
+                  ? t('staff.confirmBlock')
+                  : t('staff.assignSchedule')}
             </Button>
           </div>
         </form>

@@ -1,8 +1,9 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { X } from 'lucide-react'
+import { Users, X } from 'lucide-react'
+import { useI18n } from '@/lib/i18n'
 import { useStore } from '@/lib/store'
-import type { Booking } from '@/lib/types'
+import { parseBookingMembers, type Booking } from '@/lib/types'
 import { durationMin, fmtDate, fmtDuration, fmtTime } from '@/lib/time'
 import { cx } from '@/components/ui'
 
@@ -16,12 +17,13 @@ export function StudentBookingPopover({
   onClose: () => void
 }) {
   const { cancelBooking, currentUser, user, room, notify } = useStore()
+  const { t, locale } = useI18n()
   const ref = useRef<HTMLDivElement>(null)
   const [pos, setPos] = useState<{ top: number; left: number; side: 'left' | 'right'; arrowTop: number } | null>(null)
   const [pending, setPending] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
-  const u = user(b.userId) ?? currentUser
+  const u = b.isMine ? currentUser ?? user(b.userId) : user(b.userId)
   const r = room(b.roomId)
 
   const isCollected = b.status === 'KEY_CHECKED_OUT'
@@ -37,7 +39,7 @@ export function StudentBookingPopover({
     const place = () => {
       if (!anchor.isConnected) return onClose()
       const a = anchor.getBoundingClientRect()
-      const w = Math.min(360, window.innerWidth - 24)
+      const w = Math.min(410, window.innerWidth - 24)
       const h = Math.min(ref.current?.offsetHeight ?? 380, window.innerHeight - 24)
       const gap = 10
       const side: 'left' | 'right' = a.right + gap + w <= window.innerWidth - 12 ? 'right' : 'left'
@@ -83,7 +85,7 @@ export function StudentBookingPopover({
         setError(error)
         notify(error, 'error')
       } else {
-        notify('Reservation cancelled.')
+        notify(t('student.reservationCancelled'))
         onClose()
       }
     } finally {
@@ -92,20 +94,17 @@ export function StudentBookingPopover({
   }
 
   // Format timestamp: "FRI 06 NOV • 10:30 → 14:30 (4h)"
-  const dateStr = fmtDate(b.start)
+  const dateStr = fmtDate(b.start, locale)
   const startStr = fmtTime(b.start)
   const endStr = fmtTime(b.end)
-  const durStr = fmtDuration(durationMin(b.start, b.end))
+  const durStr = fmtDuration(durationMin(b.start, b.end), locale)
   const timestamp = `${dateStr} • ${startStr} → ${endStr} (${durStr})`
 
   // Room header: "ROOM 601 • SEMINAR HALL"
-  const roomTitle = r ? `ROOM ${r.code} • ${r.name.toUpperCase()}` : 'ROOM RESERVATION'
+  const roomTitle = r ? t('student.roomTitle', { code: r.code, name: r.name }) : t('student.roomReservation')
 
   // Status badge
-  const badgeText =
-    b.status === 'PENDING'
-      ? 'PENDING APPROVAL'
-      : b.status === 'KEY_CHECKED_OUT'
+  const badgeText = t(`student.bookingStatus.${b.status}`)
         ? 'KEY IN CUSTODY'
         : b.status
 
@@ -120,16 +119,17 @@ export function StudentBookingPopover({
             ? 'border-rule bg-ice text-steel'
             : 'border-plum text-plum bg-plum/[0.07]'
 
-  const studentName = u?.fullName || 'Student'
-  const studentCode = u?.studentCode || '—'
+  const studentName = u?.fullName || t('student.holder')
+  const hcmutId = u?.hcmutId || u?.studentCode || '—'
+  const utsId = u?.utsId || '—'
 
   return createPortal(
     <div
       ref={ref}
       role="dialog"
-      aria-label={`Booking ${b.title}`}
+      aria-label={t('student.bookingNamed', { title: b.title })}
       tabIndex={-1}
-      className="fixed z-50 w-[min(360px,calc(100%-24px))] rounded-lg border border-[#E0E0E0] bg-[#ffffff] shadow-nav"
+      className="fixed z-50 w-[min(410px,calc(100%-24px))] rounded-lg border border-[#E0E0E0] bg-[#ffffff] shadow-nav"
       style={{ top: pos?.top ?? -9999, left: pos?.left ?? -9999 }}
     >
       {pos && (
@@ -151,14 +151,14 @@ export function StudentBookingPopover({
           </div>
           <div>
             <span className={cx('inline-flex items-center gap-1.5 rounded-sm border px-2 py-0.5 font-mono text-[10px] font-bold tracking-wider', badgeStyle)}>
-              <span className={cx('h-1.5 w-1.5 rounded-full', b.status === 'KEY_CHECKED_OUT' ? 'bg-tint' : 'bg-current')} />
+              <span className={cx('h-1.5 w-1.5 rounded-sm', b.status === 'KEY_CHECKED_OUT' ? 'bg-tint' : 'bg-current')} />
               {badgeText}
             </span>
           </div>
         </div>
         <button
           onClick={onClose}
-          aria-label="Close"
+          aria-label={t('common.close')}
           className="-mr-1.5 rounded-md p-1 text-steel hover:bg-ice hover:text-ink transition-colors cursor-pointer"
         >
           <X size={16} strokeWidth={1.5} />
@@ -170,7 +170,7 @@ export function StudentBookingPopover({
         {/* Date & Time */}
         <div className="border border-[#E0E0E0] bg-[#F4F5F7] px-3.5 py-2.5 rounded-sm">
           <div className="font-mono text-[10px] font-semibold tracking-wider text-steel uppercase">
-            RESERVED TIME
+            {t('student.reservedTime')}
           </div>
           <div className="mt-0.5 font-mono text-[13px] font-semibold text-ink">
             {timestamp}
@@ -190,41 +190,72 @@ export function StudentBookingPopover({
         </div>
 
         {/* Student metadata */}
-        <div className="border-t border-dashed border-[#E0E0E0] pt-3">
-          <div className="font-mono text-[10px] font-semibold tracking-wider text-steel uppercase">
-            STUDENT IDENTIFICATION
+        <div className="flex flex-col gap-2 border-t border-dashed border-[#E0E0E0] pt-3">
+          <div>
+            <div className="font-mono text-[10px] font-semibold tracking-wider text-steel uppercase">
+              {t('student.holderIdentification')}
+            </div>
+            <div className="mt-1 font-mono text-[12px] font-medium text-ink">
+              <div className="font-semibold text-ink">{studentName}</div>
+              <div className="mt-0.5 flex flex-wrap items-center gap-2 font-mono text-[11px] font-semibold text-meta">
+                <span>{t('student.hcmutId')}: {hcmutId}</span>
+                <span className="text-steel">·</span>
+                <span>{t('student.utsId')}: {utsId}</span>
+              </div>
+            </div>
           </div>
-          <div className="mt-1 font-mono text-[12px] font-medium text-ink">
-            <span className="font-semibold text-ink">{studentName}</span>
-            <span className="text-steel"> • </span>
-            <span className="font-semibold text-meta">{studentCode}</span>
-          </div>
+
+          {(() => {
+            const memberList = parseBookingMembers(b)
+            if (memberList.length === 0) return null
+            return (
+              <div className="border-t border-dashed border-[#E0E0E0] pt-2">
+                <div className="flex items-center justify-between font-mono text-[10px] font-semibold tracking-wider text-steel uppercase">
+                  <span className="flex items-center gap-1">
+                    <Users size={11} /> {t('student.memberCount', { count: memberList.length })}
+                  </span>
+                </div>
+                <div className="mt-1 flex flex-col gap-1">
+                  {memberList.map((m, mi) => (
+                    <div key={mi} className="flex items-center justify-between font-mono text-[11px] bg-ice/60 px-2 py-1 rounded-sm border border-rule/50">
+                      <span className="font-sans font-medium text-ink truncate">{m.name}</span>
+                      <div className="flex items-center gap-1.5 text-[10px] shrink-0">
+                        {m.hcmutId && <span className="text-steel">{t('student.hcmutId')}: <strong className="text-ink">{m.hcmutId}</strong></span>}
+                        {m.hcmutId && m.utsId && <span>·</span>}
+                        {m.utsId && <span className="text-steel">{t('student.utsId')}: <strong className="text-accent">{m.utsId}</strong></span>}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )
+          })()}
         </div>
 
         {b.isMine && b.passCode && (b.status === 'APPROVED' || isCollected) && (
           <div className="rounded-sm border border-accent bg-tint px-3 py-2">
-            <p className="font-mono text-[10px] font-semibold text-ink-blue">KEY PICKUP PASS CODE</p>
-            <p className="break-all font-mono text-[15px] font-semibold text-ink">{b.passCode}</p>
+            <p className="font-mono text-[10px] font-semibold text-ink-blue">{t('student.passCode')}</p>
+            <p className="selectable break-all font-mono text-[15px] font-semibold text-ink">{b.passCode}</p>
           </div>
         )}
 
         {/* Warning / status note if not cancellable */}
         {isCollected && (
           <div className="rounded-sm border border-plum/30 bg-plum/[0.05] px-3 py-2 text-[12px] font-mono text-plum">
-            Key already collected — cannot cancel
+            {t('student.noCancelCollected')}
           </div>
         )}
         {isCompleted && (
           <div className="rounded-sm border border-rule bg-ice px-3 py-2 text-[12px] font-mono text-steel">
-            Booking completed — cannot cancel
+            {t('student.noCancelCompleted')}
           </div>
         )}
         {isCancelled && (
           <div className="rounded-sm border border-rule bg-ice px-3 py-2 text-[12px] font-mono text-steel">
-            {b.status === 'REJECTED' ? 'This reservation was rejected' : 'This reservation was cancelled'}
+            {t(b.status === 'REJECTED' ? 'student.reservationRejected' : 'student.reservationCancelled')}
           </div>
         )}
-        {b.note && <p className="text-[12px] text-graphite">Review note: {b.note}</p>}
+        {b.note && <p className="text-[12px] text-graphite">{t('student.reviewNote')}: {b.note}</p>}
         {error && <p role="alert" className="text-[12px] text-plum">{error}</p>}
 
         {/* Action Buttons */}
@@ -240,14 +271,14 @@ export function StudentBookingPopover({
                 : 'border border-[#E0E0E0] bg-[#F4F5F7] text-steel/50 cursor-not-allowed',
             )}
           >
-            {pending ? 'Cancelling…' : 'Cancel reservation'}
+            {t(pending ? 'student.cancelling' : 'student.cancelReservation')}
           </button>
           <button
             type="button"
             onClick={onClose}
             className="inline-flex items-center justify-center rounded-sm border border-[#E0E0E0] bg-paper px-3.5 py-1.5 font-mono text-[12px] font-semibold text-graphite hover:bg-ice hover:text-ink transition-colors cursor-pointer"
           >
-            Close
+            {t('common.close')}
           </button>
         </div>
       </div>

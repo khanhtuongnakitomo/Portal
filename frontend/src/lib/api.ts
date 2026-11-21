@@ -1,6 +1,6 @@
 import type { AccountStatus, AuditLog, Booking, Role, Room, RoomBlock, RoomStatus, Settings, User } from './types'
 
-const API_BASE = ((import.meta.env.VITE_API_URL as string | undefined) ?? '/api/v1').replace(/\/+$/, '')
+const API_BASE = ((import.meta.env?.VITE_API_URL as string | undefined) ?? '/api/v1').replace(/\/+$/, '')
 
 type ApiFailure = { ok: false; status: number; message: string }
 export type ApiResponse<T> = { ok: true; data: T } | ApiFailure
@@ -64,12 +64,14 @@ function mapResponse<T, U>(result: ApiResponse<T>, map: (data: T) => U): ApiResp
 }
 
 export function mapUser(raw: ApiUser): User {
+  const studentCode = raw.studentCode ?? raw.studentProfile?.studentCode ?? undefined
+  const [hcmutId, utsId] = studentCode?.split('/').map((part) => part.trim()) ?? []
   return {
     id: raw.id,
     fullName: raw.fullName,
     email: raw.email,
     role: raw.role,
-    studentCode: raw.studentCode ?? raw.studentProfile?.studentCode ?? undefined,
+    studentCode, hcmutId, utsId,
     status: raw.status ?? 'ACTIVE',
     createdAt: raw.createdAt ?? '',
   }
@@ -103,6 +105,7 @@ function encodeRoom(room: Room) {
 
 function mapBooking(raw: ApiBooking, ownerId: string, personal = false): Booking {
   const userId = raw.userId ?? raw.user?.id ?? ''
+  const roster = raw.purpose?.match(/ \[Members: ([\s\S]+)\]$/)
   const validPass = raw.status === 'APPROVED' || raw.status === 'KEY_CHECKED_OUT'
   return {
     id: raw.id,
@@ -113,7 +116,8 @@ function mapBooking(raw: ApiBooking, ownerId: string, personal = false): Booking
     title: raw.title,
     kind: raw.kind,
     isMine: raw.isMine ?? (personal || (ownerId !== '' && userId === ownerId)),
-    purpose: raw.purpose ?? '',
+    purpose: roster ? raw.purpose!.slice(0, roster.index) : raw.purpose ?? '',
+    members: roster?.[1],
     status: raw.status,
     passCode: validPass ? raw.passCode ?? null : null,
     note: raw.reviewNote ?? undefined,
@@ -165,7 +169,10 @@ export function createRequester(token: string | null = null, onUnauthorized?: ()
     if (body) headers['Content-Type'] = 'application/json'
     try {
       const response = await fetch(`${API_BASE}${path}`, { method, headers, body: body && JSON.stringify(body) })
-      if (response.status === 401 && token) onUnauthorized?.()
+      if (response.status === 401 && token) {
+        onUnauthorized?.()
+        return { ok: false, status: 401, message: 'Session expired. Please sign in again.' }
+      }
       const data = await response.json().catch(() => null)
       if (!response.ok) {
         const message = Array.isArray(data?.message) ? data.message.join(', ') : data?.message
@@ -182,6 +189,16 @@ export function createRequester(token: string | null = null, onUnauthorized?: ()
 export function createApi(token: string | null, onUnauthorized: () => void, ownerId = '') {
   const request = createRequester(token, onUnauthorized)
 
+  async function signIn(path: string, method: 'POST', body: object): Promise<ApiResponse<ApiAuth>> {
+    const result = await request<ApiAuth>(path, method, body)
+    if (!result.ok) return result
+    const { accessToken, expiresIn, user } = result.data
+    if (typeof accessToken !== 'string' || !accessToken || !Number.isFinite(expiresIn) || expiresIn <= 0 ||
+        !user?.id || !user.email || !user.fullName || !['USER', 'MANAGER', 'ADMIN'].includes(user.role)) {
+      return { ok: false, status: result.status, message: 'The server returned an invalid session.' }
+    }
+    return result
+  }
   const usersFor = (bookings: ApiBooking[]) => bookings.flatMap((booking) => booking.user ? [mapUser(booking.user)] : [])
   const bookingList = (items: ApiBooking[]) => ({ bookings: items.map((booking) => mapBooking(booking, ownerId)), users: usersFor(items) })
   const bookingAction = async (path: string, body: { note?: string; passCode?: string } = {}) =>
@@ -189,15 +206,18 @@ export function createApi(token: string | null, onUnauthorized: () => void, owne
 
   return {
     apiLogin(email: string, password: string) {
-      return request<ApiAuth>('/auth/login', 'POST', { email: email.trim(), password })
+      return signIn('/auth/login', 'POST', { email: email.trim(), password })
     },
     apiRegister(input: { fullName: string; email: string; password: string; studentCode: string }) {
-      return request<ApiAuth>('/auth/register', 'POST', {
+      return signIn('/auth/register', 'POST', {
         ...input, fullName: input.fullName.trim(), email: input.email.trim(), studentCode: input.studentCode.trim().toUpperCase(),
       })
     },
     async apiMe() {
       return mapResponse(await request<ApiUser>('/users/me'), mapUser)
+    },
+    async apiUpdateProfile(fullName: string) {
+      return mapResponse(await request<ApiUser>('/users/me', 'PATCH', { fullName: fullName.trim() }), mapUser)
     },
     async apiGetRooms(staff: boolean) {
       return mapResponse(await request<ApiRoom[]>(staff ? '/admin/rooms' : '/rooms'), (rooms) => rooms.map(mapRoom))
@@ -218,7 +238,7 @@ export function createApi(token: string | null, onUnauthorized: () => void, owne
         limit: data.limit,
       }))
     },
-    async apiCreateBooking(input: Interval & { title: string; purpose: string; attendeeCount: number }) {
+    async apiCreateBooking(input: Interval & { title: string; purpose: string; attendeeCount: number; isEvent: boolean }) {
       return mapResponse(await request<ApiBooking>('/bookings', 'POST', input), (booking) => mapBooking(booking, ownerId))
     },
     apiCancelBooking: (id: string) => bookingAction(`/bookings/${id}/cancel`),

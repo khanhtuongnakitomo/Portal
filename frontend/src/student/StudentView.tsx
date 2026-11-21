@@ -1,7 +1,8 @@
 import { useRef, useState } from 'react'
 import { ArrowRight, ChevronLeft, ChevronRight } from 'lucide-react'
 import { ACTIVE_STATUSES, useStore } from '@/lib/store'
-import { addDays, at, ensureWorkday, fmtShort, parseHM, startOfWeek } from '@/lib/time'
+import { useI18n } from '@/lib/i18n'
+import { addDays, at, ensureWorkday, fmtDuration, fmtShort, minutesOfDay, parseHM, sameDay, startOfWeek } from '@/lib/time'
 import { Button, Eyebrow, Tag, cx } from '@/components/ui'
 import { NavItem, PageHeader, TopNav } from '@/components/Shell'
 import { RoomTabs, roomColor } from '@/components/RoomTabs'
@@ -14,6 +15,7 @@ import { StudentBookingPopover } from './StudentBookingPopover'
 
 export function StudentView() {
   const { rooms, bookings, myBookings, blocks, settings, currentUser, notify, connection, refreshData, refreshMyBookings } = useStore()
+  const { t, locale } = useI18n()
   const [roomId, setRoomId] = useState<string>('ALL')
   const [weekStart, setWeekStart] = useState(() => startOfWeek(new Date()))
   const [selection, setSelection] = useState<Selection | null>(null)
@@ -38,44 +40,54 @@ export function StudentView() {
       <TopNav />
       <main className="mx-auto max-w-[1440px] px-6 pt-10">
         <PageHeader
-          eyebrow="STUDENT WORKSPACE · ROOM RESERVATION"
-          title={connection === 'connecting' ? 'Loading rooms…' : connection === 'offline' ? 'Room inventory unavailable' : 'No rooms listed'}
-          right={<Button variant="outline" onClick={() => setDrawer(true)}>My bookings</Button>}
+          eyebrow={t('student.eyebrow')}
+          title={t(connection === 'connecting' ? 'student.loadingRooms' : connection === 'offline' ? 'student.inventoryUnavailable' : 'student.noRooms')}
+          right={<Button variant="outline" onClick={() => setDrawer(true)}>{t('nav.myBookings')}</Button>}
         />
-        {connection === 'offline' && <Button className="mt-4" onClick={() => void refreshData()}>Retry connection</Button>}
+        {connection === 'offline' && <Button className="mt-4" onClick={() => void refreshData()}>{t('student.retryConnection')}</Button>}
       </main>
       <MyBookingsDrawer open={drawer} onClose={() => setDrawer(false)} />
     </>
   )
   const thisWeek = startOfWeek(now)
   const openReservation = () => {
-    const { h, m } = parseHM(settings.openTime)
-    const day = ensureWorkday(weekStart > now ? weekStart : now)
+    const open = parseHM(settings.openTime)
+    const close = parseHM(settings.closeTime)
+    const first = open.h * 60 + open.m
+    const last = close.h * 60 + close.m
+    let day = ensureWorkday(weekStart > now ? weekStart : now)
+    let start = sameDay(now, day) && minutesOfDay(now) >= first
+      ? first + 30 * (Math.floor((minutesOfDay(now) - first) / 30) + 1) : first
+    if (start >= last) {
+      day = ensureWorkday(addDays(day, 1))
+      start = first
+    }
+    checkingBooking.current = null
     setActiveBooking(null)
-    setSelection({ start: at(day, h, m), end: at(day, h, m + 30), roomId: room.id })
+    setSelection({ start: at(day, 0, start), end: at(day, 0, Math.min(last, start + 30, start + settings.maxDurationMinutes)), roomId: room.id })
   }
 
   return (
     <>
       <TopNav>
-        <NavItem active>Book a room</NavItem>
+        <NavItem active>{t('nav.bookRoom')}</NavItem>
         <NavItem onClick={() => setDrawer(true)} badge={active.length}>
-          My bookings
+          {t('nav.myBookings')}
         </NavItem>
       </TopNav>
 
       <main className="mx-auto max-w-[1440px] px-6 pt-10">
         <PageHeader
-          eyebrow="STUDENT WORKSPACE · ROOM RESERVATION"
-          title="Reserve a room. Collect the key."
-          body="Choose a room and time in the weekly ledger, or use the reservation form. Collect the physical key with your student ID once approved."
+          eyebrow={t('student.eyebrow')}
+          title={t('student.heroTitle')}
+          body={t('student.heroBody')}
           right={
             <Reveal stagger className="grid grid-cols-2 border-t border-l border-rule sm:grid-cols-4">
               {[
-                ['WINDOW', `Up to ${settings.maxAdvanceDays} days ahead`],
-                ['HOURS', `${settings.openTime}–${settings.closeTime}`],
-                ['MAX LENGTH', `${settings.maxDurationMinutes / 60}h`],
-                ['ACTIVE', `${active.length} / ${settings.maxActiveBookings}`],
+                [t('student.bookingWindow'), t('student.windowValue', { count: settings.maxAdvanceDays })],
+                [t('common.hours'), `${settings.openTime}–${settings.closeTime}`],
+                [t('common.maxLength'), fmtDuration(settings.maxDurationMinutes, locale)],
+                [t('common.activeBookings'), `${active.length} / ${settings.maxActiveBookings}`],
               ].map(([k, v]) => (
                 <div key={k} className="min-w-[120px] border-r border-b border-rule px-4 py-3">
                   <div className="font-mono text-[11px] text-steel">{k}</div>
@@ -92,6 +104,7 @@ export function StudentView() {
               rooms={rooms}
               activeId={isAllRooms ? 'ALL' : room.id}
               onChange={(id) => {
+                checkingBooking.current = null
                 setRoomId(id)
                 setSelection(null)
                 setActiveBooking(null)
@@ -105,8 +118,9 @@ export function StudentView() {
                   <Button
                     variant="outline"
                     className="!rounded-md !p-1.5"
-                    aria-label="Previous week"
+                    aria-label={t('student.previousWeek')}
                     onClick={() => {
+                      checkingBooking.current = null
                       setWeekStart((w) => addDays(w, -7))
                       setActiveBooking(null)
                     }}
@@ -116,8 +130,9 @@ export function StudentView() {
                   <Button
                     variant="outline"
                     className="!rounded-md !p-1.5"
-                    aria-label="Next week"
+                    aria-label={t('student.nextWeek')}
                     onClick={() => {
+                      checkingBooking.current = null
                       setWeekStart((w) => addDays(w, 7))
                       setActiveBooking(null)
                     }}
@@ -129,35 +144,36 @@ export function StudentView() {
                     size="xs"
                     className="!rounded-md"
                     onClick={() => {
+                      checkingBooking.current = null
                       setWeekStart(thisWeek)
                       setActiveBooking(null)
                     }}
                   >
-                    This week
+                    {t('student.thisWeek')}
                   </Button>
                   <div className="ml-2 font-mono text-[13px] font-semibold text-ink">
-                    {fmtShort(weekStart)} — {fmtShort(addDays(weekStart, 6))} · MON–SUN
+                    {fmtShort(weekStart, locale)} — {fmtShort(addDays(weekStart, 6), locale)} · {t('student.monToSun')}
                   </div>
-                  <Button size="xs" onClick={openReservation}>New reservation</Button>
+                  <Button size="xs" onClick={openReservation}>{t('student.newReservation')}</Button>
                 </div>
                 <div className="flex flex-wrap items-center gap-3 text-[11px] text-graphite">
                   {isAllRooms && (
                     <>
-                      {rooms.map((entry) => <Legend key={entry.id} swatch={roomColor(entry).dot} label={`RM ${entry.code}`} />)}
+                      {rooms.map((entry) => <Legend key={entry.id} swatch={roomColor(entry).dot} label={t('student.roomCode', { code: entry.code })} />)}
                       <span className="text-rule">|</span>
                     </>
                   )}
-                  <Legend swatch="border border-accent bg-accent" label="Yours" />
-                  <Legend swatch="border border-dashed border-meta" label="Yours · pending" />
-                  <Legend swatch="border border-[#b9c0cb] bg-reserved" label="Reserved" />
-                  <Legend swatch="hatch-slate border border-ink" label="Event block" />
-                  <Legend swatch="hatch border border-edge bg-paper" label="Unavailable" />
-                  <Legend swatch="border border-accent bg-tint" label="Selection" />
+                  <Legend swatch="border border-accent bg-accent" label={t('student.yours')} />
+                  <Legend swatch="border border-dashed border-meta" label={t('student.yoursPending')} />
+                  <Legend swatch="border border-[#b9c0cb] bg-reserved" label={t('student.reserved')} />
+                  <Legend swatch="hatch-slate border border-ink" label={t('student.eventBlock')} />
+                  <Legend swatch="hatch border border-edge bg-paper" label={t('student.unavailable')} />
+                  <Legend swatch="border border-accent bg-tint" label={t('student.selection')} />
                 </div>
               </div>
               {!isAllRooms && room.status !== 'AVAILABLE' && (
                 <div className="border-b border-plum/30 bg-plum/[0.06] px-4 py-2 font-mono text-[12px] font-semibold text-plum">
-                  ROOM {room.code} IS {room.status} — BOOKINGS SUSPENDED
+                  {t('student.roomSuspended', { code: room.code, status: t(`student.roomStatus.${room.status}`) })}
                 </div>
               )}
               <div className="scrollbar-thin overflow-x-auto">
@@ -190,7 +206,7 @@ export function StudentView() {
                         checkingBooking.current = null
                         if (!el.isConnected) return
                         if (!refreshed) {
-                          notify('Could not refresh the booking. Try again.', 'error')
+                          notify(t('student.bookingRefreshFailed'), 'error')
                           return
                         }
                       }
@@ -208,19 +224,19 @@ export function StudentView() {
           <Reveal as="aside" stagger className="flex flex-col gap-6">
             <div className="rounded-lg bg-ice p-6">
               <Eyebrow>
-                {isAllRooms ? 'ALL ROOMS' : `ROOM ${room.code} · LEVEL ${room.floor}`}
+                {isAllRooms ? t('student.allRooms') : t('student.roomFloor', { code: room.code, floor: room.floor })}
               </Eyebrow>
               <h3 className="mt-3 font-display text-feature font-w450 text-ink">
-                <SplitText key={isAllRooms ? 'all' : room.id} text={isAllRooms ? 'Combined Room Schedule' : room.name} />
+                <SplitText key={isAllRooms ? 'all' : room.id} text={isAllRooms ? t('student.combinedSchedule') : room.name} />
               </h3>
               <div className="mt-4 grid grid-cols-2 gap-px border border-rule bg-rule">
                 <div className="bg-paper px-3 py-2">
-                  <div className="font-mono text-[10px] text-steel">APPROVAL</div>
-                  <div className="font-mono text-[13px] font-semibold text-accent">{isAllRooms ? 'VARIES BY ROOM' : room.autoApprove ? 'AUTO WHEN FREE' : 'MANAGER'}</div>
+                  <div className="font-mono text-[10px] text-steel">{t('student.approval')}</div>
+                  <div className="font-mono text-[13px] font-semibold text-accent">{t(isAllRooms ? 'student.approvalVaries' : room.autoApprove ? 'student.autoWhenFree' : 'student.managerRole')}</div>
                 </div>
                 <div className="bg-paper px-3 py-2">
-                  <div className="font-mono text-[10px] text-steel">KEY DESK</div>
-                  <div className="font-mono text-[13px] font-semibold">LEVEL 1</div>
+                  <div className="font-mono text-[10px] text-steel">{t('student.keyPickup')}</div>
+                  <div className="font-mono text-[12px] font-semibold text-ink">{t('student.managerOffice')}</div>
                 </div>
               </div>
               <div className="mt-4 flex flex-wrap gap-1.5">
@@ -231,16 +247,16 @@ export function StudentView() {
             </div>
 
             <div className="flex flex-col gap-3 border-t border-ink pt-4">
-              <Eyebrow tone="ink">HOW IT WORKS</Eyebrow>
+              <Eyebrow tone="ink">{t('student.howItWorks')}</Eyebrow>
               {[
-                ['01', 'Select an open calendar slot or start a new reservation.'],
-                ['02', 'Enter the purpose of the booking and number of attendees.'],
-                ['03', 'Check My bookings for the status of your reservation.'],
-              ].map(([n, t]) => (
+                ['01', t('student.step1')],
+                ['02', t('student.step2')],
+                ['03', t('student.step3')],
+              ].map(([n, tVal]) => (
                 <div key={n} className="flex gap-3 border-b border-dashed border-rule pb-3 last:border-0">
                   <span className="font-mono text-[12px] font-semibold text-accent">{n}</span>
                   <span className="text-[14px] leading-[1.5] text-graphite">
-                    <ScrollRevealText text={t} />
+                    <ScrollRevealText text={tVal} />
                   </span>
                 </div>
               ))}
@@ -249,16 +265,23 @@ export function StudentView() {
             {nextPass ? (
               <div className="flex flex-col gap-3">
                 <div className="flex items-center justify-between">
-                  <Eyebrow tone="ink">{nextPass.status === 'KEY_CHECKED_OUT' ? 'KEY IN CUSTODY' : 'NEXT KEY PICKUP'}</Eyebrow>
+                  <Eyebrow tone="ink">{t(nextPass.status === 'KEY_CHECKED_OUT' ? 'student.keyInCustody' : 'student.nextKeyPickup')}</Eyebrow>
                   <button onClick={() => setDrawer(true)} className="flex items-center gap-1 text-[13px] font-semibold text-ink hover:text-accent">
-                    All bookings <ArrowRight size={14} />
+                    {t('student.allBookings')} <ArrowRight size={14} />
                   </button>
                 </div>
-                <DigitalPass booking={nextPass} room={rooms.find((r) => r.id === nextPass.roomId)} holder={currentUser.fullName} studentCode={currentUser.studentCode} />
+                <DigitalPass
+                  booking={nextPass}
+                  room={rooms.find((r) => r.id === nextPass.roomId)}
+                  holder={currentUser.fullName}
+                  studentCode={currentUser.studentCode}
+                  hcmutId={currentUser.hcmutId}
+                  utsId={currentUser.utsId}
+                />
               </div>
             ) : (
               <Button variant="outline" onClick={() => setDrawer(true)}>
-                Open my bookings <ArrowRight size={14} />
+                {t('student.openMyBookings')} <ArrowRight size={14} />
               </Button>
             )}
           </Reveal>

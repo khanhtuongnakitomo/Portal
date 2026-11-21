@@ -9,6 +9,10 @@ export interface Environment {
   corsOrigins: string[];
   trustProxy: false | number | string;
   devToolsEnabled: boolean;
+  email: {
+    provider: { apiKey: string; from: string; replyTo?: string };
+    worker: { frontendUrl: string; batchSize: number; maxAttempts: number };
+  } | null;
   jwt: {
     secret: string;
     expiresIn: number;
@@ -40,6 +44,38 @@ function parseTrustProxy(value: string): Environment['trustProxy'] {
   throw new Error('TRUST_PROXY must be loopback, false, a non-negative hop count, or IPs/CIDRs');
 }
 
+function emailInteger(value: string | undefined, fallback: number, key: string, max: number) {
+  const parsed = Number(value ?? fallback);
+  if (!Number.isInteger(parsed) || parsed < 1 || parsed > max) {
+    throw new Error(`${key} must be an integer between 1 and ${max}`);
+  }
+  return parsed;
+}
+
+function parseEmail(config: NodeJS.ProcessEnv): Environment['email'] {
+  const enabled = (config.EMAIL_NOTIFICATIONS_ENABLED ?? 'false').toLowerCase();
+  const batchSize = emailInteger(config.EMAIL_BATCH_SIZE, 10, 'EMAIL_BATCH_SIZE', 100);
+  const maxAttempts = emailInteger(config.EMAIL_MAX_ATTEMPTS, 5, 'EMAIL_MAX_ATTEMPTS', 10);
+  if (enabled === 'false') return null;
+  if (enabled !== 'true') throw new Error('EMAIL_NOTIFICATIONS_ENABLED must be true or false');
+
+  const required = (key: string) => {
+    const value = config[key]?.trim();
+    if (!value) throw new Error(`Missing required environment variable: ${key}`);
+    return value;
+  };
+  const apiKey = required('RESEND_API_KEY');
+  const from = required('EMAIL_FROM');
+  const frontendUrl = required('FRONTEND_URL');
+  if (!URL.canParse(frontendUrl) || !['http:', 'https:'].includes(new URL(frontendUrl).protocol)) {
+    throw new Error('FRONTEND_URL must be an absolute HTTP(S) URL');
+  }
+  return {
+    provider: { apiKey, from, replyTo: config.EMAIL_REPLY_TO?.trim() || undefined },
+    worker: { frontendUrl, batchSize, maxAttempts },
+  };
+}
+
 export function validateEnvironment(config: NodeJS.ProcessEnv): Environment {
   const devToolsEnabled = config.DEV_TOOLS_ENABLED === 'true';
   if (devToolsEnabled && config.NODE_ENV === 'production') {
@@ -68,6 +104,7 @@ export function validateEnvironment(config: NodeJS.ProcessEnv): Environment {
     apiPrefix: `/${(config.API_PREFIX || 'api/v1').replace(/^\/+|\/+$/g, '')}`,
     trustProxy: parseTrustProxy(config.TRUST_PROXY ?? 'loopback'),
     devToolsEnabled,
+    email: parseEmail(config),
     corsOrigins: (config.CORS_ORIGINS ?? '')
       .split(',')
       .map((origin) => origin.trim())

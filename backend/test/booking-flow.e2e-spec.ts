@@ -5,7 +5,12 @@ import type { Express } from 'express';
 import request from 'supertest';
 import { createApp } from '../src/app.js';
 import { validateEnvironment } from '../src/config/environment.js';
-import { Role, UserStatus } from '../src/generated/prisma/client.js';
+import {
+  NotificationEventType,
+  NotificationStatus,
+  Role,
+  UserStatus,
+} from '../src/generated/prisma/client.js';
 import type { PrismaService } from '../src/prisma/prisma.service.js';
 
 const runId = randomUUID();
@@ -93,10 +98,42 @@ describe('booking lifecycle (e2e)', () => {
     }
   });
 
+  it('only updates the authenticated user’s display name and records the change', async () => {
+    const patch = (body: object) =>
+      request(app)
+        .patch('/api/v1/users/me')
+        .set('Authorization', `Bearer ${studentToken}`)
+        .send(body);
+    await patch({ fullName: 'Updated Student', studentCode: 'NOT-EDITABLE' }).expect(400);
+    await patch({ fullName: ' x ' }).expect(400);
+    await patch({ fullName: 12345 }).expect(400);
+    const updated = await patch({ fullName: '  Updated Student  ' }).expect(200);
+    const profile = await request(app)
+      .get('/api/v1/users/me')
+      .set('Authorization', `Bearer ${studentToken}`)
+      .expect(200);
+    expect(updated.body).toEqual(profile.body);
+    expect(profile.body).toMatchObject({ fullName: 'Updated Student', email: studentEmail });
+    expect(profile.body).not.toHaveProperty('passwordHash');
+    const { id } = profile.body as { id: string };
+    expect(
+      await prisma.auditLog.count({
+        where: { actorId: id, targetId: id, action: 'USER_PROFILE_UPDATED' },
+      }),
+    ).toBe(1);
+    await prisma.auditLog.deleteMany({ where: { targetId: id, action: 'USER_PROFILE_UPDATED' } });
+  });
+
   it('allows only one approval and records a single approval before key checkout and return', async () => {
     const pending = await createBooking(studentToken).expect(201);
     const bookingBody = pending.body as BookingResponse;
     expect(bookingBody).toMatchObject({ status: 'PENDING', passCode: null, kind: 'STUDENT' });
+    const notification = await prisma.notificationOutbox.findFirstOrThrow({
+      where: { bookingId: bookingBody.id, recipientEmail: managerEmail },
+    });
+    expect(notification.eventType).toBe(NotificationEventType.BOOKING_CREATED);
+    expect(notification.status).toBe(NotificationStatus.PENDING);
+    expect(notification.attempts).toBe(0);
     const responses = await Promise.all([approve(bookingBody.id), approve(bookingBody.id)]);
     expect(responses.map((r) => r.status).sort()).toEqual([200, 409]);
     const approved = responses.find((response) => response.status === 200);
@@ -196,6 +233,15 @@ describe('booking lifecycle (e2e)', () => {
     expect(
       await prisma.bookingStatusHistory.count({
         where: { bookingId: approved.id, toStatus: 'APPROVED' },
+      }),
+    ).toBe(1);
+    expect(
+      await prisma.notificationOutbox.count({
+        where: {
+          bookingId: approved.id,
+          recipientEmail: studentEmail,
+          eventType: 'BOOKING_APPROVED',
+        },
       }),
     ).toBe(1);
     const waiting = await createBooking(competitorToken).expect(201);

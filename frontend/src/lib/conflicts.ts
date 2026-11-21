@@ -19,7 +19,7 @@ export const CONFLICT_COLORS: Record<ConflictInfo['letter'], { bar: string; badg
 const letters = ['A', 'B', 'C', 'D', 'E', 'F'] as const
 // Public calendar responses redact owner ids. Keep anonymous reservations distinct
 // without exposing or inventing an identity in the UI.
-const bookerKey = (booking: Booking) => `${booking.kind}:${booking.userId || booking.id}`
+const bookerKey = (booking: Booking) => booking.userId ? `user:${booking.userId}` : `reservation:${booking.id}`
 
 type Interval = { start: Date; end: Date }
 

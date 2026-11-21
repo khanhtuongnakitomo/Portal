@@ -7,11 +7,12 @@ import {
 } from '../common/http-exceptions.js';
 import type { AuthenticatedUser } from '../common/interfaces/authenticated-user.interface.js';
 import { BookingStatus, Role, RoomBlockStatus, RoomStatus } from '../generated/prisma/client.js';
+import { NotificationsService } from '../notifications/notifications.service.js';
 import { PrismaService } from '../prisma/prisma.service.js';
 import {
   getZonedDayRange,
-  validateBookingWindow,
   validateStaffBookingWindow,
+  validateBookingWindow,
 } from './booking-policy.js';
 import type { CalendarQueryDto } from './dto/calendar-query.dto.js';
 import type { CreateBookingDto } from './dto/create-booking.dto.js';
@@ -53,8 +54,8 @@ type BookingUserRecord = {
   studentProfile: { studentCode: string } | null;
 };
 
-function bookingKind(role: Role) {
-  return role === Role.ADMIN || role === Role.MANAGER ? 'OFFICIAL' : 'STUDENT';
+function bookingKind(isEvent: boolean) {
+  return isEvent ? 'OFFICIAL' : 'STUDENT';
 }
 
 const calendarSelect = {
@@ -65,16 +66,24 @@ const calendarSelect = {
   startTime: true,
   endTime: true,
   status: true,
-  user: { select: { role: true } },
+  isEvent: true,
 } as const;
 
 export class BookingsService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly notifications?: NotificationsService,
+  ) {}
 
   async create(dto: CreateBookingDto, actor: AuthenticatedUser | string) {
     const userId = typeof actor === 'string' ? actor : actor.id;
     const actorRole = typeof actor === 'string' ? Role.USER : actor.role;
     const isStaff = actorRole === Role.MANAGER || actorRole === Role.ADMIN;
+    if (dto.isEvent === true && !isStaff) {
+      throw new ForbiddenException('Only managers or admins can assign official activities');
+    }
+    // Keep legacy staff API calls as official; personal mode must be explicit.
+    const isOfficialActivity = isStaff && dto.isEvent !== false;
 
     const startTime = new Date(dto.startTime);
     const endTime = new Date(dto.endTime);
@@ -92,16 +101,17 @@ export class BookingsService {
       }
 
       const settings = await tx.systemSetting.findUniqueOrThrow({ where: { id: 'default' } });
-      if (isStaff) {
+      if (isOfficialActivity) {
         validateStaffBookingWindow(startTime, endTime, settings);
       } else {
         validateBookingWindow(startTime, endTime, settings);
       }
 
-      if (!isStaff) {
+      if (!isOfficialActivity) {
         const activeCount = await tx.booking.count({
           where: {
             userId,
+            isEvent: false,
             status: { in: [...activeBookingStatuses] },
             endTime: { gt: new Date() },
           },
@@ -126,19 +136,23 @@ export class BookingsService {
         where: { ...slot, status: { in: [BookingStatus.APPROVED, BookingStatus.KEY_CHECKED_OUT] } },
         select: { id: true },
       });
-      if (firmConflict && (isStaff || !room.autoApprove)) {
+      if (firmConflict && (isOfficialActivity || !room.autoApprove)) {
         throw new ConflictException('This room is already reserved for that time range');
       }
 
       let autoApproved = false;
-      if (isStaff) {
-        await rejectOverlaps(
+      if (isOfficialActivity) {
+        const displaced = await rejectOverlaps(
           tx,
           slot,
           BookingStatus.PENDING,
           userId,
           'Slot assigned to an official room activity',
           { reason: 'OFFICIAL_ACTIVITY' },
+        );
+        await this.notifications?.enqueueBookingDecision(
+          tx,
+          displaced.map(({ id }) => id),
         );
       } else {
         const pending = { ...slot, status: BookingStatus.PENDING };
@@ -155,13 +169,13 @@ export class BookingsService {
       }
 
       const initialStatus =
-        isStaff || autoApproved ? BookingStatus.APPROVED : BookingStatus.PENDING;
-      const reviewNote = isStaff
+        isOfficialActivity || autoApproved ? BookingStatus.APPROVED : BookingStatus.PENDING;
+      const reviewNote = isOfficialActivity
         ? 'Scheduled room activity / event assigned by Manager'
         : autoApproved
           ? 'Automatically approved by room policy'
           : undefined;
-      const reviewedById = isStaff ? userId : undefined;
+      const reviewedById = isOfficialActivity ? userId : undefined;
       const reviewedAt = initialStatus === BookingStatus.APPROVED ? new Date() : undefined;
 
       const created = await tx.booking.create({
@@ -171,6 +185,7 @@ export class BookingsService {
           title: dto.title.trim(),
           purpose: dto.purpose.trim(),
           attendeeCount: dto.attendeeCount,
+          isEvent: isOfficialActivity,
           passCode: generatePassCode(),
           startTime,
           endTime,
@@ -202,6 +217,11 @@ export class BookingsService {
         where: { id: created.id },
         include: bookingInclude,
       });
+      if (autoApproved) {
+        await this.notifications?.enqueueBookingDecision(tx, [booking.id]);
+      } else {
+        await this.notifications?.enqueueBookingCreated(tx, booking, settings.timezone);
+      }
       return this.toApiBooking(booking);
     });
   }
@@ -263,14 +283,14 @@ export class BookingsService {
       }),
     ]);
     const bookings = [
-      ...publicRows.map(({ user, ...row }) => ({
+      ...publicRows.map(({ isEvent, ...row }) => ({
         ...row,
-        kind: bookingKind(user.role),
+        kind: bookingKind(isEvent),
         isMine: false,
       })),
-      ...privateRows.map(({ user: { studentProfile, ...user }, ...row }) => ({
+      ...privateRows.map(({ isEvent, user: { studentProfile, ...user }, ...row }) => ({
         ...row,
-        kind: bookingKind(user.role),
+        kind: bookingKind(isEvent),
         isMine: row.userId === viewer?.id,
         user: { ...user, studentCode: studentProfile?.studentCode ?? null },
       })),
@@ -436,7 +456,7 @@ export class BookingsService {
         },
       });
 
-      await rejectOverlaps(
+      const displaced = await rejectOverlaps(
         tx,
         slot,
         BookingStatus.PENDING,
@@ -445,6 +465,7 @@ export class BookingsService {
         { reason: 'AUTO_DECLINE_COMPETING_PENDING', approvedBookingId: id },
       );
 
+      await this.notifications?.enqueueBookingDecision(tx, [id, ...displaced.map(({ id }) => id)]);
       const updated = await tx.booking.findUniqueOrThrow({
         where: { id },
         include: bookingInclude,
@@ -608,6 +629,7 @@ export class BookingsService {
         where: { id },
         include: bookingInclude,
       });
+      if (isReview) await this.notifications?.enqueueBookingDecision(tx, [id]);
       return this.toApiBooking(booking);
     });
   }
@@ -632,13 +654,18 @@ export class BookingsService {
   }
 
   private toApiBooking<
-    T extends { user: BookingUserRecord; status: BookingStatus; passCode: string },
+    T extends {
+      user: BookingUserRecord;
+      status: BookingStatus;
+      passCode: string;
+      isEvent: boolean;
+    },
   >(booking: T) {
     const { user: rawUser, passCode, ...rest } = booking;
     const { studentProfile, ...user } = rawUser;
     return {
       ...rest,
-      kind: bookingKind(user.role),
+      kind: bookingKind(booking.isEvent),
       passCode:
         booking.status === BookingStatus.APPROVED ||
         booking.status === BookingStatus.KEY_CHECKED_OUT

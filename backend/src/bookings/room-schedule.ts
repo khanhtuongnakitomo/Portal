@@ -39,7 +39,7 @@ export async function rejectOverlaps(
     },
     select: { id: true },
   });
-  if (rejected.length === 0) return;
+  if (rejected.length === 0) return rejected;
   await tx.bookingStatusHistory.createMany({
     data: rejected.map(({ id }) => ({
       bookingId: id,
@@ -58,4 +58,5 @@ export async function rejectOverlaps(
       metadata: { ...metadata, note },
     })),
   });
+  return rejected;
 }

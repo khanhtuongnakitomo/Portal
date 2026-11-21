@@ -1,3 +1,4 @@
+import { useI18n } from '@/lib/i18n'
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import {
@@ -10,7 +11,7 @@ import {
   X,
 } from 'lucide-react'
 import { useLookups, useStore } from '@/lib/store'
-import type { Booking, RoomBlock } from '@/lib/types'
+import { parseBookingMembers, type Booking, type RoomBlock } from '@/lib/types'
 import {
   addDays,
   durationMin,
@@ -32,7 +33,7 @@ import { AssignActivityModal, type AssignModalInitial } from './AssignActivityMo
 import { DayMatrixView } from './DayMatrixView'
 import { ApprovalBoard } from './ApprovalBoard'
 import { BlockInspectorModal } from './BlockInspectorModal'
-import { QUICK_REJECT_REASONS } from './types'
+import { activityCategoryKey, QUICK_REJECT_REASONS } from './types'
 
 function useNow(ms = 30000) {
   const [now, setNow] = useState(() => new Date())
@@ -55,24 +56,25 @@ function deskRows(managerToday: Booking[], overdueKeys: Booking[]) {
 export function ManagerView() {
   const { blocks, managerToday, overdueKeys, pendingQueue } = useStore()
   const now = useNow()
+  const { t, locale } = useI18n()
 
   const { rows } = deskRows(managerToday, overdueKeys)
   const keysOut = rows.filter((b) => b.status === 'KEY_CHECKED_OUT').length
   const activeBlocks = blocks.filter((k) => k.active && new Date(k.end) > now).length
 
   const stats: [string, number, string][] = [
-    ['PENDING', pendingQueue.length, pendingQueue.length ? 'text-accent' : ''],
-    ['TODAY', managerToday.length, ''],
-    ['KEYS OUT', keysOut, ''],
-    ['OVERDUE', overdueKeys.length, overdueKeys.length ? 'text-danger' : ''],
-    ['ACTIVE BLOCKS', activeBlocks, ''],
+    [t('common.pending'), pendingQueue.length, pendingQueue.length ? 'text-accent' : ''],
+    [t('staff.today'), managerToday.length, ''],
+    [t('staff.keysOut'), keysOut, ''],
+    [t('common.overdue'), overdueKeys.length, overdueKeys.length ? 'text-danger' : ''],
+    [t('staff.activeBlocks'), activeBlocks, ''],
   ]
 
   return (
     <>
       <TopNav>
         <NavItem active badge={pendingQueue.length}>
-          Operations & Schedule
+          {t('staff.operationsNav')}
         </NavItem>
       </TopNav>
 
@@ -80,8 +82,8 @@ export function ManagerView() {
         {/* Compact header strip */}
         <div className="flex flex-wrap items-center justify-between gap-x-6 gap-y-2 border-b border-rule pb-3">
           <div className="flex items-baseline gap-3">
-            <h1 className="font-display text-[22px] leading-tight font-w450">Operations desk</h1>
-            <span className="font-mono text-[12px] text-steel">FACILITIES · {fmtDate(now)}</span>
+            <h1 className="font-display text-[22px] leading-tight font-w450">{t('staff.operationsDesk')}</h1>
+            <span className="font-mono text-[12px] text-steel">{t('staff.facilities')} · {fmtDate(now, locale)}</span>
           </div>
           <dl className="flex flex-wrap items-center divide-x divide-rule rounded-md border border-rule bg-paper">
             {stats.map(([label, value, color]) => (
@@ -95,7 +97,7 @@ export function ManagerView() {
 
         <TodayLog />
 
-        <OperationsWorkspace eyebrow="DAY MATRIX · REQUESTS · WEEK GRID" title="Schedule & occupancy" />
+        <OperationsWorkspace />
       </main>
     </>
   )
@@ -106,6 +108,7 @@ export function ManagerView() {
 function TodayLog() {
   const { managerToday, overdueKeys, refreshKeyDesk, checkoutKey, returnKey, connection, notify } = useStore()
   const { user, room } = useLookups()
+  const { t, locale } = useI18n()
   const [refreshing, setRefreshing] = useState(false)
   const [busyId, setBusyId] = useState<string | null>(null)
   const { overdueIds, rows } = deskRows(managerToday, overdueKeys)
@@ -119,7 +122,7 @@ function TodayLog() {
     try {
       await refreshKeyDesk()
     } catch (error) {
-      notify(error instanceof Error ? error.message : 'Unable to refresh today’s log.', 'error')
+      notify(error instanceof Error ? error.message : t('staff.refreshError'), 'error')
     } finally {
       setRefreshing(false)
     }
@@ -134,9 +137,9 @@ function TodayLog() {
     try {
       const error = await (handingOver && passCode ? checkoutKey(booking.id, passCode) : returnKey(booking.id))
       if (error) notify(error, 'error')
-      else notify(handingOver ? 'Key handover recorded.' : 'Key return recorded.')
+      else notify(handingOver ? t('staff.handedOver') : t('staff.received'))
     } catch (error) {
-      notify(error instanceof Error ? error.message : 'Key action failed.', 'error')
+      notify(error instanceof Error ? error.message : t('staff.keyError'), 'error')
     } finally {
       setBusyId(null)
     }
@@ -146,26 +149,26 @@ function TodayLog() {
     <section aria-labelledby="today-log-title" className="rounded-lg border border-rule bg-paper">
       <div className="flex flex-wrap items-center justify-between gap-2 border-b border-rule px-3 py-2">
         <div className="flex flex-wrap items-baseline gap-x-4 gap-y-1">
-          <h2 id="today-log-title" className="text-[16px] font-semibold">Today · {fmtDate(new Date())}</h2>
+          <h2 id="today-log-title" className="text-[16px] font-semibold">{t('staff.today')} · {fmtDate(new Date(), locale)}</h2>
           <span className="font-mono text-[11px] text-steel">
-            {borrowers} {borrowers === 1 ? 'BORROWER' : 'BORROWERS'} · {keysOut} KEYS OUT ·{' '}
-            <span className={overdueKeys.length ? 'font-bold text-danger' : ''}>{overdueKeys.length} OVERDUE</span>
+            {t('staff.borrowers', { count: borrowers })} · {t('staff.keysOut')}: {keysOut} ·{' '}
+            <span className={overdueKeys.length ? 'font-bold text-danger' : ''}>{t('common.overdue')}: {overdueKeys.length}</span>
           </span>
-          {connection === 'offline' && <span className="text-[12px] text-plum">Live data may be stale.</span>}
+          {connection === 'offline' && <span className="text-[12px] text-plum">{t('staff.stale')}</span>}
         </div>
         <Button variant="outline" size="xs" onClick={refresh} disabled={disabled} className="gap-1.5">
           <RefreshCw size={12} className={refreshing ? 'animate-spin' : undefined} />
-          {refreshing ? 'Refreshing…' : 'Refresh'}
+          {refreshing ? t('staff.refreshing') : t('staff.refresh')}
         </Button>
       </div>
       {rows.length === 0 ? (
-        <p className="px-3 py-3 text-[13px] text-steel">No room bookings at the desk today.</p>
+        <p className="px-3 py-3 text-[13px] text-steel">{t('staff.todayEmpty')}</p>
       ) : (
         <div className="scrollbar-thin max-h-[264px] overflow-auto">
           <table className="w-full min-w-[900px] border-collapse text-left text-[12px]">
             <thead className="sticky top-0 z-10 bg-ice font-mono text-[11px] text-steel">
               <tr>
-                {['TIME', 'ROOM', 'STUDENT', 'TITLE / PURPOSE', 'STATUS', 'KEY'].map((h) => (
+                {[t('common.time'), t('common.room'), t('student.holder'), t('staff.titlePurpose'), t('common.status'), t('staff.key')].map((h) => (
                   <th key={h} scope="col" className="px-3 py-1.5 font-semibold">{h}</th>
                 ))}
               </tr>
@@ -182,20 +185,27 @@ function TodayLog() {
                       {fmtRange(booking.start, booking.end)}
                       {overdue && (
                         <div className="flex items-center gap-1.5 text-[11px] font-bold text-danger">
-                          OVERDUE · due {fmtStamp(booking.end)}
+                          {t('common.overdue')} · {t('staff.keyDue', { time: fmtStamp(booking.end, locale) })}
                         </div>
                       )}
                     </td>
-                    <td className="px-3 font-mono font-semibold whitespace-nowrap">RM {bookingRoom?.code ?? '—'}</td>
+                    <td className="px-3 font-mono font-semibold whitespace-nowrap">{t('staff.roomNumber', { code: bookingRoom?.code ?? '—' })}</td>
                     <td className="max-w-[220px] truncate px-3" title={holder?.fullName}>
                       {holder ? (
-                        official ? `${holder.fullName} (organiser)` : `${holder.fullName}${holder.studentCode ? ` · ${holder.studentCode}` : ''}`
-                      ) : 'Holder unavailable'}
+                        official ? t('staff.namedOrganiser', { name: holder.fullName }) : `${holder.fullName}${holder.studentCode ? ` · ${holder.studentCode}` : ''}`
+                      ) : t('staff.holderUnavailable')}
                     </td>
                     <td className="max-w-[280px] truncate px-3 text-graphite" title={booking.purpose || booking.title}>
                       {booking.title}{booking.purpose && booking.purpose !== booking.title ? ` — ${booking.purpose}` : ''}
                     </td>
-                    <td className="px-3"><StatusChip status={booking.status} /></td>
+                    <td className="px-3 py-1">
+                      <StatusChip status={booking.status} />
+                      {booking.returnedAt ? (
+                        <div className="font-mono text-[10px] text-steel">{t('key.returnedAt')}: {fmtStamp(booking.returnedAt, locale)}</div>
+                      ) : booking.checkedOutAt && (
+                        <div className="font-mono text-[10px] text-steel">{t('key.issuedAt')}: {fmtStamp(booking.checkedOutAt, locale)}</div>
+                      )}
+                    </td>
                     <td className="px-3">
                       <KeyAction booking={booking} disabled={disabled} onAction={markKey} />
                     </td>
@@ -216,6 +226,7 @@ function KeyAction({ booking, disabled, onAction }: {
   onAction: (booking: Booking, passCode?: string) => Promise<void>
 }) {
   const [code, setCode] = useState('')
+  const { t } = useI18n()
   const enteredCode = code.trim()
   const approved = booking.status === 'APPROVED'
   const expectedCode = booking.passCode?.trim().toUpperCase()
@@ -232,27 +243,29 @@ function KeyAction({ booking, disabled, onAction }: {
   }, [approved, endTime])
 
   if (booking.status === 'KEY_CHECKED_OUT') {
-    return <Button size="xs" onClick={() => void onAction(booking)} disabled={disabled}>Receive key</Button>
+    return <Button size="xs" onClick={() => void onAction(booking)} disabled={disabled}>{t('staff.receiveKey')}</Button>
   }
   if (!approved) return <span className="text-steel">—</span>
-  if (!canHandOver) return <span className="text-steel">Ended</span>
+  if (!canHandOver) return <span className="text-steel">{t('staff.ended')}</span>
   return (
     <form className="flex items-center gap-1.5" onSubmit={(event) => {
       event.preventDefault()
       if (codeMatches && !disabled && canHandOver && endTime > Date.now()) void onAction(booking, enteredCode)
     }}>
       <Input
-        aria-label={`Pass code for ${booking.title}`}
-        placeholder={expectedCode ? 'Pass code' : 'Code unavailable'}
-        title={!expectedCode ? 'Pass code unavailable. Refresh the log.' : enteredCode && !codeMatches ? 'Pass code does not match.' : undefined}
+        aria-label={t('staff.passCodeFor', { title: booking.title })}
+        placeholder={expectedCode ? t('staff.passCode') : t('staff.codeUnavailable')}
+        title={!expectedCode ? t('staff.refreshCode') : enteredCode && !codeMatches ? t('staff.wrongCode') : undefined}
         aria-invalid={!!enteredCode && !codeMatches}
         value={code}
         onChange={(event) => setCode(event.target.value)}
         disabled={disabled || !expectedCode}
         autoComplete="off"
+        autoCapitalize="characters"
+        spellCheck={false}
         className={cx('!w-28 !py-1 !text-[12px]', enteredCode && !codeMatches && '!border-danger')}
       />
-      <Button type="submit" size="xs" disabled={disabled || !codeMatches}>Hand over</Button>
+      <Button type="submit" size="xs" disabled={disabled || !codeMatches}>{t('staff.handOver')}</Button>
     </form>
   )
 }
@@ -285,16 +298,15 @@ export interface OperationsWorkspaceProps {
 }
 
 export function OperationsWorkspace({
-  eyebrow = '01 / MASTER CALENDAR · ALL-ROOMS MATRIX & APPROVAL',
-  title = 'Room schedule & occupancy',
+  eyebrow,
+  title,
 }: OperationsWorkspaceProps = {}) {
   const { rooms, bookings, blocks, settings, currentUser, notify, setVisibleRange, pendingQueue: pending } = useStore()
   const { user } = useLookups()
-
-  const [firstPending] = useState(() => pending[0])
+  const { t, locale } = useI18n()
 
   const [roomId, setRoomId] = useState<string>('ALL')
-  const [weekStart, setWeekStart] = useState(() => startOfWeek(firstPending ? new Date(firstPending.start) : new Date()))
+  const [weekStart, setWeekStart] = useState(() => startOfWeek(new Date()))
   const [selectedDay, setSelectedDay] = useState<Date>(() => startOfDay(new Date()))
 
   const [review, setReview] = useState<{ id: string; el: HTMLElement; fromQueue?: boolean } | null>(null)
@@ -312,6 +324,13 @@ export function OperationsWorkspace({
 
   const isAllRooms = roomId === 'ALL'
   const room = isAllRooms ? rooms[0] : (rooms.find((r) => r.id === roomId) ?? rooms[0])
+  useEffect(() => {
+    setVisibleRange(weekStart, addDays(weekStart, 7))
+    if (selectedDay < weekStart || selectedDay >= addDays(weekStart, 7)) {
+      setVisibleRange(selectedDay, addDays(selectedDay, 1))
+    }
+  }, [weekStart, selectedDay, setVisibleRange])
+
   const weekEnd = addDays(weekStart, 7) // Mon–Sun
   const pendingThisWeek = pending.filter(
     (b) => (isAllRooms || b.roomId === room?.id) && new Date(b.start) >= weekStart && new Date(b.start) < weekEnd,
@@ -344,8 +363,8 @@ export function OperationsWorkspace({
   return (
     <section className="flex min-w-0 flex-col gap-4">
       <ColumnHead
-        n={eyebrow}
-        title={title}
+        n={eyebrow ?? t('staff.workspaceEyebrow')}
+        title={title ?? t('staff.scheduleOccupancy')}
         meta={
           <Button
             variant="accent"
@@ -353,7 +372,7 @@ export function OperationsWorkspace({
             onClick={() => handleOpenAssign({ roomId: room.id, date: selectedDay })}
             className="gap-1.5 shadow-xs"
           >
-            <Plus size={14} strokeWidth={2.5} /> Assign Activity / Event
+            <Plus size={14} strokeWidth={2.5} /> {t('staff.assignActivity')}
           </Button>
         }
       />
@@ -388,7 +407,7 @@ export function OperationsWorkspace({
               <Button
                 variant="outline"
                 className="!rounded-md !p-1.5"
-                aria-label="Previous week"
+                aria-label={t('staff.prevWeek')}
                 onClick={() => {
                   setReview(null)
                   setWeekStart((w) => addDays(w, -7))
@@ -400,7 +419,7 @@ export function OperationsWorkspace({
               <Button
                 variant="outline"
                 className="!rounded-md !p-1.5"
-                aria-label="Next week"
+                aria-label={t('staff.nextWeek')}
                 onClick={() => {
                   setReview(null)
                   setWeekStart((w) => addDays(w, 7))
@@ -418,16 +437,16 @@ export function OperationsWorkspace({
                   setWeekStart(startOfWeek(new Date()))
                 }}
               >
-                This week
+                {t('staff.thisWeek')}
               </Button>
 
               <div className="ml-2 font-mono text-[13px] font-semibold text-ink">
-                {fmtShort(weekStart)} — {fmtShort(addDays(weekStart, 6))} · MON–SUN
+                {fmtShort(weekStart, locale)} — {fmtShort(addDays(weekStart, 6), locale)} · {t('staff.weekDays')}
               </div>
 
               {pendingThisWeek > 0 && (
                 <Tag className="ml-1 !border-dashed !border-plum !bg-plum/10 !text-plum">
-                  {pendingThisWeek} TO REVIEW
+                  {t('staff.pendingCount', { count: pendingThisWeek })}
                 </Tag>
               )}
             </div>
@@ -438,17 +457,17 @@ export function OperationsWorkspace({
                   {rooms.map((r) => (
                     <div key={r.id} className="flex items-center gap-1.5">
                       <span className={cx('h-2.5 w-2.5 shrink-0 rounded-full', roomColor(r).dot)} />
-                      <span className="font-semibold text-ink">RM {r.code}</span>
+                      <span className="font-semibold text-ink">{t('staff.roomNumber', { code: r.code })}</span>
                     </div>
                   ))}
                   <span className="text-rule">|</span>
                 </>
               )}
-              <Legend swatch="border border-ink bg-ink" label="Approved" />
-              <Legend swatch="border border-dashed border-plum bg-plum/[0.08]" label="Pending" />
-              <Legend swatch="border-2 border-accent bg-paper" label="Scheduled Event" />
-              <Legend swatch="hatch-slate border border-ink" label="Room block" />
-              <Legend swatch="hatch-conflict border border-danger" label="Conflict" />
+              <Legend swatch="border border-ink bg-ink" label={t('staff.approved')} />
+              <Legend swatch="border border-dashed border-plum bg-plum/[0.08]" label={t('staff.pending')} />
+              <Legend swatch="border-2 border-accent bg-paper" label={t('staff.event')} />
+              <Legend swatch="hatch-slate border border-ink" label={t('staff.roomBlock')} />
+              <Legend swatch="hatch-conflict border border-danger" label={t('staff.conflict')} />
             </div>
           </div>
 
@@ -456,6 +475,7 @@ export function OperationsWorkspace({
             <div className="min-w-[980px]">
               <WeekCalendar
                 mode="manager"
+                loadVisibleRange={false}
                 room={room}
                 weekStart={weekStart}
                 bookings={bookings}
@@ -487,7 +507,7 @@ export function OperationsWorkspace({
 
           <div className="flex items-center gap-2 border-t border-rule px-3 py-2 font-mono text-[11px] text-steel">
             <span className="h-2 w-2 rounded-full bg-accent" />
-            DRAG OR CLICK ANY OPEN WEEKDAY SLOT TO ASSIGN ROOM ACTIVITY · WEEKENDS ARE NOT BOOKABLE · CLICK ANY BLOCK OR EVENT TO INSPECT / MANAGE
+            {t('staff.weekHint')}
           </div>
         </div>
       </div>
@@ -519,6 +539,9 @@ export function OperationsWorkspace({
         initial={assignInitial}
         onClose={() => {
           setVisibleRange(weekStart, addDays(weekStart, 7))
+          if (selectedDay < weekStart || selectedDay >= addDays(weekStart, 7)) {
+            setVisibleRange(selectedDay, addDays(selectedDay, 1))
+          }
           setAssignModalOpen(false)
         }}
       />
@@ -550,6 +573,7 @@ function ReviewPopover({
 }) {
   const { approveBooking, rejectBooking, cancelBooking, bookings, blocks, pendingQueue, notify } = useStore()
   const { user, room } = useLookups()
+  const { t, locale } = useI18n()
   const ref = useRef<HTMLDivElement>(null)
   const [pos, setPos] = useState<{ top: number; left: number; side: 'left' | 'right'; arrowTop: number } | null>(null)
   const [note, setNote] = useState('')
@@ -559,6 +583,7 @@ function ReviewPopover({
   const u = user(b.userId)
   const r = room(b.roomId)
   const isPending = b.status === 'PENDING'
+  const members = parseBookingMembers(b)
   const isEvent = b.kind === 'OFFICIAL'
 
   // Find all competing PENDING bookings in the same room that overlap [b.start, b.end]
@@ -590,7 +615,7 @@ function ReviewPopover({
     if (busy) return
     setError(null)
     if (action === 'reject' && !note.trim()) {
-      setError('Please select or enter a rejection reason.')
+      setError(t('staff.rejectRequired'))
       return
     }
     setBusy(true)
@@ -600,7 +625,7 @@ function ReviewPopover({
         setError(result)
         notify(result, 'error')
       } else {
-        notify(action === 'approve' ? 'Booking approved.' : action === 'reject' ? 'Booking rejected.' : 'Scheduled event cancelled. Slots released.')
+        notify(action === 'approve' ? t('staff.bookingApproved') : action === 'reject' ? t('staff.bookingRejected') : t('staff.eventCancelled'))
         onClose()
       }
     } finally {
@@ -659,7 +684,7 @@ function ReviewPopover({
     <div
       ref={ref}
       role="dialog"
-      aria-label={`Review booking ${b.id}`}
+      aria-label={t('staff.reviewBooking', { id: b.id })}
       className="fixed z-50 flex min-w-0 flex-col rounded-lg border border-ink bg-paper shadow-nav"
       style={{
         width: 'min(380px, calc(100vw - 24px))',
@@ -686,12 +711,11 @@ function ReviewPopover({
         <div className="flex min-w-0 flex-col gap-1.5">
           <div className="flex items-center gap-2">
             <Eyebrow className="!text-[12px]">
-              {isEvent ? 'OFFICIAL SCHEDULE · ' : 'REVIEW · '}
-              {b.id}
+              {isEvent ? t('staff.officialSchedule') : t('staff.review')} · {b.id}
             </Eyebrow>
             {isEvent && (
               <span className="rounded-[2px] bg-accent px-1.5 py-0.2 font-mono text-[10px] font-bold text-paper">
-                {b.category ?? 'EVENT'}
+                {t(activityCategoryKey(b.category))}
               </span>
             )}
           </div>
@@ -702,7 +726,7 @@ function ReviewPopover({
         <button
           onClick={onClose}
           disabled={busy}
-          aria-label="Close"
+          aria-label={t('staff.close')}
           className="-mr-1.5 rounded-md p-1 text-steel hover:bg-ice hover:text-ink"
         >
           <X size={16} strokeWidth={1.5} />
@@ -714,13 +738,13 @@ function ReviewPopover({
         <div className="border-b border-rule bg-plum/[0.04] p-3.5">
           <div className="flex items-center justify-between">
             <span className="flex items-center gap-1.5 font-mono text-[11px] font-bold text-plum">
-              <span>⚡</span> {competingGroup.length} COMPETING REQUESTS FOR THIS WINDOW
+              <span>⚡</span> {t('staff.competingCount', { count: competingGroup.length })}
             </span>
-            <span className="font-mono text-[9px] text-steel">CLICK TO SWITCH</span>
+            <span className="font-mono text-[9px] text-steel">{t('staff.clickSwitch')}</span>
           </div>
 
           <p className="mt-1 font-sans text-[11px] leading-tight text-graphite">
-            Approving this request will automatically decline the other {competingGroup.length - 1} overlapping pending request(s).
+            {t('staff.competingWarning', { count: competingGroup.length - 1 })}
           </p>
 
           <div className="mt-2 flex flex-col gap-1.5">
@@ -753,7 +777,7 @@ function ReviewPopover({
                     <span>{fmtRange(other.start, other.end)}</span>
                     {isCurrent && (
                       <span className="rounded-[2px] bg-paper px-1 font-mono text-[9px] font-bold text-ink">
-                        CURRENT
+                        {t('staff.current')}
                       </span>
                     )}
                   </div>
@@ -768,40 +792,55 @@ function ReviewPopover({
       <div className="flex flex-col gap-3 px-5 py-4">
         <div className="flex flex-wrap items-center gap-2">
           <StatusChip status={b.status} />
-          <span className="font-mono text-[12px] font-bold">RM {r?.code}</span>
+          <span className="font-mono text-[12px] font-bold">{t('staff.roomNumber', { code: r?.code ?? '—' })}</span>
           <span className="font-mono text-[12px] text-graphite">
-            {fmtDate(b.start)} · {fmtRange(b.start, b.end)} · {fmtDuration(durationMin(b.start, b.end))}
+            {fmtDate(b.start, locale)} · {fmtRange(b.start, b.end)} · {fmtDuration(durationMin(b.start, b.end), locale)}
           </span>
-          {conflict && isPending && <Tag tone="plum">CONFLICT</Tag>}
+          {conflict && isPending && <Tag tone="plum">{t('staff.conflictUpper')}</Tag>}
         </div>
 
         {/* Credentials / Organizer */}
         <div className="grid grid-cols-[1fr_auto] items-end gap-3 border border-rule bg-ice px-3 py-2.5">
           <div className="min-w-0">
             <div className="font-mono text-[10px] text-steel">
-              {isEvent ? 'ORGANIZER / STUDENT' : 'STUDENT'}
+              {isEvent ? t('staff.organiser') : t('staff.studentUpper')}
             </div>
             <div className="truncate text-[15px] font-semibold text-ink">{u?.fullName}</div>
           </div>
           {u?.studentCode && (
             <div className="text-right">
-              <div className="font-mono text-[10px] text-steel">STUDENT ID</div>
+              <div className="font-mono text-[10px] text-steel">{t('staff.studentId')}</div>
               <div className="font-mono text-[14px] font-semibold text-meta">{u.studentCode}</div>
             </div>
           )}
           {u?.email && <span className="col-span-2 break-all text-[12px] text-graphite">{u.email}</span>}
         </div>
 
+        {members.length > 0 && (
+          <section className="rounded-sm border border-rule px-3 py-2">
+            <h3 className="text-[11px] font-semibold text-steel">{t('key.groupMembers')}</h3>
+            <ul className="mt-1 space-y-1 text-[12px]">
+              {members.map((member, index) => (
+                <li key={index} className="flex flex-wrap gap-x-2">
+                  {member.name && <span className="font-semibold">{member.name}</span>}
+                  {member.hcmutId && <span>{t('student.hcmutId')}: {member.hcmutId}</span>}
+                  {member.utsId && <span>{t('student.utsId')}: {member.utsId}</span>}
+                </li>
+              ))}
+            </ul>
+          </section>
+        )}
+
         {/* Purpose */}
         <div>
-          <div className="font-mono text-[10px] text-steel">PURPOSE / SESSION NOTES</div>
+          <div className="font-mono text-[10px] text-steel">{t('staff.sessionNotes')}</div>
           <p className="mt-0.5 text-[13px] leading-[1.5] text-graphite">{b.purpose}</p>
         </div>
 
         {/* Review Note & Quick Chips */}
         {isPending ? (
           <div className="flex flex-col gap-2">
-            <Field label="Review Note / Rejection Reason" hint="Optional to approve, required to reject" error={error}>
+            <Field label={t('staff.reviewNote')} hint={t('staff.reviewNoteHint')} error={error}>
               <Textarea
                 rows={2}
                 disabled={busy}
@@ -810,7 +849,7 @@ function ReviewPopover({
                   setNote(e.target.value)
                   setError(null)
                 }}
-                placeholder="Select a quick reason below or type custom note..."
+                placeholder={t('staff.reviewNotePlaceholder')}
                 className="!rounded-none text-[12px]"
               />
             </Field>
@@ -818,10 +857,10 @@ function ReviewPopover({
             {/* Quick-Reject Reason Chips */}
             <div className="flex flex-col gap-1">
               <span className="font-mono text-[10px] font-semibold text-steel uppercase">
-                1-Click Preset Rejection Reasons:
+                {t('staff.presetReasons')}
               </span>
               <div className="flex flex-wrap gap-1">
-                {QUICK_REJECT_REASONS.map((reason) => (
+                {QUICK_REJECT_REASONS.map((key) => t(key)).map((reason) => (
                   <button
                     key={reason}
                     type="button"
@@ -846,7 +885,7 @@ function ReviewPopover({
         ) : (
           b.note && (
             <div className="border-l-2 border-accent bg-ice px-2.5 py-1.5 text-[12px] text-graphite">
-              <span className="font-mono text-[10px] font-bold">DESK NOTE · </span>
+              <span className="font-mono text-[10px] font-bold">{t('staff.deskNote')}</span>
               {b.note}
             </div>
           )
@@ -862,7 +901,7 @@ function ReviewPopover({
             disabled={busy}
             onClick={() => finishReview('reject')}
           >
-            <X size={14} /> Reject
+            <X size={14} /> {t('staff.reject')}
           </Button>
 
           <Button
@@ -872,8 +911,8 @@ function ReviewPopover({
           >
             <Check size={14} />{' '}
             {competingGroup.length > 1
-              ? `Approve & Decline ${competingGroup.length - 1} Other${competingGroup.length - 1 > 1 ? 's' : ''}`
-              : 'Approve Now'}
+              ? t('staff.approveDecline', { count: competingGroup.length - 1 })
+              : t('staff.approveNow')}
           </Button>
         </div>
       ) : (
@@ -887,16 +926,16 @@ function ReviewPopover({
               onClick={() => finishReview('cancel')}
               className="gap-1"
             >
-              <Ban size={12} /> Cancel Event
+              <Ban size={12} /> {t('staff.cancelEvent')}
             </Button>
           ) : (
             <span className="font-mono text-[11px] text-steel">
-              {b.status === 'APPROVED' ? 'APPROVED RESERVATION' : 'ENTRY RECORD'}
+              {b.status === 'APPROVED' ? t('staff.approvedReservation') : t('staff.entryRecord')}
             </span>
           )}
 
           <Button variant="outline" size="xs" onClick={onClose} disabled={busy}>
-            Close
+            {t('staff.close')}
           </Button>
         </div>
       )}

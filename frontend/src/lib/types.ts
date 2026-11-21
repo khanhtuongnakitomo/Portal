@@ -20,8 +20,29 @@ export interface User {
   email: string
   role: Role
   studentCode?: string
+  hcmutId?: string
+  utsId?: string
   status: AccountStatus
   createdAt: string
+}
+
+export interface BookingMember {
+  name?: string
+  hcmutId: string
+  utsId: string
+  studentId?: string
+}
+
+export function parseBookingMembers(b?: { members?: string; memberList?: BookingMember[] }): BookingMember[] {
+  if (b?.memberList) return b.memberList
+  if (!b?.members) return []
+  // Existing records store a comma-separated roster at the end of the purpose.
+  return Array.from(b.members.matchAll(/(?:^|, )([^()]*?) \(([^()]*)\)/g), ([, name, ids]) => ({
+    name: name.trim(),
+    hcmutId: /HCMUT:\s*([^·]+)/i.exec(ids)?.[1].trim() ?? '',
+    utsId: /UTS:\s*([^·]+)/i.exec(ids)?.[1].trim() ?? '',
+    studentId: ids,
+  }))
 }
 
 export interface Booking {
@@ -42,6 +63,8 @@ export interface Booking {
   returnedAt?: string
   category?: string
   attendeeCount?: number
+  members?: string
+  memberList?: BookingMember[]
 }
 
 export interface RoomBlock {

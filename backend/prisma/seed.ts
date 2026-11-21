@@ -1,4 +1,4 @@
-import 'dotenv/config';
+import '../src/config/load-environment.js';
 import { PrismaPg } from '@prisma/adapter-pg';
 import * as argon2 from 'argon2';
 import { lockRoomSchedule } from '../src/bookings/room-schedule.js';
@@ -288,6 +288,7 @@ async function seed(
           passCode: 'TNE-601-GUEST01',
           roomId: r601.id,
           userId: managerUser.id,
+          isEvent: true,
           title: 'UTS Industry Guest Lecture: Cloud Architecture',
           purpose: 'Scheduled room activity / event assigned by Manager',
           attendeeCount: 35,

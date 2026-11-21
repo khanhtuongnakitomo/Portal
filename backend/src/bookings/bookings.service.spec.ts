@@ -2,6 +2,7 @@ import { ConflictException } from '../common/http-exceptions.js';
 import type { AuthenticatedUser } from '../common/interfaces/authenticated-user.interface.js';
 import { BookingStatus, Role, RoomStatus, UserStatus } from '../generated/prisma/client.js';
 import type { PrismaService } from '../prisma/prisma.service.js';
+import { NotificationsService } from '../notifications/notifications.service.js';
 import { BookingsService } from './bookings.service.js';
 
 const { fn } = import.meta.jest;
@@ -19,6 +20,17 @@ type PendingLookup = {
   startTime?: Date;
   endTime?: Date;
 };
+
+class RecordingNotifications extends NotificationsService {
+  readonly decisionBookings: string[] = [];
+  enqueueBookingCreated() {
+    return Promise.resolve();
+  }
+  enqueueBookingDecision(...args: Parameters<NotificationsService['enqueueBookingDecision']>) {
+    this.decisionBookings.push(...args[1]);
+    return Promise.resolve();
+  }
+}
 
 describe('BookingsService - Competing Pending & Auto-Decline', () => {
   const mockSettings = {
@@ -91,6 +103,7 @@ describe('BookingsService - Competing Pending & Auto-Decline', () => {
     purpose: string;
     attendeeCount: number;
     passCode: string;
+    isEvent: boolean;
     startTime: Date;
     endTime: Date;
     status: BookingStatus;
@@ -125,6 +138,7 @@ describe('BookingsService - Competing Pending & Auto-Decline', () => {
       purpose: 'Exam preparation',
       attendeeCount: 10,
       passCode: 'PASS1234',
+      isEvent: false,
       startTime,
       endTime,
       status,
@@ -153,6 +167,7 @@ describe('BookingsService - Competing Pending & Auto-Decline', () => {
   }
 
   let service: BookingsService;
+  let notifications: RecordingNotifications;
   let mockTx: {
     room: {
       updateMany: AsyncMock<{ count: number }>;
@@ -212,7 +227,8 @@ describe('BookingsService - Competing Pending & Auto-Decline', () => {
       $transaction: fn((callback: (tx: typeof mockTx) => Promise<unknown>) => callback(mockTx)),
     };
 
-    service = new BookingsService(mockPrisma as unknown as PrismaService);
+    notifications = new RecordingNotifications();
+    service = new BookingsService(mockPrisma as unknown as PrismaService, notifications);
   });
 
   describe('create', () => {
@@ -255,6 +271,7 @@ describe('BookingsService - Competing Pending & Auto-Decline', () => {
       ]);
 
       await service.create(baseBookingDto, manager);
+      expect(notifications.decisionBookings).toEqual(['pending-1', 'pending-2']);
 
       expect(mockTx.booking.updateManyAndReturn.mock.calls[0]?.[0]).toMatchObject({
         where: { roomId: mockRoom.id, status: BookingStatus.PENDING },
@@ -297,6 +314,7 @@ describe('BookingsService - Competing Pending & Auto-Decline', () => {
 
       const result = await service.approve('booking-1', manager.id, 'Looks good');
       expect(result.status).toBe(BookingStatus.APPROVED);
+      expect(notifications.decisionBookings).toEqual(['booking-1', 'competing-pending-2']);
 
       expect(mockTx.booking.updateMany.mock.calls[0]?.[0]).toMatchObject({
         where: { id: 'booking-1', status: BookingStatus.PENDING },
@@ -348,6 +366,21 @@ describe('BookingsService - Competing Pending & Auto-Decline', () => {
       await expect(service.approve('booking-1', manager.id)).rejects.toThrow(
         new ConflictException('Booking is no longer pending'),
       );
+    });
+
+    it('refuses to send approval when another reviewer already changed the pending booking', async () => {
+      mockTx.booking.findUnique.mockResolvedValue({
+        id: 'booking-1',
+        roomId: 'room-1',
+        status: BookingStatus.PENDING,
+        startTime,
+        endTime,
+      });
+      mockTx.booking.updateMany.mockResolvedValue({ count: 0 });
+      await expect(service.approve('booking-1', manager.id)).rejects.toThrow(
+        'Booking is no longer pending',
+      );
+      expect(notifications.decisionBookings).toHaveLength(0);
     });
   });
 });

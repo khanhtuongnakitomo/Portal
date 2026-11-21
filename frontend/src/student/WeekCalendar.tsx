@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type PointerEvent } from 'react'
 import { ACTIVE_STATUSES, useStore } from '@/lib/store'
+import { useI18n } from '@/lib/i18n'
+import { ConfirmBlockDayModal } from '@/manager/ConfirmBlockDayModal'
 import type { Booking, Room, RoomBlock, Settings } from '@/lib/types'
 import { addDays, at, campusParts, dayKey, daysBetween, durationMin, fmtDate, fmtDow, fmtDuration, fmtRange, fmtTime, isWeekend, minutesOfDay, overlaps, parseHM, sameDay, startOfDay } from '@/lib/time'
 import { cx } from '@/components/ui'
@@ -121,6 +123,7 @@ export function WeekCalendar({
   activeId,
   allRooms = false,
   rooms,
+  loadVisibleRange = true,
 }: {
   room: Room
   weekStart: Date
@@ -138,12 +141,18 @@ export function WeekCalendar({
   activeId?: string | null
   allRooms?: boolean
   rooms?: Room[]
+  loadVisibleRange?: boolean
 }) {
-  const { setVisibleRange } = useStore()
+  const { setVisibleRange, createBlock, cancelBlock, notify } = useStore()
+  const { t, locale } = useI18n()
+  const [blockDay, setBlockDay] = useState<{ roomId: string; start: Date; end: Date } | null>(null)
+  const [unblocking, setUnblocking] = useState(false)
+  const editingReservation = mode === 'student' && selection !== null
   useEffect(() => {
+    if (!loadVisibleRange || editingReservation) return
     const start = startOfDay(weekStart)
     setVisibleRange(start, addDays(start, 7))
-  }, [weekStart, setVisibleRange])
+  }, [weekStart, setVisibleRange, editingReservation, loadVisibleRange])
   const manager = mode === 'manager'
   const now = new Date()
   const open = parseHM(settings.openTime)
@@ -229,6 +238,21 @@ export function WeekCalendar({
       (r) => (manager || r.status === 'AVAILABLE') && !roomOccupied(di, r.id, start, end),
     )
 
+  const fullDayBlocks = days.map((d) => blocks.find((block) => block.active && block.roomId === room.id &&
+    new Date(block.start) <= slotDate(d, 0) && new Date(block.end) >= slotDate(d, slots)))
+
+  const unblockDay = async (block: RoomBlock) => {
+    if (unblocking) return
+    setUnblocking(true)
+    try {
+      const error = await cancelBlock(block.roomId, { start: new Date(block.start), end: new Date(block.end) })
+      if (error) notify(error, 'error')
+      else notify(t('student.dayUnblocked'))
+    } finally {
+      setUnblocking(false)
+    }
+  }
+
   const openSlot = (di: number, a: number, b: number): Selection | null => {
     const start = slotDate(days[di], a)
     const end = slotDate(days[di], b)
@@ -276,10 +300,10 @@ export function WeekCalendar({
       if (!canSelect(start, end)) {
         onReject(
           !manager && !roomOpen
-            ? allRooms ? 'All rooms are currently unavailable for booking.' : `Room ${room.code} is unavailable for booking.`
+            ? allRooms ? t('student.allUnavailable') : t('student.roomUnavailable', { code: room.code })
             : start > bookThrough && !manager
-              ? `Bookings can be made up to ${settings.maxAdvanceDays} days ahead.`
-              : 'Past slots cannot be scheduled.',
+              ? t('student.windowValue', { count: settings.maxAdvanceDays })
+              : t('student.pastSlots'),
         )
       }
       return
@@ -344,25 +368,26 @@ export function WeekCalendar({
       {/* Full campus week, including closed weekend columns. */}
       <div className="grid grid-cols-[60px_repeat(7,minmax(0,1fr))] border-b border-ink">
         <div className="flex flex-col justify-end px-2.5 pb-2.5 font-mono text-[10px] text-steel">
-          <span className="font-semibold text-ink">TIME</span>
+          <span className="font-semibold text-ink">{t('common.time')}</span>
           <span>ICT (UTC+7)</span>
         </div>
         {days.map((d, di) => {
           const st = dayState(d)
           const weekend = isWeekend(d)
-          const pendingN = manager ? eventsByDay[di].filter((e) => e.kind === 'booking' && e.booking.status === 'PENDING').length : 0
           const occ = dayOccupancyStats[di]
+          const block = fullDayBlocks[di]
+          const pendingN = manager ? eventsByDay[di].filter((e) => e.kind === 'booking' && e.booking.status === 'PENDING').length : 0
           return (
             <div key={dayKey(d)} className={cx('flex min-w-0 flex-col gap-1 border-l border-rule px-2 py-2', (st === 'today' || weekend) && 'bg-ice')}>
               <div className="flex items-center justify-between gap-1">
                 <span className={cx('font-mono text-[11px] font-semibold', st === 'bookable' || (manager && st !== 'past') ? 'text-accent' : 'text-steel')}>
-                  {fmtDow(d)}
+                  {fmtDow(d, locale)}
                 </span>
-                {st === 'today' && <span className="rounded-sm bg-ink px-1 font-mono text-[9px] leading-[1.6] text-paper">TODAY</span>}
-                {!weekend && !manager && st === 'bookable' && roomOpen && <span className="h-1.5 w-1.5 bg-accent" title="Bookable" />}
+                {st === 'today' && <span className="rounded-sm bg-ink px-1 font-mono text-[9px] leading-[1.6] text-paper">{t('student.today')}</span>}
+                {!weekend && !manager && !(!allRooms && block) && st === 'bookable' && roomOpen && <span className="h-1.5 w-1.5 bg-accent" title={t('student.bookable')} />}
                 {manager && pendingN > 0 && (
-                  <span className="rounded-sm border border-dashed border-plum bg-plum/[0.08] px-1 font-mono text-[9px] font-bold leading-[1.5] text-plum">
-                    {pendingN} PEND
+                  <span className="rounded-sm border border-dashed border-plum bg-plum/[0.08] px-1 font-mono text-[9px] font-bold leading-[1.4] text-plum">
+                    {t('student.pendingCount', { count: pendingN })}
                   </span>
                 )}
               </div>
@@ -371,38 +396,32 @@ export function WeekCalendar({
               </div>
               <div className="flex items-center justify-between font-mono text-[10px] text-steel">
                 <span>
-                  {weekend ? 'WEEKEND · CLOSED' : manager
-                    ? st === 'past'
-                      ? 'ARCHIVED'
-                      : st === 'today'
-                        ? 'LIVE'
-                        : `T+${daysBetween(now, d)}`
-                    : st === 'past'
-                      ? 'CLOSED'
-                      : st === 'today'
-                        ? 'IN USE'
-                        : st === 'beyond'
-                          ? 'NOT OPEN'
-                          : `T-${daysBetween(now, d)} · OPEN`}
+                  {weekend ? t('student.weekendClosed') : !allRooms && block ? t('student.blocked') : manager
+                    ? st === 'past' ? t('student.archived') : st === 'today' ? t('student.live') : t('student.daysAhead', { count: daysBetween(now, d) })
+                    : st === 'past' ? t('student.closed') : st === 'today' ? t('student.inUse') : st === 'beyond' ? t('student.notOpen') : t('student.openIn', { count: daysBetween(now, d) })}
                 </span>
               </div>
 
               {/* Occupancy Indicator Bar & Counter */}
               <div className="mt-1 flex flex-col gap-1 border-t border-rule/70 pt-1.5">
                 <div className="flex items-center justify-between font-mono text-[9px] text-steel">
-                  <span className={cx(occ.busyH > 0 && 'font-semibold text-ink')}>{occ.busyH}h BUSY</span>
-                  <span>{weekend ? 'CLOSED' : `${occ.freeH}h FREE`}</span>
+                  <span className={cx(occ.busyH > 0 && 'font-semibold text-ink')}>{t('student.busyHours', { count: occ.busyH })}</span>
+                  <span>{weekend ? t('student.closed') : t('student.freeHours', { count: occ.freeH })}</span>
                 </div>
                 <div className="h-1.5 w-full overflow-hidden rounded-[1px] bg-rule">
-                  <div
-                    className={cx(
-                      'h-full transition-all duration-300',
-                      occ.pct > 75 ? 'bg-plum' : occ.pct > 0 ? 'bg-accent' : 'bg-transparent',
-                    )}
-                    style={{ width: `${occ.pct}%` }}
-                  />
+                  <div className={cx('h-full transition-all duration-300', occ.pct > 75 ? 'bg-plum' : 'bg-accent')} style={{ width: `${occ.pct}%` }} />
                 </div>
               </div>
+              {manager && !allRooms && !weekend && st !== 'past' && (block || slotDate(d, slots) > now) && (
+                <button
+                  type="button"
+                  disabled={unblocking}
+                  className="calendar-focus rounded-sm border border-edge bg-paper px-1 py-0.5 font-mono text-[10px] font-semibold text-steel hover:border-plum hover:text-plum disabled:opacity-50"
+                  onClick={() => block ? void unblockDay(block) : setBlockDay({ roomId: room.id, start: slotDate(d, 0), end: slotDate(d, slots) })}
+                >
+                  {t(block ? 'student.unblockDay' : 'student.blockDay')}
+                </button>
+              )}
             </div>
           )
         })}
@@ -438,7 +457,8 @@ export function WeekCalendar({
                 'relative border-l border-rule overflow-hidden',
                 weekend
                   ? 'bg-ice hatch cursor-default'
-                  : enabled ? 'cursor-crosshair bg-paper hover:bg-tint/[0.04]' : 'hatch cursor-not-allowed',
+                  : !allRooms && fullDayBlocks[di] ? 'hatch-slate cursor-not-allowed'
+                    : enabled ? 'cursor-crosshair bg-paper hover:bg-tint/[0.04]' : 'hatch cursor-not-allowed',
                 !weekend && st === 'today' && 'bg-ice/40',
               )}
               style={{ height: gridH }}
@@ -460,7 +480,7 @@ export function WeekCalendar({
                     type="button"
                     className={cx(rule, 'calendar-focus cursor-crosshair hover:bg-tint/50')}
                     style={style}
-                    aria-label={`${manager ? 'Assign' : 'Book'} ${slot.roomId ? `Room ${roomById.get(slot.roomId)?.code ?? room.code}` : 'a room'}, ${fmtDate(d)} ${fmtRange(slot.start, slot.end)}`}
+                    aria-label={t(manager ? 'student.assignSlot' : 'student.bookSlot', { room: slot.roomId ? t('student.roomCode', { code: roomById.get(slot.roomId)?.code ?? room.code }) : t('common.room'), date: fmtDate(d, locale), time: fmtRange(slot.start, slot.end) })}
                     onClick={(e) => {
                       // Pointer activation is handled by the column's drag gesture.
                       if (e.detail === 0) onSelect(slot)
@@ -498,7 +518,7 @@ export function WeekCalendar({
                     }}
                   >
                     <span className="relative z-20 block w-fit max-w-full truncate bg-paper/95 px-0.5 font-mono text-[8px] font-bold text-danger">
-                      CONFLICT {fmtRange(start, end)}
+                      {t('student.conflictBand', { time: fmtRange(start, end) })}
                     </span>
                   </div>
                 )
@@ -510,8 +530,10 @@ export function WeekCalendar({
                 const height = (durationMin(ev.start, ev.end) / SLOT) * ROW_H
                 const evRoomId = ev.kind === 'booking' ? ev.booking.roomId : ev.block.roomId
                 const evRoom = roomById.get(evRoomId)
-                const canCompete = ev.kind === 'booking' && ev.booking.status === 'PENDING' &&
-                  evRoom?.status === 'AVAILABLE' && canSelect(new Date(ev.booking.start), new Date(ev.booking.end))
+                const firmClash = ev.kind === 'booking' && ev.booking.status === 'PENDING' && roomOccupied(di, evRoomId, ev.start, ev.end)
+                const canCompete = ev.kind === 'booking' && ev.booking.status === 'PENDING' && !firmClash &&
+                  evRoom?.status === 'AVAILABLE' && canSelect(new Date(ev.booking.start), new Date(ev.booking.end)) &&
+                  durationMin(ev.booking.start, ev.booking.end) <= maxMinutes
                 return (
                   <EventBlock
                     key={`${ev.kind}-${ev.id}`}
@@ -527,6 +549,7 @@ export function WeekCalendar({
                     onSelectSlot={canCompete ? onSelect : undefined}
                     active={activeId === ev.id}
                     room={evRoom}
+                    firmClash={firmClash}
                     conflict={conflicts.get(ev.id)}
                     conflicts={conflicts}
                   />
@@ -534,9 +557,9 @@ export function WeekCalendar({
               })}
 
               {/* Now line */}
-              {sameDay(d, now) && isNowWithinOfficeHours && (
+              {!weekend && sameDay(d, now) && isNowWithinOfficeHours && (
                 <div className="pointer-events-none absolute inset-x-0 z-20 flex items-center" style={{ top: Math.min(gridH, Math.max(0, nowTop)) }}>
-                  <span className="-ml-[3px] h-2 w-2 rounded-full bg-accent ring-2 ring-paper" />
+                  <span className="-ml-[3px] h-2 w-2 rounded-sm bg-accent ring-2 ring-paper" />
                   <span className="h-[2px] flex-1 bg-accent" />
                 </div>
               )}
@@ -551,10 +574,7 @@ export function WeekCalendar({
                     {fmtTime(slotDate(d, sel.a))}–{fmtTime(slotDate(d, sel.b))}
                   </div>
                   <div className="font-mono text-[10px] font-semibold text-accent">
-                    {fmtDuration((sel.b - sel.a) * SLOT)}
-                    {manager
-                      ? (drag ? ' · Release to assign activity / event' : ' · Selected slot')
-                      : (drag ? ' · release to book' : ' · selected')}
+                    {fmtDuration((sel.b - sel.a) * SLOT, locale)} · {t(drag ? manager ? 'student.releaseToAssign' : 'student.releaseToBook' : 'student.selectedSlot')}
                   </div>
                 </div>
               )}
@@ -562,6 +582,20 @@ export function WeekCalendar({
           )
         })}
       </div>
+
+      {blockDay && blockDay.roomId === room.id && !allRooms && (
+        <ConfirmBlockDayModal
+          room={room}
+          start={blockDay.start}
+          end={blockDay.end}
+          onClose={() => setBlockDay(null)}
+          onConfirm={async (reason, displace) => {
+            const error = await createBlock({ ...blockDay, reason, displace })
+            if (error === null) notify(t('student.dayBlocked'))
+            return error
+          }}
+        />
+      )}
     </div>
   )
 }
@@ -579,6 +613,7 @@ function EventBlock({
   onSelectSlot,
   active,
   room,
+  firmClash,
   conflict,
   conflicts,
 }: {
@@ -594,9 +629,11 @@ function EventBlock({
   onSelectSlot?: (s: Selection) => void
   active: boolean
   room?: Room
+  firmClash: boolean
   conflict?: ConflictInfo
   conflicts: Map<string, ConflictInfo>
 }) {
+  const { t, locale } = useI18n()
   const color = roomColor(room ?? 0)
   const widthPct = 100 / totalLanes
   const inset = Math.min(1, height / 4)
@@ -607,9 +644,9 @@ function EventBlock({
     left: `calc(${lane * widthPct}% + 2px)`,
     width: `calc(${widthPct}% - 4px)`,
   }
-  const roomLabel = room ? `Room ${room.code}` : 'Room'
+  const roomLabel = room ? t('student.roomCode', { code: room.code }) : t('common.room')
   const range = fmtRange(ev.start, ev.end)
-  const location = `${roomLabel}, ${fmtDate(ev.start)} ${range}`
+  const location = `${roomLabel}, ${fmtDate(ev.start, locale)} ${range}`
   const base = 'calendar-focus absolute z-10 flex flex-col items-start overflow-hidden rounded-sm px-1.5 py-1 text-left'
   const badge = cx('shrink-0 rounded-sm px-1 font-mono text-[9px] font-bold text-paper', color.dot)
 
@@ -622,11 +659,11 @@ function EventBlock({
         onPointerDown={(e) => e.stopPropagation()}
         onClick={(e) => onBlockClick?.(ev.block, e.currentTarget)}
         aria-disabled={!onBlockClick}
-        aria-label={`${onBlockClick ? 'Inspect block' : 'Blocked'}: ${location}, ${ev.block.reason}`}
+        aria-label={`${t(onBlockClick ? 'student.inspectBlock' : 'student.blocked')}: ${location}, ${ev.block.reason}`}
       >
         <span className="flex w-full items-center justify-between gap-1 font-mono text-[10px] font-bold">
           <span className={badge}>{roomLabel}</span>
-          <span>BLOCK</span>
+          <span>{t('student.blocked')}</span>
         </span>
         {height >= 42 && <span className="mt-0.5 line-clamp-2 text-[12px] font-medium leading-tight">{ev.block.reason}</span>}
         {height > 68 && <span className="mt-auto font-mono text-[10px]">{range}</span>}
@@ -637,12 +674,13 @@ function EventBlock({
   const b = ev.booking
   const official = b.kind === 'OFFICIAL'
   const pending = b.status === 'PENDING'
-  const own = b.isMine
+  const own = b.isMine && !official
   const holder = manager && b.userId ? who?.(b.userId) : undefined
-  const status = b.status === 'KEY_CHECKED_OUT' ? 'KEY OUT' : b.status
-  const privateLabel = pending ? 'Pending request' : 'Reserved'
-  const title = official || own || holder ? b.title : privateLabel
-  const label = official ? (b.category ?? 'Event') : own && !manager ? `You · ${status}` : manager ? status : privateLabel
+  const status = t(`student.bookingStatus.${b.status}`)
+  const privateLabel = t(pending ? 'student.pendingRequest' : 'student.reserved')
+  const category = b.category && /^(LECTURE|WORKSHOP|EVENT|EXAM|CLUB|FACULTY|MAINTENANCE)$/.test(b.category) ? b.category : 'EVENT'
+  const title = official || own || manager ? (official && b.category ? b.title.replace(/^\[[^\]]+\]\s*/, '') || b.title : b.title) : privateLabel
+  const label = official ? t(`student.eventCategory.${category}`) : own && !manager ? t('student.ownStatus', { status }) : manager ? firmClash ? t('student.clash') : status : privateLabel
   const compete = !manager && !official && !own && pending && onSelectSlot
   const inspect = (manager || own) && onClick
   const tone = official
@@ -655,7 +693,7 @@ function EventBlock({
   const conflictColor = conflict && CONFLICT_COLORS[conflict.letter]
   const conflictLabel = conflict?.rivals.map((rival) => {
     const name = manager && rival.userId ? who?.(rival.userId)?.name : undefined
-    return `conflicts with ${conflicts.get(rival.id)?.letter}: ${name ?? 'another booking'} ${fmtRange(rival.start, rival.end)}`
+    return t('student.conflictsWith', { letter: conflicts.get(rival.id)?.letter ?? '—', name: name ?? t('student.anotherBooking'), time: fmtRange(rival.start, rival.end) })
   }).join('; ')
 
   return (
@@ -670,17 +708,17 @@ function EventBlock({
         else if (compete) compete({ start: new Date(b.start), end: new Date(b.end), roomId: b.roomId })
       }}
       aria-disabled={!inspect && !compete}
-      aria-label={`${inspect ? 'Inspect booking' : compete ? 'Book a competing request' : label}: ${location}${title === label ? '' : `, ${title}`}${conflictLabel ? `; ${conflictLabel}` : ''}`}
+      aria-label={`${inspect ? t('student.inspectBooking') : compete ? t('student.competingBooking') : label}: ${location}${title === label ? '' : `, ${title}`}${conflictLabel ? `; ${conflictLabel}` : ''}`}
     >
       {conflictColor && <span aria-hidden="true" className={cx('absolute inset-y-0 left-0 w-1', conflictColor.bar)} />}
       <span className="flex w-full items-center justify-between gap-1 font-mono text-[10px] font-bold">
         {conflict && <span className={cx('shrink-0 rounded-sm px-1 font-mono text-[10px] font-bold', conflictColor?.badge)}>{conflict.letter}</span>}
-        <span className={badge}>{room?.code ?? 'Room'}</span>
+        <span className={badge}>{room?.code ?? t('common.room')}</span>
         <span className="truncate">{label}</span>
       </span>
       {height >= 42 && (
         <span className="mt-0.5 w-full truncate text-[11px] font-semibold">
-          {holder && !official ? `${holder.name}${holder.code ? ` · ${holder.code}` : ''}` : compete ? 'Request this slot' : title}
+          {holder && !official ? `${holder.name}${holder.code ? ` · ${holder.code}` : ''}` : compete ? t('student.requestSlot') : title}
         </span>
       )}
       {height > 60 && (

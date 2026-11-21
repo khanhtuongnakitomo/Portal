@@ -1,7 +1,8 @@
 import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from 'react'
+import { useI18n } from './i18n'
 import { createApi, mapUser, type ApiAuth, type ApiResponse } from './api'
 import { addDays, at, CAMPUS_TZ, durationMin, isWeekend, overlaps, parseHM, sameDay, startOfWeek, toCampusIso } from './time'
-import type { AccountStatus, AuditLog, Booking, Role, Room, RoomBlock, RoomStatus, Settings, User } from './types'
+import type { AccountStatus, AuditLog, Booking, BookingMember, Role, Room, RoomBlock, RoomStatus, Settings, User } from './types'
 
 export interface Toast {
   id: number
@@ -15,7 +16,7 @@ type Result = string | null
 type UserQuery = { page: number; search?: string; role?: Role; status?: AccountStatus }
 type AuditQuery = { page: number; action?: string; targetType?: string }
 type Slot = { roomId: string; start: Date; end: Date }
-type BookingInput = Slot & { title: string; purpose: string; attendeeCount: number }
+type BookingInput = Slot & { title: string; purpose: string; attendeeCount: number; memberList?: BookingMember[] }
 type BlockInput = Slot & { reason: string; displace: boolean }
 type BlockInterval = Pick<Slot, 'start' | 'end'>
 type Session = { token: string; user: User; expiresAt: number }
@@ -47,6 +48,7 @@ export interface Store {
   login(email: string, password: string): Promise<Result>
   startSession(auth: ApiAuth): void
   register(input: { fullName: string; email: string; password: string; studentCode: string }): Promise<Result>
+  updateProfile(input: { fullName: string }): Promise<Result>
   logout(): void
   setVisibleRange(from: Date, to: Date): void
   refreshData(): Promise<void>
@@ -78,8 +80,12 @@ export interface Store {
 const Ctx = createContext<Store | null>(null)
 // One atomic storage item contains the bearer token, display identity and expiry.
 const TOKEN_KEY = 'tne_access_token'
-const EXPIRED = 'Session expired'
-const SESSION_CHANGED = 'The session changed. Please try again.'
+const clientErrors: Record<string, string> = {
+  'The server returned an invalid session.': 'core.invalidSession',
+  'The server returned an invalid response.': 'core.invalidResponse',
+  'Cannot connect to the booking server.': 'core.offlineError',
+  'Session expired. Please sign in again.': 'core.expired',
+}
 const INITIAL_SETTINGS: Settings = {
   timezone: CAMPUS_TZ,
   openTime: '08:00',
@@ -141,6 +147,11 @@ function upsert<T extends { id: string }>(entries: T[], item: T): T[] {
 }
 
 export function StoreProvider({ children }: { children: ReactNode }) {
+  const { t } = useI18n()
+  // Background requests may outlive a locale change; keep the latest translator without restarting session recovery.
+  const translator = useRef(t)
+  useEffect(() => { translator.current = t }, [t])
+  const localError = useCallback((message: string) => Object.prototype.hasOwnProperty.call(clientErrors, message) ? translator.current(clientErrors[message]) : message, [])
   const [session, setSession] = useState<Session | null>(null)
   const [sessionRecovery, setSessionRecovery] = useState<Store['sessionRecovery']>('checking')
   const [users, setUsers] = useState<User[]>([])
@@ -245,7 +256,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     if (!result.ok) {
       if (result.status === 401) {
         logout()
-        addToast(EXPIRED, 'error')
+        addToast(translator.current('core.expired'), 'error')
       } else {
         setSessionRecovery('offline')
       }
@@ -271,7 +282,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       return
     }
     logout()
-    addToast(EXPIRED, 'error')
+    addToast(translator.current('core.expired'), 'error')
   }, [addToast, logout, syncSession])
 
   useEffect(() => {
@@ -313,7 +324,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   }, [])
 
   const refreshMyBookings = useCallback(async () => {
-    if (activeSession.current?.user.role !== 'USER') return false
+    if (!activeSession.current) return false
     const api = apiForSession()
     const started = epoch.current
     return load<Booking[]>('mine', async () => {
@@ -321,7 +332,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       for (let page = 1; ; page++) {
         const result = await api.apiGetMyBookings(page)
         if (!result.ok) return result
-        if (started !== epoch.current) return { ok: false, status: 0, message: SESSION_CHANGED }
+        if (started !== epoch.current) return { ok: false, status: 0, message: translator.current('core.changed') }
         for (const booking of result.data.items) items.set(booking.id, booking)
         if (page * result.data.limit >= result.data.total || !result.data.items.length) return { ok: true, data: [...items.values()] }
       }
@@ -354,7 +365,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     setBookings((items) => mergeCalendarRange(items, bookings, range, newer))
     setBlocks((items) => mergeCalendarRange(items, blocks, range, newer))
     setCalendarUsers((items) => [...new Map([...items, ...users].map((entry) => [entry.id, entry])).values()])
-    if (activeSession.current?.user.role === 'USER' && personalBookings.current) {
+    if (activeSession.current && personalBookings.current) {
       const inNewerRange = (booking: Booking) => newer.some(({ from, to }) => overlaps(booking.start, booking.end, from, to))
       const incoming = new Set(bookings.filter((booking) => booking.isMine).map((booking) => booking.id))
       const personal = personalBookings.current
@@ -402,7 +413,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         for (let page = 1; ; page++) {
           const result = await api.apiGetPendingBookings(page)
           if (!result.ok) return result
-          if (started !== epoch.current) return { ok: false, status: 0, message: SESSION_CHANGED } as const
+          if (started !== epoch.current) return { ok: false, status: 0, message: translator.current('core.changed') } as const
           for (const booking of result.data.bookings) bookings.set(booking.id, booking)
           for (const user of result.data.users) users.set(user.id, user)
           if (page * result.data.limit >= result.data.total || !result.data.bookings.length) {
@@ -426,9 +437,9 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     }, (message) => {
       setUsers([])
       setUsersTotal(0)
-      addToast(message, 'error')
+      addToast(localError(message), 'error')
     })
-  }, [addToast, apiForSession, load])
+  }, [addToast, apiForSession, load, localError])
 
   const loadAudit = useCallback(async (query: AuditQuery) => {
     if (activeSession.current?.user.role !== 'ADMIN') return
@@ -440,9 +451,9 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     }, (message) => {
       setAudit([])
       setAuditTotal(0)
-      addToast(message, 'error')
+      addToast(localError(message), 'error')
     })
-  }, [addToast, apiForSession, load])
+  }, [addToast, apiForSession, load, localError])
 
   const refreshRooms = useCallback(async () => {
     const role = activeSession.current?.user.role
@@ -475,9 +486,9 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   const renderedEpoch = epoch.current
 
   const startSession = ({ accessToken, user, expiresIn }: ApiAuth) => {
-    if (renderedEpoch !== epoch.current) throw new Error(SESSION_CHANGED)
+    if (renderedEpoch !== epoch.current) throw new Error(translator.current('core.changed'))
     if (!accessToken || !user || !Number.isFinite(expiresIn) || expiresIn <= 0) {
-      throw new Error('The server returned an invalid session.')
+      throw new Error(t('core.invalidSession'))
     }
     const next = { token: accessToken, user: mapUser(user), expiresAt: Date.now() + expiresIn * 1000 }
     reset()
@@ -486,12 +497,12 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   }
 
   const authenticate = async (request: (api: Api) => ReturnType<Api['apiLogin']>): Promise<Result> => {
-    if (renderedEpoch !== epoch.current) return SESSION_CHANGED
+    if (renderedEpoch !== epoch.current) return translator.current('core.changed')
     const started = epoch.current
     const initialStorage = localStorage.getItem(TOKEN_KEY)
     const result = await request(createApi(null, () => {}))
-    if (started !== epoch.current || localStorage.getItem(TOKEN_KEY) !== initialStorage) return SESSION_CHANGED
-    if (!result.ok) return result.message
+    if (started !== epoch.current || localStorage.getItem(TOKEN_KEY) !== initialStorage) return translator.current('core.changed')
+    if (!result.ok) return localError(result.message)
     try {
       startSession(result.data)
     } catch (error) {
@@ -506,23 +517,23 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   }
 
   const mutate = async <T,>(request: (api: Api) => Promise<ApiResponse<T>>, onSuccess?: (data: T) => void | Promise<void>): Promise<Result> => {
-    if (renderedEpoch !== epoch.current) return SESSION_CHANGED
+    if (renderedEpoch !== epoch.current) return translator.current('core.changed')
     const started = epoch.current
-    if (!activeSession.current) return 'Sign in to continue.'
+    if (!activeSession.current) return t('core.signInRequired')
     const result = await request(apiForSession())
-    if (started !== epoch.current) return !result.ok && result.status === 401 ? result.message : SESSION_CHANGED
+    if (started !== epoch.current) return !result.ok && result.status === 401 ? localError(result.message) : translator.current('core.changed')
     if (!result.ok) {
       if (result.status === 409) await reconcileBookings()
-      return started === epoch.current ? result.message : SESSION_CHANGED
+      return started === epoch.current ? localError(result.message) : translator.current('core.changed')
     }
     await onSuccess?.(result.data)
-    return started === epoch.current ? null : SESSION_CHANGED
+    return started === epoch.current ? null : translator.current('core.changed')
   }
 
   const reconcileTransition = async (booking: Booking) => {
     setBookings((items) => {
       if (booking.status === 'CANCELLED' || booking.status === 'REJECTED') return items.filter((item) => item.id !== booking.id)
-      return items.map((item) => item.id === booking.id ? booking : item)
+      return items.map((item) => item.id === booking.id ? { ...booking, passCode: null } : item)
     })
     setMyBookings((items) => items.map((item) => item.id === booking.id ? booking : item))
     if (activeSession.current?.user.role !== 'USER' && booking.status !== 'PENDING') {
@@ -533,14 +544,17 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     await reconcileBookings()
   }
 
-  const postBooking = (input: BookingInput) => mutate((api) => api.apiCreateBooking({
-    roomId: input.roomId, title: input.title.trim(), purpose: input.purpose.trim(), attendeeCount: input.attendeeCount,
+  const postBooking = (input: BookingInput, isEvent: boolean) => mutate((api) => api.apiCreateBooking({
+    roomId: input.roomId, title: input.title.trim(), attendeeCount: input.attendeeCount, isEvent,
+    purpose: input.memberList?.length
+      ? `${input.purpose.trim()} [Members: ${input.memberList.map((m) => `${m.name?.trim() ?? ''} (${[m.hcmutId && `HCMUT: ${m.hcmutId}`, m.utsId && `UTS: ${m.utsId}`].filter(Boolean).join(' · ')})`).join(', ')}]`
+      : input.purpose.trim(),
     startTime: toCampusIso(input.start), endTime: toCampusIso(input.end),
   }), async (booking) => {
     if (recentRanges.current.some(({ from, to }) => overlaps(booking.start, booking.end, from, to))) {
-      setBookings((items) => upsert(items, booking))
+      setBookings((items) => upsert(items, { ...booking, passCode: null }))
     }
-    if (activeSession.current?.user.role === 'USER') setMyBookings((items) => upsert(items, booking))
+    if (booking.isMine) setMyBookings((items) => upsert(items, booking))
     await reconcileBookings()
   })
 
@@ -559,7 +573,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   const currentUser = session?.user ?? null
   const connection = sessionRecovery === 'offline' || Object.values(reads).includes(false) ? 'offline' :
     !sessionRecovery && reads.rooms && reads.calendar && reads.settings &&
-    (!currentUser || (currentUser.role === 'USER' ? reads.mine : reads.today && reads.overdue && reads.pending)) ? 'live' : 'connecting'
+    (!currentUser || (reads.mine && (currentUser.role === 'USER' || (reads.today && reads.overdue && reads.pending)))) ? 'live' : 'connecting'
   const settingsLoaded = reads.settings === true && settings !== null
 
   const store: Store = {
@@ -573,7 +587,13 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     startSession,
     register: (input) => authenticate((api) => api.apiRegister(input)),
     logout, refreshData, refreshSettings, refreshMyBookings, refreshKeyDesk, setVisibleRange, loadUsers, loadAudit,
-    createBooking: postBooking,
+    updateProfile: ({ fullName }) => mutate((api) => api.apiUpdateProfile(fullName), (user) => {
+      const current = activeSession.current
+      // A sign-out or account switch in another tab may precede its storage event.
+      if (!sameIdentity(readSession(localStorage.getItem(TOKEN_KEY)), current)) return syncSession()
+      if (current && current.user.id === user.id) install({ ...current, user })
+    }),
+    createBooking: (input) => postBooking(input, false),
     cancelBooking: (id) => mutate((api) => api.apiCancelBooking(id), reconcileTransition),
     approveBooking: (id, note) => mutate((api) => api.apiApproveBooking(id, note), reconcileTransition),
     rejectBooking: (id, note) => mutate((api) => api.apiRejectBooking(id, note), reconcileTransition),
@@ -603,32 +623,32 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       delete pending.current.settings
       setSettings(saved)
       if (auditQuery.current) await loadAudit(auditQuery.current)
-    }) : Promise.resolve('Settings are unavailable. Reload them before saving.'),
+    }) : Promise.resolve(t('core.settingsUnavailable')),
     assignRoomSchedule(input) {
       const category = input.category || 'EVENT'
       return input.mode === 'BLOCK'
         ? createBlock({ ...input, reason: `[${category}] ${input.title}: ${input.purpose}`, displace: input.displace ?? false })
-        : postBooking({ ...input, title: `[${category}] ${input.title.trim()}`, attendeeCount: input.attendeeCount ?? 1 })
+        : postBooking({ ...input, title: `[${category}] ${input.title.trim()}`, attendeeCount: input.attendeeCount ?? 1 }, true)
     },
     validateSlot(roomId, start, end, ignoreBookingId) {
       const room = rooms.find((entry) => entry.id === roomId)
-      if (!room) return 'Room not found.'
-      if (room.status !== 'AVAILABLE') return 'This room is not available.'
-      if (!settings) return 'Booking rules are unavailable.'
-      if (!Number.isFinite(+start) || !Number.isFinite(+end) || end <= start) return 'End time must be after start time.'
+      if (!room) return t('core.roomMissing')
+      if (room.status !== 'AVAILABLE') return t('core.roomUnavailable')
+      if (!settings) return t('core.noRules')
+      if (!Number.isFinite(+start) || !Number.isFinite(+end) || end <= start) return t('core.invalidEnd')
       const now = new Date()
-      if (start <= now) return 'Start time must be in the future.'
-      if (start > addDays(now, settings.maxAdvanceDays)) return `Bookings can be made up to ${settings.maxAdvanceDays} days in advance.`
-      if (!sameDay(start, end) || isWeekend(start)) return 'Bookings must start and end on the same workday.'
+      if (start <= now) return t('core.pastStart')
+      if (start > addDays(now, settings.maxAdvanceDays)) return t('core.advance', { n: settings.maxAdvanceDays })
+      if (!sameDay(start, end) || isWeekend(start)) return t('core.workday')
       const open = parseHM(settings.openTime)
       const close = parseHM(settings.closeTime)
-      if (start < at(start, open.h, open.m) || end > at(end, close.h, close.m)) return `Choose a time between ${settings.openTime} and ${settings.closeTime}.`
-      if (durationMin(start, end) > settings.maxDurationMinutes) return `Bookings can last up to ${settings.maxDurationMinutes} minutes.`
-      if (blocks.some((block) => block.active && block.roomId === roomId && overlaps(block.start, block.end, start, end))) return 'This room is blocked during that time.'
+      if (start < at(start, open.h, open.m) || end > at(end, close.h, close.m)) return t('core.openHours', { open: settings.openTime, close: settings.closeTime })
+      if (durationMin(start, end) > settings.maxDurationMinutes) return t('core.duration', { n: settings.maxDurationMinutes })
+      if (blocks.some((block) => block.active && block.roomId === roomId && overlaps(block.start, block.end, start, end))) return t('core.blocked')
       if (bookings.some((booking) => booking.id !== ignoreBookingId && booking.roomId === roomId &&
         ((!room.autoApprove && (booking.status === 'APPROVED' || booking.status === 'KEY_CHECKED_OUT')) || (booking.status === 'PENDING' && booking.isMine)) &&
-        overlaps(booking.start, booking.end, start, end))) return 'This room is already booked during that time.'
-      if (myBookings.some((booking) => booking.id !== ignoreBookingId && booking.roomId === roomId && booking.status === 'PENDING' && overlaps(booking.start, booking.end, start, end))) return 'You already have a pending request during that time.'
+        overlaps(booking.start, booking.end, start, end))) return t('core.booked')
+      if (myBookings.some((booking) => booking.id !== ignoreBookingId && booking.roomId === roomId && booking.status === 'PENDING' && overlaps(booking.start, booking.end, start, end))) return t('core.myPending')
       return null
     },
     user: (id) => (currentUser && currentUser.id === id ? currentUser : users.find((entry) => entry.id === id) ?? calendarUsers.find((entry) => entry.id === id) ?? deskUsers.find((entry) => entry.id === id)),

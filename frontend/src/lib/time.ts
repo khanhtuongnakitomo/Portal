@@ -75,7 +75,9 @@ export function daysBetween(a: Date, b: Date) {
 
 const pad = (n: number) => String(n).padStart(2, '0')
 
-export function fmtTime(d: Date | string) {
+type Locale = 'en' | 'vi'
+
+export function fmtTime(d: Date | string, _locale?: Locale) {
   const p = campusParts(d)
   return `${pad(p.hour)}:${pad(p.minute)}`
 }
@@ -83,26 +85,30 @@ export function fmtTime(d: Date | string) {
 const DOW = ['SUN', 'MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT']
 const MON = ['JAN', 'FEB', 'MAR', 'APR', 'MAY', 'JUN', 'JUL', 'AUG', 'SEP', 'OCT', 'NOV', 'DEC']
 
-export function fmtDow(d: Date | string) {
-  return DOW[dowOf(d)]
+const DOW_VI = ['CN', 'T2', 'T3', 'T4', 'T5', 'T6', 'T7']
+
+export function fmtDow(d: Date | string, locale: Locale = 'en') {
+  return (locale === 'vi' ? DOW_VI : DOW)[dowOf(d)]
 }
 
-export function fmtDate(d: Date | string) {
+export function fmtDate(d: Date | string, locale: Locale = 'en') {
   const p = campusParts(d)
+  if (locale === 'vi') return `${DOW_VI[p.dow]} ${pad(p.day)}/${pad(p.month + 1)}`
   return `${DOW[p.dow]} ${pad(p.day)} ${MON[p.month]}`
 }
 
-export function fmtShort(d: Date | string) {
+export function fmtShort(d: Date | string, locale: Locale = 'en') {
   const p = campusParts(d)
+  if (locale === 'vi') return `${pad(p.day)}/${pad(p.month + 1)}`
   return `${pad(p.day)} ${MON[p.month]}`
 }
 
-export function fmtStamp(d: Date | string) {
+export function fmtStamp(d: Date | string, _locale?: Locale) {
   const p = campusParts(d)
   return `${p.year}-${pad(p.month + 1)}-${pad(p.day)} ${pad(p.hour)}:${pad(p.minute)}:${pad(p.second)}`
 }
 
-export function fmtRange(start: string | Date, end: string | Date) {
+export function fmtRange(start: string | Date, end: string | Date, _locale?: Locale) {
   return `${fmtTime(start)}–${fmtTime(end)}`
 }
 
@@ -110,9 +116,10 @@ export function durationMin(start: string | Date, end: string | Date) {
   return Math.round((new Date(end).getTime() - new Date(start).getTime()) / 60000)
 }
 
-export function fmtDuration(min: number) {
+export function fmtDuration(min: number, locale: Locale = 'en') {
   const h = Math.floor(min / 60)
   const m = min % 60
+  if (locale === 'vi') return h ? (m ? `${h} giờ ${m} phút` : `${h} giờ`) : `${m} phút`
   return h ? (m ? `${h}h ${m}m` : `${h}h`) : `${m}m`
 }
 

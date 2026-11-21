@@ -1,5 +1,6 @@
-import { useId, useLayoutEffect, useMemo, useRef, type ButtonHTMLAttributes, type InputHTMLAttributes, type ReactNode, type SelectHTMLAttributes, type TextareaHTMLAttributes } from 'react'
+import { useId, useLayoutEffect, useRef, type ButtonHTMLAttributes, type InputHTMLAttributes, type ReactNode, type SelectHTMLAttributes, type TextareaHTMLAttributes } from 'react'
 import { createPortal } from 'react-dom'
+import { useI18n } from '@/lib/i18n'
 import { X } from 'lucide-react'
 import type { BookingStatus } from '@/lib/types'
 
@@ -52,7 +53,7 @@ export function Button({
 }
 
 const fieldBase =
-  'w-full rounded-none border border-edge bg-paper px-3 py-2 text-[14px] font-medium text-ink placeholder:text-steel placeholder:font-normal outline-none transition-shadow focus:border-ink focus:shadow-subtle disabled:bg-ice disabled:text-steel'
+  'w-full rounded-md border border-edge bg-paper px-3 py-2 text-[14px] font-medium text-ink placeholder:text-steel placeholder:font-normal outline-none transition-shadow focus:border-ink focus:shadow-subtle disabled:bg-ice disabled:text-steel'
 
 export function Input({ className, ...rest }: InputHTMLAttributes<HTMLInputElement>) {
   return <input className={cx(fieldBase, className)} {...rest} />
@@ -77,12 +78,15 @@ export function Select({ className, children, ...rest }: SelectHTMLAttributes<HT
   )
 }
 
-export function Field({ label, hint, error, children, className }: { label: string; hint?: ReactNode; error?: string | null; children: ReactNode; className?: string }) {
+export function Field({ label, hint, action, error, children, className }: { label: string; hint?: ReactNode; action?: ReactNode; error?: string | null; children: ReactNode; className?: string }) {
   return (
     <label className={cx('flex flex-col gap-1.5', className)}>
       <span className="flex items-baseline justify-between gap-2">
         <span className="text-[13px] font-semibold text-ink">{label}</span>
-        {hint && <span className="font-mono text-[11px] font-semibold text-steel">{hint}</span>}
+        <span className="flex items-center gap-2">
+          {hint && <span className="font-mono text-[11px] font-semibold text-steel">{hint}</span>}
+          {action}
+        </span>
       </span>
       {children}
       {error && <span className="text-[12px] font-semibold text-plum">{error}</span>}
@@ -115,10 +119,11 @@ const statusStyle: Record<BookingStatus, string> = {
 }
 
 export function StatusChip({ status, className }: { status: BookingStatus; className?: string }) {
+  const { t } = useI18n()
   return (
     <span className={cx('inline-flex items-center gap-1.5 rounded-sm border px-1.5 py-[2px] font-mono text-[11px] font-bold leading-[1.4] tracking-[0.02em] whitespace-nowrap', statusStyle[status], className)}>
       <span className={cx('h-1.5 w-1.5', status === 'KEY_CHECKED_OUT' ? 'bg-tint' : 'bg-current')} />
-      {status}
+      {t(status === 'KEY_CHECKED_OUT' ? 'core.keyOut' : `common.${status.toLowerCase()}`)}
     </span>
   )
 }
@@ -207,28 +212,34 @@ export function Modal({
   title,
   eyebrow,
   children,
+  footer,
   width = 'max-w-[560px]',
+  className,
 }: {
   open: boolean
   onClose: () => void
   title: string
   eyebrow?: string
   children: ReactNode
+  footer?: ReactNode
   width?: string
+  className?: string
 }) {
+  const { t } = useI18n()
   const titleId = useId()
   return (
-    <Dialog open={open} onClose={onClose} labelledBy={titleId} className={width}>
+    <Dialog open={open} onClose={onClose} labelledBy={titleId} className={cx(width, 'open:flex flex-col overflow-hidden', className)}>
       <div className="flex items-start justify-between border-b border-rule px-6 pt-5 pb-4">
         <div className="flex flex-col gap-2">
           {eyebrow && <Eyebrow>{eyebrow}</Eyebrow>}
           <h2 id={titleId} className="font-display text-feature font-w450 text-ink">{title}</h2>
         </div>
-        <button type="button" onClick={onClose} aria-label="Close" className="-mr-2 rounded-md p-1.5 text-steel hover:bg-ice hover:text-ink">
+        <button type="button" onClick={onClose} aria-label={t('common.close')} className="-mr-2 rounded-md p-1.5 text-steel hover:bg-ice hover:text-ink">
           <X size={18} strokeWidth={1.5} />
         </button>
       </div>
-      {children}
+      <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain">{children}</div>
+      {footer && <div className="shrink-0 border-t border-rule bg-paper px-5 py-3.5 sm:px-6">{footer}</div>}
     </Dialog>
   )
 }
@@ -240,50 +251,6 @@ export function LedgerRow({ k, v, mono }: { k: string; v: ReactNode; mono?: bool
       <span className="font-mono text-[12px] font-semibold uppercase text-steel">{k}</span>
       <span className={cx('text-right text-[14px] text-ink', mono ? 'font-mono font-semibold' : 'font-semibold')}>{v}</span>
     </div>
-  )
-}
-
-function hash(str: string) {
-  let h = 2166136261
-  for (let i = 0; i < str.length; i++) {
-    h ^= str.charCodeAt(i)
-    h = Math.imul(h, 16777619)
-  }
-  return () => {
-    h ^= h << 13
-    h ^= h >>> 17
-    h ^= h << 5
-    return ((h >>> 0) % 1000) / 1000
-  }
-}
-
-/** Deterministic QR-style placeholder (visual only) */
-export function QRCode({ value, size = 132, fg = '#000000' }: { value: string; size?: number; fg?: string }) {
-  const n = 25
-  const cells = useMemo(() => {
-    const rnd = hash(value)
-    const out: [number, number][] = []
-    const inFinder = (x: number, y: number) => (x < 8 && y < 8) || (x > n - 9 && y < 8) || (x < 8 && y > n - 9)
-    for (let y = 0; y < n; y++) for (let x = 0; x < n; x++) if (!inFinder(x, y) && rnd() > 0.52) out.push([x, y])
-    return out
-  }, [value])
-  const finder = (x: number, y: number) => (
-    <g key={`${x}-${y}`}>
-      <rect x={x} y={y} width={7} height={7} fill={fg} />
-      <rect x={x + 1} y={y + 1} width={5} height={5} fill="#fff" />
-      <rect x={x + 2} y={y + 2} width={3} height={3} fill={fg} />
-    </g>
-  )
-  return (
-    <svg width={size} height={size} viewBox={`-1 -1 ${n + 2} ${n + 2}`} shapeRendering="crispEdges" role="img" aria-label={`QR code for ${value}`}>
-      <rect x={-1} y={-1} width={n + 2} height={n + 2} fill="#fff" />
-      {cells.map(([x, y]) => (
-        <rect key={`${x}.${y}`} x={x} y={y} width={1} height={1} fill={fg} />
-      ))}
-      {finder(0, 0)}
-      {finder(n - 7, 0)}
-      {finder(0, n - 7)}
-    </svg>
   )
 }
 
