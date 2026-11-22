@@ -2,14 +2,13 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } fr
 import { createPortal } from 'react-dom'
 import {
   Ban,
+  Calendar,
   Check,
-  ChevronDown,
   ChevronLeft,
   ChevronRight,
-  ChevronUp,
+  ClipboardCheck,
   Clock,
   KeyRound,
-  Mail,
   Phone,
   Plus,
   TriangleAlert,
@@ -35,13 +34,15 @@ import {
 import { Button, Eyebrow, Field, StatusChip, Tag, Textarea, cx } from '@/components/ui'
 import { NavItem, PageHeader, TopNav } from '@/components/Shell'
 import { RoomTabs } from '@/components/RoomTabs'
-import { Reveal, SplitText } from '@/components/effects'
+import { Reveal } from '@/components/effects'
 import { WeekCalendar, extractEventBadge, isOfficialEvent } from '@/student/WeekCalendar'
 import { AssignActivityModal, type AssignModalInitial } from './AssignActivityModal'
 import { ApprovalBoard } from './ApprovalBoard'
 import { KeyCustodyDesk } from './KeyCustodyDesk'
 import { BlockInspectorModal } from './BlockInspectorModal'
 import { QUICK_REJECT_REASONS } from './types'
+
+export type ManagerTab = 'calendar' | 'approvals' | 'keys'
 
 function useNow(ms = 30000) {
   const [now, setNow] = useState(() => new Date())
@@ -62,97 +63,176 @@ function getInitialWorkday(candidate?: Date) {
 
 export function ManagerView() {
   const { bookings, blocks } = useStore()
-  const { t, locale } = useI18n()
+  const { locale } = useI18n()
+  const vi = locale === 'vi'
   const now = useNow()
+
+  const [tab, setTab] = useState<ManagerTab>('calendar')
 
   const pending = bookings.filter((b) => b.status === 'PENDING')
   const today = bookings.filter(
     (b) => sameDay(new Date(b.start), now) && ['APPROVED', 'COMPLETED', 'KEY_CHECKED_OUT'].includes(b.status),
   )
-  const scheduled = bookings.filter((b) => ['APPROVED', 'KEY_CHECKED_OUT'].includes(b.status)).length
+  const keysOut = bookings.filter((b) => b.status === 'KEY_CHECKED_OUT')
+  const overdueKeys = keysOut.filter((b) => now > new Date(b.end))
   const activeBlocks = blocks.filter((k) => k.active && new Date(k.end) > now).length
+
+  const tabs: { id: ManagerTab; label: string; icon: React.ReactNode; badge?: number }[] = [
+    {
+      id: 'calendar',
+      label: vi ? 'Lịch phòng' : 'Room Schedule',
+      icon: <Calendar size={14} />,
+    },
+    {
+      id: 'approvals',
+      label: vi ? 'Duyệt yêu cầu' : 'Approvals',
+      icon: <ClipboardCheck size={14} />,
+      badge: pending.length,
+    },
+    {
+      id: 'keys',
+      label: vi ? 'Chìa khóa phòng' : 'Key Custody',
+      icon: <KeyRound size={14} />,
+      badge: overdueKeys.length > 0 ? overdueKeys.length : keysOut.length,
+    },
+  ]
+
+  const headerCopy: Record<ManagerTab, { eyebrow: string; title: string; body: string }> = {
+    calendar: {
+      eyebrow: vi ? `QUẢN LÝ PHÒNG · ${fmtDate(now)}` : `MANAGER · ${fmtDate(now)}`,
+      title: vi ? 'Lịch sử dụng phòng' : 'Room schedule',
+      body: vi
+        ? 'Theo dõi lịch các phòng 601, 602 và 605. Bấm hoặc kéo vào ô trống để thêm sự kiện hay khóa phòng.'
+        : 'Monitor rooms 601, 602, and 605. Click or drag an open slot to assign an event or block a room.',
+    },
+    approvals: {
+      eyebrow: vi ? `XÉT DUYỆT · ${fmtDate(now)}` : `APPROVALS · ${fmtDate(now)}`,
+      title: vi ? 'Yêu cầu chờ phê duyệt' : 'Pending approvals',
+      body: vi
+        ? 'Kiểm tra và duyệt hoặc từ chối đơn đặt phòng của sinh viên.'
+        : 'Review, approve, or decline pending student room booking requests.',
+    },
+    keys: {
+      eyebrow: vi ? `CHÌA KHÓA · ${fmtDate(now)}` : `KEY CUSTODY · ${fmtDate(now)}`,
+      title: vi ? 'Quản lý chìa khóa phòng' : 'Room key custody',
+      body: vi
+        ? 'Giao chìa cho đơn đã duyệt, theo dõi sinh viên đang giữ chìa và xác nhận khi trả.'
+        : 'Issue keys for approved bookings, track active checkouts, and confirm returns.',
+    },
+  }
+
+  const activeHeader = headerCopy[tab]
 
   return (
     <>
       <TopNav>
-        <NavItem active badge={pending.length}>
-          {locale === 'vi' ? 'Vận hành & Lịch học' : 'Operations & Schedule'}
-        </NavItem>
+        <div className="flex items-center gap-1 rounded-md border border-rule/70 bg-ice/50 p-1 overflow-x-auto no-scrollbar max-w-full shrink">
+          {tabs.map((item) => (
+            <NavItem
+              key={item.id}
+              active={tab === item.id}
+              onClick={() => setTab(item.id)}
+              badge={item.badge}
+              icon={item.icon}
+            >
+              {item.label}
+            </NavItem>
+          ))}
+        </div>
       </TopNav>
 
-      <main className="mx-auto max-w-[1440px] px-6 pt-10 pb-24">
-        {/* Page Header */}
+      <main className="mx-auto max-w-[1440px] px-6 pt-8 pb-20">
+        {/* Dynamic Page Header with Clickable KPI Cards */}
         <PageHeader
-          eyebrow={`FACILITIES COMMAND · ${fmtDate(now)}`}
-          title={t('manager.title')}
-          body={t('manager.subtitle')}
+          eyebrow={activeHeader.eyebrow}
+          title={activeHeader.title}
+          body={activeHeader.body}
           right={
-            <div className="flex flex-col items-end gap-3">
-              <Reveal stagger className="grid grid-cols-2 border-t border-l border-rule sm:grid-cols-4">
-                {[
-                  ['PENDING', pending.length, pending.length ? 'text-accent' : ''],
-                  ['TODAY', today.length, ''],
-                  ['SCHEDULED', scheduled, ''],
-                  ['ACTIVE BLOCKS', activeBlocks, ''],
-                ].map(([k, v, c]) => (
-                  <div key={k as string} className="min-w-[110px] border-r border-b border-rule px-4 py-3 bg-paper">
-                    <div className="font-mono text-[11px] text-steel">{k}</div>
-                    <div className={cx('mt-1 font-display text-[32px] leading-none font-w450', c as string)}>
-                      {String(v).padStart(2, '0')}
-                    </div>
+            <Reveal stagger className="grid grid-cols-2 border-t border-l border-rule sm:grid-cols-4">
+              {[
+                {
+                  key: 'pending',
+                  label: vi ? 'CHỜ DUYỆT' : 'PENDING',
+                  value: pending.length,
+                  accent: pending.length > 0 ? 'text-accent' : '',
+                  target: 'approvals' as ManagerTab,
+                  active: tab === 'approvals',
+                },
+                {
+                  key: 'today',
+                  label: vi ? 'HÔM NAY' : 'TODAY',
+                  value: today.length,
+                  accent: '',
+                  target: 'calendar' as ManagerTab,
+                  active: tab === 'calendar',
+                },
+                {
+                  key: 'keys',
+                  label: vi ? 'ĐANG GIỮ CHÌA' : 'KEYS OUT',
+                  value: keysOut.length,
+                  accent: overdueKeys.length > 0 ? 'text-plum' : '',
+                  target: 'keys' as ManagerTab,
+                  active: tab === 'keys',
+                },
+                {
+                  key: 'blocks',
+                  label: vi ? 'ĐANG KHÓA' : 'BLOCKED',
+                  value: activeBlocks,
+                  accent: '',
+                  target: 'calendar' as ManagerTab,
+                  active: false,
+                },
+              ].map((stat) => (
+                <button
+                  key={stat.key}
+                  type="button"
+                  onClick={() => setTab(stat.target)}
+                  className={cx(
+                    'min-w-[112px] border-r border-b border-rule px-4 py-3 text-left transition-colors cursor-pointer bg-paper hover:bg-ice/60',
+                    stat.active && 'bg-ice/50',
+                  )}
+                >
+                  <div className="font-mono text-[10.5px] text-steel">{stat.label}</div>
+                  <div className={cx('mt-1 font-display text-[30px] leading-none font-w450', stat.accent)}>
+                    {String(stat.value).padStart(2, '0')}
                   </div>
-                ))}
-              </Reveal>
-            </div>
+                </button>
+              ))}
+            </Reveal>
           }
         />
 
-        {/* Master Operations Workspace */}
-        <div className="mt-10">
-          <OperationsWorkspace />
+        {/* Mobile Tab Switcher (TopNav tabs hide below md) */}
+        <div className="mt-5 flex items-center gap-1 rounded-md border border-rule bg-ice/50 p-1 md:hidden overflow-x-auto no-scrollbar">
+          {tabs.map((item) => (
+            <button
+              key={item.id}
+              type="button"
+              onClick={() => setTab(item.id)}
+              className={cx(
+                'flex flex-1 items-center justify-center gap-1.5 rounded-sm px-3 py-1.5 font-mono text-[11.5px] font-semibold whitespace-nowrap transition-colors cursor-pointer',
+                tab === item.id
+                  ? 'border border-ink bg-paper text-ink shadow-2xs'
+                  : 'text-steel hover:text-ink',
+              )}
+            >
+              {item.icon}
+              <span>{item.label}</span>
+              {item.badge !== undefined && item.badge > 0 && (
+                <span className="rounded-sm bg-accent px-1.5 py-0.2 text-[10px] font-bold text-paper">
+                  {item.badge}
+                </span>
+              )}
+            </button>
+          ))}
+        </div>
+
+        {/* Focused Single-Task Workspace */}
+        <div className="mt-8">
+          <OperationsWorkspace activeTab={tab} onTabChange={setTab} showInternalTabs={false} />
         </div>
       </main>
     </>
-  )
-}
-
-function SectionTitleBlock({
-  eyebrow,
-  title,
-  subtitle,
-  badge,
-  actions,
-}: {
-  eyebrow: string
-  title: string
-  subtitle?: string
-  badge?: React.ReactNode
-  actions?: React.ReactNode
-}) {
-  return (
-    <div className="flex flex-wrap items-end justify-between gap-4 border-b-2 border-ink pb-3.5 select-none">
-      <div className="flex flex-col gap-1.5 max-w-[850px]">
-        <div className="flex items-center gap-2.5">
-          <Eyebrow className="!text-[12px] !font-bold !text-accent tracking-wider select-none">
-            {eyebrow}
-          </Eyebrow>
-          {badge}
-        </div>
-        <h2 className="font-display text-[26px] md:text-[32px] font-w450 text-ink leading-tight select-none">
-          <SplitText key={title} text={title} />
-        </h2>
-        {subtitle && (
-          <p className="font-sans text-[13px] md:text-[14px] text-graphite leading-relaxed select-none">
-            {subtitle}
-          </p>
-        )}
-      </div>
-      {actions && (
-        <div className="flex flex-wrap items-center gap-2">
-          {actions}
-        </div>
-      )}
-    </div>
   )
 }
 
@@ -162,32 +242,34 @@ export interface OperationsWorkspaceProps {
   eyebrow?: string
   title?: string
   hideHeader?: boolean
+  activeTab?: ManagerTab
+  onTabChange?: (tab: ManagerTab) => void
+  showInternalTabs?: boolean
 }
 
 export function OperationsWorkspace({
-  eyebrow = '01 / MASTER CALENDAR · ROOM SCHEDULE & APPROVAL',
-  title = 'Room schedule & occupancy',
-  hideHeader = false,
+  activeTab: controlledTab,
+  onTabChange,
+  showInternalTabs = true,
 }: OperationsWorkspaceProps = {}) {
   const { rooms, bookings, blocks, settings, currentUser, notify } = useStore()
   const { user, room: roomOf } = useLookups()
-  const { t, locale } = useI18n()
+  const { locale } = useI18n()
+  const vi = locale === 'vi'
 
-  const firstPending = useMemo(
-    () => bookings.filter((b) => b.status === 'PENDING').sort((a, b) => +new Date(a.start) - +new Date(b.start))[0],
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [],
-  )
+  const [internalTab, setInternalTab] = useState<ManagerTab>('calendar')
+  const currentTab = controlledTab ?? internalTab
+  const setActiveTab = (next: ManagerTab) => {
+    setInternalTab(next)
+    onTabChange?.(next)
+  }
 
   const [roomId, setRoomId] = useState<string>('ALL')
-  const [weekStart, setWeekStart] = useState(() => startOfWeek(firstPending ? new Date(firstPending.start) : new Date()))
-  const [selectedDay, setSelectedDay] = useState<Date>(() =>
-    getInitialWorkday(firstPending ? new Date(firstPending.start) : undefined),
-  )
-  const [showApprovalBoard, setShowApprovalBoard] = useState(true)
+  const [weekStart, setWeekStart] = useState(() => startOfWeek(new Date()))
+  const [selectedDay, setSelectedDay] = useState<Date>(() => getInitialWorkday())
 
   const [review, setReview] = useState<{ id: string; el: HTMLElement } | null>(null)
-  const [jumpTo, setJumpTo] = useState<string | null>(firstPending?.id ?? null)
+  const [jumpTo, setJumpTo] = useState<string | null>(null)
   const [inspectedBlock, setInspectedBlock] = useState<RoomBlock | null>(null)
 
   const [assignModalOpen, setAssignModalOpen] = useState(false)
@@ -201,10 +283,12 @@ export function OperationsWorkspace({
 
   const isAllRooms = roomId === 'ALL'
   const room = isAllRooms ? rooms[0] : (rooms.find((r) => r.id === roomId) ?? rooms[0])
-  const pending = bookings.filter((b) => b.status === 'PENDING').sort((a, b) => +new Date(a.start) - +new Date(b.start))
+  const pending = bookings
+    .filter((b) => b.status === 'PENDING')
+    .sort((a, b) => +new Date(a.start) - +new Date(b.start))
   const keysOut = useMemo(() => bookings.filter((b) => b.status === 'KEY_CHECKED_OUT'), [bookings])
   const overdueKeys = useMemo(() => keysOut.filter((b) => new Date() > new Date(b.end)), [keysOut])
-  const weekEnd = addDays(weekStart, 5) // 5 Workdays (Mon–Fri)
+  const weekEnd = addDays(weekStart, 5)
   const pendingThisWeek = pending.filter(
     (b) => (isAllRooms || b.roomId === room?.id) && new Date(b.start) >= weekStart && new Date(b.start) < weekEnd,
   ).length
@@ -222,219 +306,137 @@ export function OperationsWorkspace({
     setAssignModalOpen(true)
   }
 
-  // After jumping to a pending request, anchor the popover
-  useEffect(() => {
-    if (!jumpTo) return
-    const el = document.querySelector<HTMLElement>(`[data-booking-id="${jumpTo}"]`)
-    if (el) {
-      el.scrollIntoView({ block: 'center', behavior: 'smooth' })
-      setTimeout(() => setReview({ id: jumpTo, el }), 350)
+  const handleInspectOnCalendar = (b: Booking) => {
+    if (!isAllRooms) {
+      setRoomId(b.roomId)
     }
-    setJumpTo(null)
-  }, [jumpTo, roomId, weekStart])
+    setWeekStart(startOfWeek(new Date(b.start)))
+    setSelectedDay(startOfDay(new Date(b.start)))
+    setReview(null)
+    setActiveTab('calendar')
+    setJumpTo(b.id)
+  }
+
+  // Wait until calendar tab is rendered before scrolling to and opening the inspected booking
+  useEffect(() => {
+    if (!jumpTo || currentTab !== 'calendar') return
+    const timer = setTimeout(() => {
+      const el = document.querySelector<HTMLElement>(`[data-booking-id="${jumpTo}"]`)
+      if (el) {
+        el.scrollIntoView({ block: 'center', behavior: 'smooth' })
+        setTimeout(() => setReview({ id: jumpTo, el }), 250)
+      }
+      setJumpTo(null)
+    }, 80)
+    return () => clearTimeout(timer)
+  }, [jumpTo, roomId, weekStart, currentTab])
 
   if (!room || !currentUser) return null
   const reviewing = review ? bookings.find((b) => b.id === review.id) : undefined
 
   return (
-    <section className="flex min-w-0 flex-col gap-8">
-      {/* Operations Quick Section Index */}
-      {!hideHeader && (
-        <div className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-rule bg-ice/40 px-4 py-2.5 select-none shadow-2xs">
-          <div className="flex flex-wrap items-center gap-2">
-            <span className="font-mono text-[11px] font-bold text-steel tracking-wider uppercase">
-              {t('manager.sectionsNav')}:
-            </span>
-            <div className="flex flex-wrap items-center gap-1.5 font-mono text-[12px]">
-              <a
-                href="#approval-deck-section"
-                className="inline-flex items-center gap-1.5 rounded-sm border border-rule bg-paper px-2.5 py-1 font-semibold text-graphite hover:border-ink hover:text-ink hover:bg-ice/30 transition-colors"
-              >
-                <span className="text-steel font-bold">01</span>
-                <span>{locale === 'vi' ? 'Hàng đợi phê duyệt' : 'Approval Deck'}</span>
-                <span
-                  className={cx(
-                    'rounded-sm px-1.5 py-0.2 text-[10px] font-bold',
-                    pending.length > 0 ? 'bg-accent text-paper' : 'bg-rule text-steel',
-                  )}
-                >
-                  {pending.length}
-                </span>
-              </a>
-
-              <a
-                href="#room-schedule-section"
-                className="inline-flex items-center gap-1.5 rounded-sm border border-rule bg-paper px-2.5 py-1 font-semibold text-graphite hover:border-ink hover:text-ink hover:bg-ice/30 transition-colors"
-              >
-                <span className="text-steel font-bold">02</span>
-                <span>{locale === 'vi' ? 'Thời khóa biểu phòng' : 'Room Schedule'}</span>
-              </a>
-
-              <a
-                href="#key-custody-section"
+    <section className="flex min-w-0 flex-col gap-5">
+      {/* Clean Internal 3-Tab Switcher (used when embedded inside AdminView) */}
+      {showInternalTabs && (
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div className="inline-flex flex-wrap items-center gap-1 rounded-md border border-rule bg-ice/60 p-1 select-none">
+            {[
+              { id: 'calendar' as ManagerTab, label: vi ? 'Lịch phòng' : 'Room Schedule', icon: <Calendar size={14} /> },
+              {
+                id: 'approvals' as ManagerTab,
+                label: vi ? 'Duyệt yêu cầu' : 'Approvals',
+                icon: <ClipboardCheck size={14} />,
+                badge: pending.length,
+              },
+              {
+                id: 'keys' as ManagerTab,
+                label: vi ? 'Chìa khóa phòng' : 'Key Custody',
+                icon: <KeyRound size={14} />,
+                badge: overdueKeys.length > 0 ? overdueKeys.length : keysOut.length,
+                alert: overdueKeys.length > 0,
+              },
+            ].map((item) => (
+              <button
+                key={item.id}
+                type="button"
+                onClick={() => setActiveTab(item.id)}
                 className={cx(
-                  'inline-flex items-center gap-1.5 rounded-sm border px-2.5 py-1 font-semibold transition-colors',
-                  overdueKeys.length > 0
-                    ? 'border-plum bg-plum/10 text-plum'
-                    : 'border-rule bg-paper text-graphite hover:border-ink hover:text-ink hover:bg-ice/30',
+                  'inline-flex items-center gap-1.5 rounded-sm px-3 py-1.5 font-mono text-[12px] font-semibold transition-all cursor-pointer',
+                  currentTab === item.id
+                    ? 'border border-ink bg-paper text-ink shadow-2xs'
+                    : 'text-steel hover:text-ink',
                 )}
               >
-                <span className={cx('font-bold', overdueKeys.length > 0 ? 'text-plum' : 'text-steel')}>03</span>
-                <span>{locale === 'vi' ? 'Quản lý chìa khóa' : 'Key Custody'}</span>
-                <span
-                  className={cx(
-                    'rounded-sm px-1.5 py-0.2 text-[10px] font-bold',
-                    overdueKeys.length > 0 ? 'bg-plum text-paper' : 'bg-ink text-paper',
-                  )}
-                >
-                  {keysOut.length}
-                </span>
-              </a>
-            </div>
+                {item.icon}
+                <span>{item.label}</span>
+                {item.badge !== undefined && item.badge > 0 && (
+                  <span
+                    className={cx(
+                      'rounded-sm px-1.5 py-0.2 text-[10px] font-bold text-paper',
+                      item.alert ? 'bg-plum' : 'bg-accent',
+                    )}
+                  >
+                    {item.badge}
+                  </span>
+                )}
+              </button>
+            ))}
           </div>
 
-          <div className="flex items-center gap-2">
-            <a
-              href="mailto:manager@tne.edu.vn"
-              className="inline-flex items-center gap-1.5 rounded-[4px] border border-[#E0E0E0] bg-[#FFFFFF] px-2.5 py-1 font-mono text-[11px] font-semibold text-[#000000] hover:border-[#0F62FE] hover:text-[#0F62FE] transition-colors"
-              title="Direct Facilities Manager Desk Contact"
-            >
-              <Mail size={13} className="text-[#0F62FE]" />
-              <span>manager@tne.edu.vn</span>
-            </a>
+          {currentTab === 'calendar' && (
             <Button
               variant="accent"
-              size="xs"
+              size="sm"
               onClick={() => handleOpenAssign({ roomId: isAllRooms ? rooms[0]?.id ?? '' : room.id, date: selectedDay })}
-              className="gap-1 shadow-xs"
+              className="gap-1.5 shadow-xs"
             >
-              <Plus size={13} strokeWidth={2.5} /> {t('nav.assignActivity')}
+              <Plus size={14} strokeWidth={2.5} /> {vi ? 'Thêm sự kiện / Khóa phòng' : 'Assign Event / Block'}
             </Button>
-          </div>
+          )}
         </div>
       )}
 
-      {/* ───────────── SECTION 01: APPROVAL DECK ───────────── */}
-      <section id="approval-deck-section" className="scroll-mt-20 flex flex-col gap-4">
-        <SectionTitleBlock
-          eyebrow={t('manager.approvalSection.eyebrow')}
-          title={t('manager.approvalSection.title')}
-          subtitle={t('manager.approvalSection.subtitle')}
-          badge={
-            pending.length > 0 ? (
-              <span className="rounded-sm bg-accent px-2 py-0.5 font-mono text-[11px] font-bold text-paper">
-                {pending.length} {t('manager.approvalSection.pendingBadge')}
-              </span>
-            ) : (
-              <span className="rounded-sm border border-rule bg-paper px-2 py-0.5 font-mono text-[11px] font-semibold text-steel">
-                {t('manager.approvalSection.noPending')}
-              </span>
-            )
-          }
-          actions={
-            <Button
-              variant={showApprovalBoard ? 'outline' : 'dark'}
-              size="sm"
-              onClick={() => setShowApprovalBoard((v) => !v)}
-              className="gap-1.5"
-            >
-              <span>
-                {showApprovalBoard
-                  ? t('manager.approvalSection.collapseBtn')
-                  : t('manager.approvalSection.expandBtn')}
-              </span>
-              {showApprovalBoard ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
-            </Button>
-          }
-        />
-
-        {showApprovalBoard ? (
-          <ApprovalBoard
-            pending={pending}
-            onInspect={(b) => {
-              if (!isAllRooms) {
-                setRoomId(b.roomId)
-              }
-              setWeekStart(startOfWeek(new Date(b.start)))
-              setSelectedDay(startOfDay(new Date(b.start)))
-              setReview(null)
-              setJumpTo(b.id)
-            }}
-          />
-        ) : (
-          <div
-            onClick={() => setShowApprovalBoard(true)}
-            className="flex cursor-pointer items-center justify-between rounded-lg border border-dashed border-rule bg-ice/20 px-4 py-3 font-mono text-[12px] text-steel hover:border-ink hover:text-ink transition-colors"
-          >
-            <div className="flex items-center gap-2">
-              <span className="h-2 w-2 rounded-full bg-accent" />
-              <span>
-                {locale === 'vi'
-                  ? `Hàng đợi đang được thu gọn · ${pending.length} yêu cầu chờ phê duyệt`
-                  : `Queue is currently collapsed · ${pending.length} pending request(s)`}
-              </span>
-            </div>
-            <span className="text-accent hover:underline flex items-center gap-1 font-semibold">
-              {locale === 'vi' ? 'Bấm để mở rộng' : 'Click to expand'} <ChevronDown size={14} />
-            </span>
-          </div>
-        )}
-      </section>
-
-      {/* ───────────── SECTION 02: ROOM SCHEDULE & CALENDAR ───────────── */}
-      <section id="room-schedule-section" className="scroll-mt-20 flex flex-col gap-4 pt-10 border-t-2 border-ink">
-        <SectionTitleBlock
-          eyebrow={eyebrow || t('manager.scheduleSection.eyebrow')}
-          title={title && title !== 'Room schedule & occupancy' ? title : t('manager.scheduleSection.title')}
-          subtitle={t('manager.scheduleSection.subtitle')}
-          actions={
-            <div className="flex flex-wrap items-center gap-2">
-              <a
-                href="#key-custody-section"
-                className={cx(
-                  'inline-flex items-center gap-1.5 rounded-[4px] border px-2.5 py-1.5 font-mono text-[11px] font-semibold transition-colors',
-                  overdueKeys.length > 0
-                    ? 'border-plum bg-plum/10 text-plum'
-                    : 'border-rule bg-paper text-graphite hover:border-ink hover:text-ink',
-                )}
-                title="Scroll down to Room Key Custody Desk"
-              >
-                <KeyRound size={13} className={overdueKeys.length > 0 ? 'text-plum' : 'text-accent'} />
-                <span>{t('nav.keyCustody')} ({keysOut.length}) ↓</span>
-              </a>
-
-              <Button
-                variant="accent"
-                size="sm"
-                onClick={() => handleOpenAssign({ roomId: isAllRooms ? rooms[0]?.id ?? '' : room.id, date: selectedDay })}
-                className="gap-1.5 shadow-xs"
-              >
-                <Plus size={14} strokeWidth={2.5} /> {t('nav.assignActivity')}
-              </Button>
-            </div>
-          }
-        />
-
-        {/* Room Tabs & Calendar View */}
+      {/* ───────────── TAB 1: ROOM SCHEDULE & CALENDAR ───────────── */}
+      {currentTab === 'calendar' && (
         <div>
-          <RoomTabs
-            rooms={rooms}
-            activeId={roomId}
-            onChange={(id) => {
-              setRoomId(id)
-              setReview(null)
-            }}
-            badge={(id) => pending.filter((b) => b.roomId === id).length}
-          />
+          {/* Room Tabs + Single Primary Action */}
+          <div className="flex flex-wrap items-end justify-between gap-3">
+            <div className="min-w-0 flex-1">
+              <RoomTabs
+                rooms={rooms}
+                activeId={roomId}
+                onChange={(id) => {
+                  setRoomId(id)
+                  setReview(null)
+                }}
+                badge={(id) => pending.filter((b) => b.roomId === id).length}
+              />
+            </div>
+
+            {!showInternalTabs && (
+              <div className="pb-2 shrink-0">
+                <Button
+                  variant="accent"
+                  size="sm"
+                  onClick={() =>
+                    handleOpenAssign({ roomId: isAllRooms ? rooms[0]?.id ?? '' : room.id, date: selectedDay })
+                  }
+                  className="gap-1.5 shadow-xs"
+                >
+                  <Plus size={14} strokeWidth={2.5} /> {vi ? 'Thêm sự kiện / Khóa phòng' : 'Assign Event / Block'}
+                </Button>
+              </div>
+            )}
+          </div>
 
           <div className="rounded-lg rounded-tl-none border border-ink bg-paper">
             {/* Week Navigation Toolbar */}
             <div className="flex flex-wrap items-center justify-between gap-3 border-b border-rule px-4 py-3 bg-ice/30">
-              <div className="flex items-center gap-2">
+              <div className="flex flex-wrap items-center gap-2">
                 <Button
                   variant="outline"
                   className="!rounded-md !p-1.5"
-                  aria-label="Previous week"
+                  aria-label={vi ? 'Tuần trước' : 'Previous week'}
                   onClick={() => {
                     setReview(null)
                     setWeekStart((w) => addDays(w, -7))
@@ -446,7 +448,7 @@ export function OperationsWorkspace({
                 <Button
                   variant="outline"
                   className="!rounded-md !p-1.5"
-                  aria-label="Next week"
+                  aria-label={vi ? 'Tuần sau' : 'Next week'}
                   onClick={() => {
                     setReview(null)
                     setWeekStart((w) => addDays(w, 7))
@@ -464,43 +466,50 @@ export function OperationsWorkspace({
                     setWeekStart(startOfWeek(new Date()))
                   }}
                 >
-                  This week
+                  {vi ? 'Tuần này' : 'This week'}
                 </Button>
 
-                <div className="ml-2 font-mono text-[13px] font-semibold text-ink">
-                  {fmtShort(weekStart)} — {fmtShort(addDays(weekStart, 4))} · MON–FRI
+                <div className="ml-1 font-mono text-[13px] font-semibold text-ink">
+                  {fmtShort(weekStart)} — {fmtShort(addDays(weekStart, 4))} · {vi ? 'T2–T6' : 'MON–FRI'}
                 </div>
 
                 {pendingThisWeek > 0 && (
-                  <Tag className="ml-1 !border-dashed !border-plum !bg-plum/10 !text-plum">
-                    {pendingThisWeek} TO REVIEW
-                  </Tag>
+                  <button
+                    type="button"
+                    onClick={() => setActiveTab('approvals')}
+                    className="ml-1 cursor-pointer"
+                    title={vi ? 'Mở danh sách chờ duyệt' : 'Open pending approvals'}
+                  >
+                    <Tag className="!border-dashed !border-plum !bg-plum/10 !text-plum hover:!bg-plum/20 transition-colors">
+                      {vi ? `${pendingThisWeek} chờ duyệt` : `${pendingThisWeek} to review`}
+                    </Tag>
+                  </button>
                 )}
               </div>
 
-              {/* Legend with Multi-Room Colors & Statuses */}
+              {/* Clean Localized Legend */}
               <div className="flex flex-wrap items-center gap-3 text-[11px] text-graphite font-mono">
                 {isAllRooms && (
                   <>
                     <div className="flex items-center gap-1.5">
                       <span className="h-2 w-2 rounded-sm bg-accent shrink-0" />
-                      <span className="font-semibold text-ink">RM 601</span>
+                      <span className="font-semibold text-ink">601</span>
                     </div>
                     <div className="flex items-center gap-1.5">
                       <span className="h-2 w-2 rounded-sm bg-slate shrink-0" />
-                      <span className="font-semibold text-ink">RM 602</span>
+                      <span className="font-semibold text-ink">602</span>
                     </div>
                     <div className="flex items-center gap-1.5">
                       <span className="h-2 w-2 rounded-sm bg-plum shrink-0" />
-                      <span className="font-semibold text-ink">RM 605</span>
+                      <span className="font-semibold text-ink">605</span>
                     </div>
                     <span className="text-rule">|</span>
                   </>
                 )}
-                <Legend swatch="border border-ink bg-ink" label="Approved" />
-                <Legend swatch="border border-dashed border-plum bg-plum/[0.08]" label="Pending" />
-                <Legend swatch="border-2 border-accent bg-paper" label="Scheduled Event" />
-                <Legend swatch="hatch-slate border border-ink" label="Room block" />
+                <Legend swatch="border border-ink bg-ink" label={vi ? 'Đã duyệt' : 'Approved'} />
+                <Legend swatch="border border-dashed border-plum bg-plum/[0.08]" label={vi ? 'Chờ duyệt' : 'Pending'} />
+                <Legend swatch="border-2 border-accent bg-paper" label={vi ? 'Sự kiện' : 'Event'} />
+                <Legend swatch="hatch-slate border border-ink" label={vi ? 'Khóa phòng' : 'Blocked'} />
               </div>
             </div>
 
@@ -517,7 +526,6 @@ export function OperationsWorkspace({
                   currentUserId={currentUser.id}
                   selection={null}
                   onSelect={(s) => {
-                    // Open Assign Modal prefilled with exact room and time window
                     const sh = String(s.start.getHours()).padStart(2, '0')
                     const sm = String(s.start.getMinutes()).padStart(2, '0')
                     const eh = String(s.end.getHours()).padStart(2, '0')
@@ -544,63 +552,28 @@ export function OperationsWorkspace({
               </div>
             </div>
 
-            {/* Bottom Comfort Notice */}
-            <div className="flex items-center justify-between border-t border-rule px-4 py-2.5 font-mono text-[11px] text-steel">
-              <div className="flex items-center gap-2">
-                <span className="h-2 w-2 rounded-sm bg-accent" />
-                DRAG OR CLICK ANY OPEN HOUR SLOT TO ASSIGN ROOM ACTIVITY · CLICK ANY BLOCK OR EVENT TO INSPECT / MANAGE
-              </div>
-              <a
-                href="#key-custody-section"
-                className="font-mono text-[11px] font-bold text-accent hover:underline flex items-center gap-1"
-              >
-                {t('nav.keyCustody')} ({keysOut.length}) ↓
-              </a>
+            {/* Short Friendly Bottom Hint */}
+            <div className="flex items-center gap-2 border-t border-rule px-4 py-2.5 text-[12px] text-steel">
+              <span className="h-2 w-2 rounded-sm bg-accent shrink-0" />
+              <span>
+                {vi
+                  ? 'Bấm hoặc kéo chọn ô giờ trống để thêm sự kiện / khóa phòng · Bấm vào lịch đã có để xem chi tiết hoặc xử lý.'
+                  : 'Click or drag any open slot to assign an event or block · Click any booking or block to inspect.'}
+              </span>
             </div>
           </div>
         </div>
-      </section>
+      )}
 
-      {/* ───────────── SECTION 03: ROOM KEY CUSTODY DESK ───────────── */}
-      <section id="key-custody-section" className="scroll-mt-20 flex flex-col gap-4 pt-10 border-t-2 border-ink">
-        <SectionTitleBlock
-          eyebrow={t('manager.keySection.eyebrow')}
-          title={t('manager.keySection.title')}
-          subtitle={t('manager.keySection.subtitle')}
-          badge={
-            overdueKeys.length > 0 ? (
-              <span className="rounded-sm bg-plum px-2 py-0.5 font-mono text-[11px] font-bold text-paper animate-pulse">
-                {overdueKeys.length} {t('common.overdue').toUpperCase()}
-              </span>
-            ) : undefined
-          }
-          actions={
-            <div className="flex flex-wrap items-center gap-2 font-mono text-[11px]">
-              <span className="rounded-[4px] border border-rule bg-paper px-2.5 py-1 text-graphite">
-                <strong className="text-ink">{keysOut.length}</strong> {locale === 'vi' ? 'Đang mượn' : 'Out'}
-              </span>
-              <span className="rounded-[4px] border border-rule bg-paper px-2.5 py-1 text-graphite">
-                <strong className="text-ink">{bookings.filter((b) => b.status === 'APPROVED').length}</strong> {locale === 'vi' ? 'Chờ lấy' : 'Ready'}
-              </span>
-              <span className="rounded-[4px] border border-rule bg-paper px-2.5 py-1 text-graphite">
-                <strong className="text-ink">{bookings.filter((b) => b.status === 'COMPLETED' && b.returnedAt).length}</strong> {locale === 'vi' ? 'Đã trả' : 'Returned'}
-              </span>
-            </div>
-          }
-        />
+      {/* ───────────── TAB 2: PENDING APPROVALS ───────────── */}
+      {currentTab === 'approvals' && (
+        <ApprovalBoard pending={pending} onInspect={handleInspectOnCalendar} />
+      )}
 
-        <KeyCustodyDesk
-          onInspect={(b) => {
-            if (!isAllRooms) {
-              setRoomId(b.roomId)
-            }
-            setWeekStart(startOfWeek(new Date(b.start)))
-            setSelectedDay(startOfDay(new Date(b.start)))
-            setReview(null)
-            setJumpTo(b.id)
-          }}
-        />
-      </section>
+      {/* ───────────── TAB 3: ROOM KEY CUSTODY ───────────── */}
+      {currentTab === 'keys' && (
+        <KeyCustodyDesk onInspect={handleInspectOnCalendar} />
+      )}
 
       {/* Review & Details Popover anchored to calendar/matrix block */}
       {review && reviewing && (

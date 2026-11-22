@@ -1,6 +1,6 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import type { AuditLog, Booking, BookingMember, Role, Room, RoomBlock, Settings, User } from './types'
-import { makePassCode, seedAudit, seedBlocks, seedBookings, seedRooms, seedSettings, uid } from './seed'
+import { makePassCode, seedAudit, seedBlocks, seedBookings, seedRooms, seedSettings, seedUsers, uid } from './seed'
 import { addDays, daysBetween, durationMin, isWeekend, overlaps, parseHM, startOfDay } from './time'
 import {
   apiApproveBooking,
@@ -30,6 +30,8 @@ import {
   clearAuth,
   encodeRoomToBackend,
   getStoredToken,
+  getStoredUser,
+  setStoredToken,
   setStoredUser,
   USER_KEY,
 } from './api'
@@ -193,6 +195,20 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     setApiConnected(true)
   }, [])
 
+  const acceptLocalDemoSession = useCallback((user: User) => {
+    setUsers((prev) => {
+      const merged = new Map<string, User>()
+      for (const u of seedUsers) merged.set(u.id, u)
+      for (const u of prev) merged.set(u.id, u)
+      merged.set(user.id, user)
+      return Array.from(merged.values())
+    })
+    setStoredToken(`local_demo_token_${user.id}`)
+    setStoredUser(user)
+    setCurrentUserId(user.id)
+    setApiConnected(false)
+  }, [])
+
   const actor = currentUser?.id ?? 'anonymous'
 
   const notify = useCallback((message: string, tone: Toast['tone'] = 'ok') => {
@@ -206,6 +222,13 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     const restore = async () => {
       try {
         const token = getStoredToken()
+        if (token?.startsWith('local_demo_token_')) {
+          const cached = getStoredUser()
+          if (cached?.id) {
+            if (active) acceptLocalDemoSession(cached)
+            return
+          }
+        }
         if (!token || token.startsWith('local_token_') || token.startsWith('preview_token_')) {
           clearAuth()
           if (active) setCurrentUserId(null)
@@ -227,7 +250,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       if (active) { clearAuth(); setCurrentUserId(null); setSessionReady(true) }
     })
     return () => { active = false }
-  }, [acceptSession, notify])
+  }, [acceptSession, acceptLocalDemoSession, notify])
 
   const log = useCallback(
     (action: string, entity: string, metadata: Record<string, unknown>, actorId = actor) => {
@@ -365,7 +388,20 @@ export function StoreProvider({ children }: { children: ReactNode }) {
 
     async loginAsync(email: string, password: string) {
       const result = await apiLogin(email, password)
-      if ('error' in result) return { error: result.error }
+      if ('error' in result) {
+        if (result.offline) {
+          const normEmail = email.trim().toLowerCase()
+          const pool = [...users, ...seedUsers]
+          const found = pool.find((u) => u.email.toLowerCase() === normEmail && u.password === password)
+          if (!found) return { error: 'Invalid email or password (offline demo mode).' }
+          if (found.status === 'SUSPENDED') return { error: 'Account is suspended.' }
+          acceptLocalDemoSession(found)
+          log('AUTH_LOGIN', `user:${found.id}`, { role: found.role, method: 'LOCAL_DEMO' }, found.id)
+          notify(`Welcome back, ${found.fullName} (Local Demo Mode)`)
+          return { error: null, user: found }
+        }
+        return { error: result.error }
+      }
       acceptSession(result.user)
       log('AUTH_LOGIN', `user:${result.user.id}`, { role: result.user.role, method: 'API' }, result.user.id)
       notify(`Welcome back, ${result.user.fullName}`)
@@ -394,7 +430,32 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       const combinedCode = `${hcmut} / ${uts}`
 
       const result = await apiRegister({ ...input, studentCode: combinedCode, hcmutId: hcmut, utsId: uts })
-      if ('error' in result) return { error: result.error }
+      if ('error' in result) {
+        if (result.offline) {
+          const normEmail = input.email.trim().toLowerCase()
+          const pool = [...users, ...seedUsers]
+          if (pool.some((u) => u.email.toLowerCase() === normEmail)) {
+            return { error: 'Email is already registered.' }
+          }
+          const newUser: User = {
+            id: uid('u_stu'),
+            fullName: input.fullName.trim(),
+            email: input.email.trim(),
+            password: input.password,
+            role: 'USER',
+            studentCode: combinedCode,
+            hcmutId: hcmut,
+            utsId: uts,
+            status: 'ACTIVE',
+            createdAt: new Date().toISOString(),
+          }
+          acceptLocalDemoSession(newUser)
+          log('USER_REGISTER', `user:${newUser.id}`, { role: newUser.role, method: 'LOCAL_DEMO' }, newUser.id)
+          notify('Account created (Local Demo Mode).')
+          return { error: null, user: newUser }
+        }
+        return { error: result.error }
+      }
       acceptSession(result.user)
       log('USER_REGISTER', `user:${result.user.id}`, { role: result.user.role, method: 'API' }, result.user.id)
       notify('Account created successfully.')
@@ -502,16 +563,20 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         createdAt: new Date().toISOString(),
       }
       let saved: Booking
-      try {
-        const remote = await apiCreateBooking({
-          roomId, title: booking.title,
-          purpose: booking.members ? `${booking.purpose} [Members: ${booking.members}]` : booking.purpose,
-          attendeeCount: booking.attendeeCount ?? 1,
-          isEvent: false, startTime: booking.start, endTime: booking.end,
-        })
-        saved = { ...booking, ...remote }
-      } catch (error) {
-        return error instanceof Error ? error.message : 'Unable to submit the booking request. Please try again.'
+      if (apiConnected) {
+        try {
+          const remote = await apiCreateBooking({
+            roomId, title: booking.title,
+            purpose: booking.members ? `${booking.purpose} [Members: ${booking.members}]` : booking.purpose,
+            attendeeCount: booking.attendeeCount ?? 1,
+            isEvent: false, startTime: booking.start, endTime: booking.end,
+          })
+          saved = { ...booking, ...remote }
+        } catch (error) {
+          return error instanceof Error ? error.message : 'Unable to submit the booking request. Please try again.'
+        }
+      } else {
+        saved = booking
       }
       setBookings((bs) => [...bs, saved])
       log('BOOKING_CREATE', `booking:${saved.id}`, { room: room.code, status: saved.status, title: saved.title })

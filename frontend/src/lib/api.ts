@@ -290,13 +290,23 @@ export function mapBackendAuditToFrontend(raw: any): AuditLog {
 
 /* ─────────────── REST API FUNCTIONS ─────────────── */
 
+function isBackendUnreachable(res: ApiResponse<unknown>): boolean {
+  return res.status === 0 || (res.status >= 500 && (!res.error || res.error === 'Request failed'))
+}
+
 /* 1. Auth */
-export async function apiLogin(email: string, password: string): Promise<{ user: User; token: string } | { error: string }> {
+export async function apiLogin(
+  email: string,
+  password: string,
+): Promise<{ user: User; token: string } | { error: string; offline?: true }> {
   const res = await apiFetch<{ accessToken?: string; token?: string; user: any }>('/auth/login', {
     method: 'POST',
     body: JSON.stringify({ email: email.trim(), password }),
   })
   if (!res.ok || !res.data) {
+    if (isBackendUnreachable(res)) {
+      return { error: 'Cannot connect to backend server.', offline: true }
+    }
     return { error: res.error || 'Login failed' }
   }
   const token = res.data.accessToken || res.data.token || ''
@@ -314,7 +324,7 @@ export async function apiRegister(input: {
   studentCode?: string
   hcmutId?: string
   utsId?: string
-}): Promise<{ user: User; token: string } | { error: string }> {
+}): Promise<{ user: User; token: string } | { error: string; offline?: true }> {
   const hcmut = (input.hcmutId || input.studentCode || '').trim().toUpperCase()
   const uts = (input.utsId || '').trim().toUpperCase()
   const combinedCode = uts ? `${hcmut} / ${uts}` : hcmut
@@ -330,6 +340,9 @@ export async function apiRegister(input: {
     }),
   })
   if (!res.ok || !res.data) {
+    if (isBackendUnreachable(res)) {
+      return { error: 'Cannot connect to backend server.', offline: true }
+    }
     return { error: res.error || 'Registration failed' }
   }
   const token = res.data.accessToken || res.data.token || ''
