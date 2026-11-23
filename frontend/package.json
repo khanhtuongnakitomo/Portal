@@ -7,7 +7,8 @@
   "scripts": {
     "test": "node --test test/*.test.ts",
     "dev": "vite",
-    "build": "vite build",
+    "build": "tsc --noEmit && vite build",
+    "typecheck": "tsc --noEmit",
     "preview": "vite preview",
     "format": "oxfmt"
   },

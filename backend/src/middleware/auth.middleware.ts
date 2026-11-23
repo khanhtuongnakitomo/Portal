@@ -1,11 +1,12 @@
 import type { NextFunction, Request, Response } from 'express';
 import jwt from 'jsonwebtoken';
 import { ForbiddenException, UnauthorizedException } from '../common/http-exceptions.js';
-import type { JwtPayload } from '../common/interfaces/jwt-payload.interface.js';
+import type { Environment } from '../config/environment.js';
 import { Role, UserStatus } from '../generated/prisma/client.js';
 import type { PrismaService } from '../prisma/prisma.service.js';
 
-export function createAuthMiddleware(prisma: PrismaService) {
+export function createAuthMiddleware(prisma: PrismaService, jwtConfig: Environment['jwt']) {
+  const { secret, issuer, audience } = jwtConfig;
   const authenticate = async (req: Request, _res: Response, next: NextFunction) => {
     try {
       const authHeader = req.headers.authorization;
@@ -14,15 +15,25 @@ export function createAuthMiddleware(prisma: PrismaService) {
       }
 
       const token = authHeader.slice(7).trim();
-      const secret =
-        process.env.JWT_ACCESS_SECRET || 'replace-with-at-least-32-random-characters-access';
-      const issuer = process.env.JWT_ISSUER || 'tne-portal-api';
-      const audience = process.env.JWT_AUDIENCE || 'tne-portal-client';
 
-      let payload: JwtPayload;
+      let payload: unknown;
       try {
-        payload = jwt.verify(token, secret, { issuer, audience }) as JwtPayload;
+        payload = jwt.verify(token, secret, { algorithms: ['HS256'], issuer, audience });
       } catch {
+        throw new UnauthorizedException('Unauthorized');
+      }
+
+      if (
+        typeof payload !== 'object' ||
+        payload === null ||
+        !('type' in payload) ||
+        payload.type !== 'access' ||
+        !('exp' in payload) ||
+        typeof payload.exp !== 'number' ||
+        !('sub' in payload) ||
+        typeof payload.sub !== 'string' ||
+        !/^[a-f\d]{8}(?:-[a-f\d]{4}){3}-[a-f\d]{12}$/i.test(payload.sub)
+      ) {
         throw new UnauthorizedException('Unauthorized');
       }
 
@@ -42,6 +53,11 @@ export function createAuthMiddleware(prisma: PrismaService) {
     }
   };
 
+  const optionalAuthenticate = (req: Request, res: Response, next: NextFunction) => {
+    if (req.headers.authorization === undefined) return next();
+    return authenticate(req, res, next);
+  };
+
   const requireRoles = (...roles: Role[]) => {
     return (req: Request, _res: Response, next: NextFunction) => {
       if (!req.user || !roles.includes(req.user.role)) {
@@ -51,5 +67,5 @@ export function createAuthMiddleware(prisma: PrismaService) {
     };
   };
 
-  return { authenticate, requireRoles };
+  return { authenticate, optionalAuthenticate, requireRoles };
 }

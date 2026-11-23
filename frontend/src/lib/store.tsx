@@ -1,40 +1,8 @@
-import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
-import type { AuditLog, Booking, BookingMember, Role, Room, RoomBlock, Settings, User } from './types'
-import { makePassCode, seedAudit, seedBlocks, seedBookings, seedRooms, seedSettings, seedUsers, uid } from './seed'
-import { addDays, daysBetween, durationMin, isWeekend, overlaps, parseHM, startOfDay } from './time'
-import {
-  apiApproveBooking,
-  apiCancelBooking,
-  apiCancelRoomBlock,
-  apiCheckoutKey,
-  apiCreateBooking,
-  apiCreateManager,
-  apiCreateRoom,
-  apiCreateRoomBlock,
-  apiGetAdminRooms,
-  apiGetAuditLogs,
-  apiGetCalendar,
-  apiGetRooms,
-  apiGetSettings,
-  apiGetUsers,
-  apiLogin,
-  apiMe,
-  apiGetMyBookings,
-  apiRegister,
-  apiRejectBooking,
-  apiReturnKey,
-  apiUpdateRoom,
-  apiUpdateSettings,
-  apiUpdateUserRole,
-  apiUpdateUserStatus,
-  clearAuth,
-  encodeRoomToBackend,
-  getStoredToken,
-  getStoredUser,
-  setStoredToken,
-  setStoredUser,
-  USER_KEY,
-} from './api'
+import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from 'react'
+import { useI18n } from './i18n'
+import { createApi, mapUser, type ApiAuth, type ApiResponse } from './api'
+import { addDays, at, CAMPUS_TZ, durationMin, isWeekend, overlaps, parseHM, sameDay, startOfWeek, toCampusIso } from './time'
+import type { AccountStatus, AuditLog, Booking, BookingMember, Role, Room, RoomBlock, RoomStatus, Settings, User } from './types'
 
 export interface Toast {
   id: number
@@ -45,966 +13,658 @@ export interface Toast {
 export const ACTIVE_STATUSES: Booking['status'][] = ['PENDING', 'APPROVED', 'KEY_CHECKED_OUT']
 
 type Result = string | null
+type UserQuery = { page: number; search?: string; role?: Role; status?: AccountStatus }
+type AuditQuery = { page: number; action?: string; targetType?: string }
+type Slot = { roomId: string; start: Date; end: Date }
+type BookingInput = Slot & { title: string; purpose: string; attendeeCount: number; memberList?: BookingMember[] }
+type BlockInput = Slot & { reason: string; displace: boolean }
+type BlockInterval = Pick<Slot, 'start' | 'end'>
+type Session = { token: string; user: User; expiresAt: number }
+type Read = 'calendar' | 'rooms' | 'settings' | 'mine' | 'today' | 'overdue' | 'pending' | 'users' | 'audit'
+type Api = ReturnType<typeof createApi>
+type CalendarRange = { from: Date; to: Date }
+type CalendarRead = { range: CalendarRange; started: number; applied: number; pending: boolean; ok?: boolean }
 
 export interface Store {
   currentUser: User | null
   users: User[]
+  usersTotal: number
   rooms: Room[]
   bookings: Booking[]
+  myBookings: Booking[]
   blocks: RoomBlock[]
+  managerToday: Booking[]
+  overdueKeys: Booking[]
+  pendingQueue: Booking[]
   settings: Settings
+  settingsLoaded: boolean
   audit: AuditLog[]
+  auditTotal: number
   toasts: Toast[]
-  apiConnected: boolean
-  sessionReady: boolean
-  isLoading: boolean
-  notify: (message: string, tone?: Toast['tone']) => void
-  logout: () => void
-  createBooking: (input: { roomId: string; start: Date; end: Date; phone: string; title: string; purpose: string; members?: string; memberList?: BookingMember[] }) => Promise<Result>
-  cancelBooking: (id: string) => void
-  approveBooking: (id: string, note?: string) => void
-  rejectBooking: (id: string, note: string) => Result
-  checkoutKey: (id: string) => void
-  returnKey: (id: string) => void
-  createBlock: (input: { roomId: string; start: Date; end: Date; reason: string }) => Result
-  blockFacilityWindow: (input: {
-    roomIds: string[]
-    start: Date
-    end: Date
-    reason: string
-  }) => Result
-  cancelBlock: (id: string) => void
-  deleteBlock?: (id: string) => void
-  saveRoom: (room: Room) => Result
-  deleteRoom: (id: string) => void
-  updateUserRole: (id: string, role: Role, studentCode?: string) => Result
-  updateProfile: (patch: { fullName: string; hcmutId?: string; utsId?: string }) => Result
-  toggleUserStatus: (id: string) => void
-  updateSettings: (s: Settings) => Result
-  validateSlot: (roomId: string, start: Date, end: Date, ignoreBookingId?: string) => Result
-  refreshData: () => Promise<void>
-  loginAsync: (email: string, password: string) => Promise<{ error: string | null; user?: User }>
-  registerAsync: (input: { fullName: string; email: string; password: string; studentCode?: string; hcmutId?: string; utsId?: string }) => Promise<{ error: string | null; user?: User }>
-  createManagerAccount: (input: { fullName: string; email: string; password: string }) => Promise<string | null>
-  assignRoomSchedule: (input: {
-    roomId: string
-    start: Date
-    end: Date
-    title: string
-    purpose: string
-    category?: string
-    mode?: 'EVENT' | 'BLOCK'
-    attendeeCount?: number
-  }) => string | null
+  connection: 'connecting' | 'live' | 'offline'
+  sessionRecovery: 'checking' | 'offline' | null
+  retrySession(): Promise<void>
+  notify(message: string, tone?: Toast['tone']): void
+  login(email: string, password: string): Promise<Result>
+  startSession(auth: ApiAuth): void
+  register(input: { fullName: string; email: string; password: string; studentCode: string }): Promise<Result>
+  updateProfile(input: { fullName: string }): Promise<Result>
+  logout(): void
+  setVisibleRange(from: Date, to: Date): void
+  refreshData(): Promise<void>
+  refreshSettings(): Promise<void>
+  refreshMyBookings(): Promise<boolean>
+  refreshKeyDesk(): Promise<void>
+  createBooking(input: BookingInput): Promise<Result>
+  cancelBooking(id: string): Promise<Result>
+  approveBooking(id: string, note?: string): Promise<Result>
+  rejectBooking(id: string, note: string): Promise<Result>
+  checkoutKey(id: string, passCode: string): Promise<Result>
+  returnKey(id: string): Promise<Result>
+  createBlock(input: BlockInput): Promise<Result>
+  cancelBlock(roomId: string, expected?: BlockInterval): Promise<Result>
+  saveRoom(room: Room): Promise<Result>
+  setRoomStatus(id: string, status: RoomStatus): Promise<Result>
+  updateUserRole(id: string, role: Role, studentCode?: string): Promise<Result>
+  setUserStatus(id: string, status: AccountStatus): Promise<Result>
+  createManagerAccount(input: { fullName: string; email: string; password: string }): Promise<Result>
+  loadUsers(query: UserQuery): Promise<void>
+  loadAudit(query: AuditQuery): Promise<void>
+  updateSettings(settings: Settings): Promise<Result>
+  assignRoomSchedule(input: Slot & { title: string; purpose: string; category?: string; mode?: 'EVENT' | 'BLOCK'; attendeeCount?: number; displace?: boolean }): Promise<Result>
+  validateSlot(roomId: string, start: Date, end: Date, ignoreBookingId?: string): Result
+  user(id: string): User | undefined
+  room(id: string): Room | undefined
 }
 
 const Ctx = createContext<Store | null>(null)
+// One atomic storage item contains the bearer token, display identity and expiry.
+const TOKEN_KEY = 'tne_access_token'
+const clientErrors: Record<string, string> = {
+  'The server returned an invalid session.': 'core.invalidSession',
+  'The server returned an invalid response.': 'core.invalidResponse',
+  'Cannot connect to the booking server.': 'core.offlineError',
+  'Session expired. Please sign in again.': 'core.expired',
+}
+const INITIAL_SETTINGS: Settings = {
+  timezone: CAMPUS_TZ,
+  openTime: '08:00',
+  closeTime: '17:00',
+  maxDurationMinutes: 240,
+  maxAdvanceDays: 7,
+  maxActiveBookings: 3,
+}
 
-function loadLocal<T>(key: string, fallback: T): T {
+function readSession(serialized: string | null): Session | null {
+  if (!serialized) return null
   try {
-    const raw = localStorage.getItem(key)
-    if (!raw) return fallback
-    return JSON.parse(raw) as T
+    const session = JSON.parse(serialized) as Session
+    return session && typeof session.token === 'string' && session.token && Number.isFinite(session.expiresAt) ? session : null
   } catch {
-    return fallback
+    return null
   }
 }
 
-function loadUsers(): User[] {
-  const saved = loadLocal<User[]>('tne_v7_users', [])
-  return saved.filter((u) => /^[0-9a-f]{8}-[0-9a-f-]{27}$/i.test(u.id)).map((u) => ({ ...u, password: '' }))
+function sameIdentity(saved: Session | null, active: Session | null) {
+  return !!saved && !!active && saved.token === active.token && JSON.stringify(saved.user) === JSON.stringify(active.user)
 }
 
-function loadInitialUserId(users: User[]): string | null {
-  try {
-    const raw = localStorage.getItem(USER_KEY)
-    if (raw) {
-      const u = JSON.parse(raw)
-      if (u?.id && users.some((x) => x.id === u.id)) return u.id
-      if (u?.id) return u.id
-    }
-  } catch {}
-  return null
+function clearLegacyStorage() {
+  localStorage.removeItem('tne_current_user')
+  for (let i = localStorage.length - 1; i >= 0; i--) {
+    const key = localStorage.key(i)
+    if (key?.startsWith('tne_v')) localStorage.removeItem(key)
+  }
+}
+
+function defaultRange() {
+  const week = startOfWeek(new Date())
+  return { from: addDays(week, -1), to: addDays(week, 8) }
+}
+
+function rangeKey({ from, to }: CalendarRange) {
+  return `${+from}:${+to}`
+}
+
+function mergeCalendarRange<T extends { id: string; start: string; end: string }>(
+  current: T[], incoming: T[], { from, to }: CalendarRange, newer: CalendarRange[],
+) {
+  const protectedByNewerRead = (item: T) => newer.some((range) => overlaps(item.start, item.end, range.from, range.to))
+  const merged = new Map<string, T>()
+  const protectedIds = new Set<string>()
+  for (const item of current) {
+    if (protectedByNewerRead(item)) protectedIds.add(item.id)
+    if (protectedIds.has(item.id) || !overlaps(item.start, item.end, from, to)) merged.set(item.id, item)
+  }
+  for (const item of incoming) {
+    if (!protectedIds.has(item.id) && !protectedByNewerRead(item)) merged.set(item.id, item)
+  }
+  return [...merged.values()]
+}
+
+function upsert<T extends { id: string }>(entries: T[], item: T): T[] {
+  return entries.some((entry) => entry.id === item.id) ? entries.map((entry) => entry.id === item.id ? item : entry) : [...entries, item]
 }
 
 export function StoreProvider({ children }: { children: ReactNode }) {
-  const [users, setUsers] = useState<User[]>(loadUsers)
-  const [rooms, setRooms] = useState<Room[]>(() => loadLocal('tne_v5_rooms', seedRooms))
-  const [bookings, setBookings] = useState<Booking[]>(() => loadLocal('tne_v10_bookings', seedBookings()))
-  const [blocks, setBlocks] = useState<RoomBlock[]>(() => loadLocal('tne_v5_blocks', seedBlocks()))
-  const [settings, setSettings] = useState<Settings>(() => {
-    const loaded = loadLocal('tne_v6_settings', seedSettings)
-    return { ...loaded, maxDurationMinutes: 120 }
-  })
-  const [audit, setAudit] = useState<AuditLog[]>(() => loadLocal('tne_v5_audit', seedAudit()))
-  const [currentUserId, setCurrentUserId] = useState<string | null>(() => loadInitialUserId(users))
+  const { t } = useI18n()
+  // Background requests may outlive a locale change; keep the latest translator without restarting session recovery.
+  const translator = useRef(t)
+  useEffect(() => { translator.current = t }, [t])
+  const localError = useCallback((message: string) => Object.prototype.hasOwnProperty.call(clientErrors, message) ? translator.current(clientErrors[message]) : message, [])
+  const [session, setSession] = useState<Session | null>(null)
+  const [sessionRecovery, setSessionRecovery] = useState<Store['sessionRecovery']>('checking')
+  const [users, setUsers] = useState<User[]>([])
+  const [usersTotal, setUsersTotal] = useState(0)
+  const [rooms, setRooms] = useState<Room[]>([])
+  const [bookings, setBookings] = useState<Booking[]>([])
+  const [myBookings, setMyBookings] = useState<Booking[]>([])
+  const [blocks, setBlocks] = useState<RoomBlock[]>([])
+  const [calendarUsers, setCalendarUsers] = useState<User[]>([])
+  const [deskUsers, setDeskUsers] = useState<User[]>([])
+  const [managerToday, setManagerToday] = useState<Booking[]>([])
+  const [overdueKeys, setOverdueKeys] = useState<Booking[]>([])
+  const [pendingQueue, setPendingQueue] = useState<Booking[]>([])
+  const [settings, setSettings] = useState<Settings | null>(null)
+  const [audit, setAudit] = useState<AuditLog[]>([])
+  const [auditTotal, setAuditTotal] = useState(0)
   const [toasts, setToasts] = useState<Toast[]>([])
-  const [apiConnected, setApiConnected] = useState<boolean>(false)
-  const [sessionReady, setSessionReady] = useState(false)
-  const [isLoading, setIsLoading] = useState<boolean>(false)
+  const [reads, setReads] = useState<Partial<Record<Read, boolean>>>({})
+  const activeSession = useRef<Session | null>(null)
+  const restoringStorage = useRef<string | null>(null)
+  const epoch = useRef(0)
+  const toastId = useRef(0)
+  const sequence = useRef(0)
+  const pending = useRef<Partial<Record<Read, number>>>({})
+  const calendarReads = useRef(new Map<string, CalendarRead>())
+  const personalBookings = useRef<Booking[] | null>(null)
+  const recentRanges = useRef<CalendarRange[]>([])
+  const userQuery = useRef<UserQuery | null>(null)
+  const auditQuery = useRef<AuditQuery | null>(null)
 
-  const toastSeq = useRef(0)
-  const logSeq = useRef(100)
-
-  // Sync to localStorage
-  useEffect(() => {
-    try {
-      localStorage.setItem('tne_v7_users', JSON.stringify(users))
-    } catch {}
-  }, [users])
-
-  useEffect(() => {
-    try {
-      localStorage.setItem('tne_v5_rooms', JSON.stringify(rooms))
-    } catch {}
-  }, [rooms])
-
-  useEffect(() => {
-    try {
-      localStorage.setItem('tne_v10_bookings', JSON.stringify(bookings))
-    } catch {}
-  }, [bookings])
-
-  useEffect(() => {
-    try {
-      localStorage.setItem('tne_v5_blocks', JSON.stringify(blocks))
-    } catch {}
-  }, [blocks])
-
-  useEffect(() => {
-    try {
-      localStorage.setItem('tne_v6_settings', JSON.stringify(settings))
-    } catch {}
-  }, [settings])
-
-  useEffect(() => {
-    try {
-      localStorage.setItem('tne_v5_audit', JSON.stringify(audit))
-    } catch {}
-  }, [audit])
-
-  const currentUser = useMemo(() => {
-    if (!currentUserId) return null
-    return users.find((u) => u.id === currentUserId) ?? null
-  }, [users, currentUserId])
-
-  const acceptSession = useCallback((user: User) => {
-    setUsers((prev) => [...prev.filter((u) => u.id !== user.id && u.email.toLowerCase() !== user.email.toLowerCase()), user])
-    setCurrentUserId(user.id)
-    setStoredUser(user)
-    setApiConnected(true)
+  const addToast = useCallback((message: string, tone: Toast['tone'] = 'ok') => {
+    const id = ++toastId.current
+    setToasts((items) => [...items, { id, message, tone }])
+    window.setTimeout(() => setToasts((items) => items.filter((item) => item.id !== id)), 4500)
   }, [])
 
-  const acceptLocalDemoSession = useCallback((user: User) => {
-    setUsers((prev) => {
-      const merged = new Map<string, User>()
-      for (const u of seedUsers) merged.set(u.id, u)
-      for (const u of prev) merged.set(u.id, u)
-      merged.set(user.id, user)
-      return Array.from(merged.values())
+  const reset = useCallback(() => {
+    ++epoch.current
+    activeSession.current = null
+    restoringStorage.current = null
+    pending.current = {}
+    calendarReads.current.clear()
+    recentRanges.current = []
+    personalBookings.current = null
+    userQuery.current = null
+    auditQuery.current = null
+    setSession(null)
+    setUsers([])
+    setUsersTotal(0)
+    setRooms([])
+    setBookings([])
+    setMyBookings([])
+    setBlocks([])
+    setCalendarUsers([])
+    setDeskUsers([])
+    setManagerToday([])
+    setOverdueKeys([])
+    setPendingQueue([])
+    setSettings(null)
+    setAudit([])
+    setAuditTotal(0)
+    setToasts([])
+    setReads({})
+  }, [])
+
+  const logout = useCallback(() => {
+    reset()
+    setSessionRecovery(null)
+    localStorage.removeItem(TOKEN_KEY)
+    clearLegacyStorage()
+  }, [reset])
+
+  const install = useCallback((next: Session) => {
+    activeSession.current = next
+    localStorage.setItem(TOKEN_KEY, JSON.stringify(next))
+    setSession(next)
+    setSessionRecovery(null)
+  }, [])
+
+  const syncSession = useCallback(async () => {
+    const serialized = localStorage.getItem(TOKEN_KEY)
+    const saved = readSession(serialized)
+    if (sameIdentity(saved, activeSession.current) || (serialized !== null && serialized === restoringStorage.current)) return
+    reset()
+    clearLegacyStorage()
+    const started = epoch.current
+    if (!saved) {
+      if (serialized !== null) localStorage.removeItem(TOKEN_KEY)
+      setSessionRecovery(null)
+      return
+    }
+    restoringStorage.current = serialized
+    setSessionRecovery('checking')
+    const result = await createApi(saved.token, () => {}).apiMe()
+    if (started !== epoch.current) return
+    if (localStorage.getItem(TOKEN_KEY) !== serialized) {
+      // The queued storage event will load the newer session.
+      restoringStorage.current = null
+      return
+    }
+    restoringStorage.current = null
+    if (!result.ok) {
+      if (result.status === 401) {
+        logout()
+        addToast(translator.current('core.expired'), 'error')
+      } else {
+        setSessionRecovery('offline')
+      }
+      return
+    }
+    install({ ...saved, user: result.data })
+  }, [addToast, install, logout, reset])
+
+  useEffect(() => {
+    const onStorage = (event: StorageEvent) => {
+      if (event.storageArea === localStorage && (event.key === TOKEN_KEY || event.key === null)) void syncSession()
+    }
+    window.addEventListener('storage', onStorage)
+    void syncSession()
+    return () => window.removeEventListener('storage', onStorage)
+  }, [syncSession])
+
+  const expire = useCallback((token: string, started: number) => {
+    if (started !== epoch.current) return
+    const saved = readSession(localStorage.getItem(TOKEN_KEY))
+    if (saved?.token !== token || !sameIdentity(saved, activeSession.current)) {
+      void syncSession()
+      return
+    }
+    logout()
+    addToast(translator.current('core.expired'), 'error')
+  }, [addToast, logout, syncSession])
+
+  useEffect(() => {
+    if (!session) return
+    const started = epoch.current
+    let timer: number
+    const check = () => {
+      const remaining = session.expiresAt - Date.now()
+      if (remaining <= 0) expire(session.token, started)
+      else timer = window.setTimeout(check, Math.min(remaining, 2_147_483_647))
+    }
+    check()
+    return () => window.clearTimeout(timer)
+  }, [expire, session])
+
+  const apiForSession = useCallback(() => {
+    const started = epoch.current
+    const current = activeSession.current
+    return createApi(current?.token ?? null, () => {
+      if (current) expire(current.token, started)
+    }, current?.user.id)
+  }, [expire])
+
+  const load = useCallback(async <T,>(
+    key: Read,
+    request: () => Promise<ApiResponse<T>>,
+    apply: (data: T) => void,
+    onError?: (message: string) => void,
+  ) => {
+    const started = epoch.current
+    const id = ++sequence.current
+    pending.current[key] = id
+    const result = await request()
+    if (started !== epoch.current || pending.current[key] !== id) return false
+    setReads((state) => state[key] === result.ok ? state : { ...state, [key]: result.ok })
+    if (result.ok) apply(result.data)
+    else onError?.(result.message)
+    return result.ok
+  }, [])
+
+  const refreshMyBookings = useCallback(async () => {
+    if (!activeSession.current) return false
+    const api = apiForSession()
+    const started = epoch.current
+    return load<Booking[]>('mine', async () => {
+      const items = new Map<string, Booking>()
+      for (let page = 1; ; page++) {
+        const result = await api.apiGetMyBookings(page)
+        if (!result.ok) return result
+        if (started !== epoch.current) return { ok: false, status: 0, message: translator.current('core.changed') }
+        for (const booking of result.data.items) items.set(booking.id, booking)
+        if (page * result.data.limit >= result.data.total || !result.data.items.length) return { ok: true, data: [...items.values()] }
+      }
+    }, (items) => {
+      personalBookings.current = items
+      setMyBookings(items)
     })
-    setStoredToken(`local_demo_token_${user.id}`)
-    setStoredUser(user)
-    setCurrentUserId(user.id)
-    setApiConnected(false)
-  }, [])
+  }, [apiForSession, load])
 
-  const actor = currentUser?.id ?? 'anonymous'
+  const loadCalendarRange = useCallback(async (range: CalendarRange) => {
+    const key = rangeKey(range)
+    const started = epoch.current
+    const id = ++sequence.current
+    const previous = calendarReads.current.get(key)
+    const read = { range, started: id, applied: previous?.applied ?? 0, pending: true, ok: previous?.ok }
+    calendarReads.current.set(key, read)
+    const api = apiForSession()
+    const result = await api.apiGetCalendar(toCampusIso(range.from), toCampusIso(range.to))
+    if (started !== epoch.current || calendarReads.current.get(key)?.started !== id) return
+    read.pending = false
+    read.ok = result.ok
+    const statuses = recentRanges.current.map((entry) => calendarReads.current.get(rangeKey(entry))?.ok)
+    const connected = statuses.includes(false) ? false : statuses.every((status) => status === true) ? true : undefined
+    setReads((state) => state.calendar === connected ? state : { ...state, calendar: connected })
+    if (!result.ok) return
+    read.applied = id
+    // A slower response may fill the rest of its range, but not overwrite newer overlapping data.
+    const newer = [...calendarReads.current.values()].filter((entry) => entry.applied > id).map((entry) => entry.range)
+    const { bookings, blocks, users } = result.data
+    setBookings((items) => mergeCalendarRange(items, bookings, range, newer))
+    setBlocks((items) => mergeCalendarRange(items, blocks, range, newer))
+    setCalendarUsers((items) => [...new Map([...items, ...users].map((entry) => [entry.id, entry])).values()])
+    if (activeSession.current && personalBookings.current) {
+      const inNewerRange = (booking: Booking) => newer.some(({ from, to }) => overlaps(booking.start, booking.end, from, to))
+      const incoming = new Set(bookings.filter((booking) => booking.isMine).map((booking) => booking.id))
+      const personal = personalBookings.current
+      const known = new Map(personal.map((booking) => [booking.id, booking.status]))
+      const changed = bookings.some((booking) => booking.isMine && !inNewerRange(booking) && known.get(booking.id) !== booking.status)
+      const removed = personal.some((booking) => booking.status !== 'CANCELLED' && booking.status !== 'REJECTED' &&
+        !incoming.has(booking.id) && overlaps(booking.start, booking.end, range.from, range.to) && !inNewerRange(booking))
+      if (changed || removed) await refreshMyBookings()
+    }
+  }, [apiForSession, refreshMyBookings])
 
-  const notify = useCallback((message: string, tone: Toast['tone'] = 'ok') => {
-    const id = ++toastSeq.current
-    setToasts((t) => [...t, { id, message, tone }])
-    setTimeout(() => setToasts((t) => t.filter((x) => x.id !== id)), 3600)
-  }, [])
+  const refreshCalendar = useCallback(async () => {
+    if (!recentRanges.current.length) recentRanges.current = [defaultRange()]
+    await Promise.all(recentRanges.current.map(loadCalendarRange))
+  }, [loadCalendarRange])
 
-  useEffect(() => {
-    let active = true
-    const restore = async () => {
-      try {
-        const token = getStoredToken()
-        if (token?.startsWith('local_demo_token_')) {
-          const cached = getStoredUser()
-          if (cached?.id) {
-            if (active) acceptLocalDemoSession(cached)
-            return
+  const setVisibleRange = useCallback((from: Date, to: Date) => {
+    if (!(to > from)) return
+    const paddedFrom = addDays(from, -1)
+    const upperLimit = addDays(paddedFrom, 90)
+    const paddedTo = addDays(to, 1)
+    const range = { from: paddedFrom, to: paddedTo < upperLimit ? paddedTo : upperLimit }
+    const key = rangeKey(range)
+    recentRanges.current = [range, ...recentRanges.current.filter((entry) => rangeKey(entry) !== key)].slice(0, 4)
+    if (!calendarReads.current.get(key)?.pending) void loadCalendarRange(range)
+  }, [loadCalendarRange])
+
+  const refreshKeyDesk = useCallback(async () => {
+    const role = activeSession.current?.user.role
+    if (!role || role === 'USER') return
+    const api = apiForSession()
+    const started = epoch.current
+    await Promise.all([
+      load('today', api.apiGetManagerToday, ({ bookings, users }) => {
+        setManagerToday(bookings)
+        setDeskUsers((items) => [...new Map([...items, ...users].map((entry) => [entry.id, entry])).values()])
+      }),
+      load('overdue', api.apiGetOverdueKeys, ({ bookings, users }) => {
+        setOverdueKeys(bookings)
+        setDeskUsers((items) => [...new Map([...items, ...users].map((entry) => [entry.id, entry])).values()])
+      }),
+      load('pending', async () => {
+        const bookings = new Map<string, Booking>()
+        const users = new Map<string, User>()
+        for (let page = 1; ; page++) {
+          const result = await api.apiGetPendingBookings(page)
+          if (!result.ok) return result
+          if (started !== epoch.current) return { ok: false, status: 0, message: translator.current('core.changed') } as const
+          for (const booking of result.data.bookings) bookings.set(booking.id, booking)
+          for (const user of result.data.users) users.set(user.id, user)
+          if (page * result.data.limit >= result.data.total || !result.data.bookings.length) {
+            return { ok: true, data: { bookings: [...bookings.values()].sort((a, b) => +new Date(a.start) - +new Date(b.start)), users: [...users.values()] } } as const
           }
         }
-        if (!token || token.startsWith('local_token_') || token.startsWith('preview_token_')) {
-          clearAuth()
-          if (active) setCurrentUserId(null)
-          return
-        }
-        const user = await apiMe()
-        if (!active) return
-        if (user) acceptSession(user)
-        else {
-          clearAuth()
-          setCurrentUserId(null)
-          notify('Your session is invalid or expired. Please sign in again.', 'error')
-        }
-      } finally {
-        if (active) setSessionReady(true)
-      }
-    }
-    restore().catch(() => {
-      if (active) { clearAuth(); setCurrentUserId(null); setSessionReady(true) }
+      }, ({ bookings, users }) => {
+        setPendingQueue(bookings)
+        setDeskUsers((items) => [...new Map([...items, ...users].map((entry) => [entry.id, entry])).values()])
+      }),
+    ])
+  }, [apiForSession, load])
+
+  const loadUsers = useCallback(async (query: UserQuery) => {
+    if (activeSession.current?.user.role !== 'ADMIN') return
+    userQuery.current = query
+    const api = apiForSession()
+    await load('users', () => api.apiGetUsers(query), ({ items, total }) => {
+      setUsers(items)
+      setUsersTotal(total)
+    }, (message) => {
+      setUsers([])
+      setUsersTotal(0)
+      addToast(localError(message), 'error')
     })
-    return () => { active = false }
-  }, [acceptSession, acceptLocalDemoSession, notify])
+  }, [addToast, apiForSession, load, localError])
 
-  const log = useCallback(
-    (action: string, entity: string, metadata: Record<string, unknown>, actorId = actor) => {
-      const id = `log_${String(++logSeq.current).padStart(4, '0')}`
-      setAudit((a) => [{ id, ts: new Date().toISOString(), actorId, action, entity, metadata }, ...a])
-    },
-    [actor],
-  )
+  const loadAudit = useCallback(async (query: AuditQuery) => {
+    if (activeSession.current?.user.role !== 'ADMIN') return
+    auditQuery.current = query
+    const api = apiForSession()
+    await load('audit', () => api.apiGetAuditLogs(query), ({ items, total }) => {
+      setAudit(items)
+      setAuditTotal(total)
+    }, (message) => {
+      setAudit([])
+      setAuditTotal(0)
+      addToast(localError(message), 'error')
+    })
+  }, [addToast, apiForSession, load, localError])
 
-  const patchBooking = useCallback((id: string, patch: Partial<Booking>) => {
-    setBookings((bs) => bs.map((b) => (b.id === id ? { ...b, ...patch } : b)))
-  }, [])
+  const refreshRooms = useCallback(async () => {
+    const role = activeSession.current?.user.role
+    const api = apiForSession()
+    await load('rooms', () => api.apiGetRooms(role === 'MANAGER' || role === 'ADMIN'), setRooms)
+  }, [apiForSession, load])
 
-  const validateSlot = useCallback(
-    (roomId: string, start: Date, end: Date, ignoreBookingId?: string): Result => {
-      const room = rooms.find((r) => r.id === roomId)
-      if (!room) return 'Room not found.'
-      if (room.status !== 'AVAILABLE') return `Room ${room.code} is ${room.status.toLowerCase()}.`
-      if (end <= start) return 'End time must be after start time.'
-      const lead = daysBetween(new Date(), start)
-      if (lead < settings.minAdvanceDays || lead > settings.maxAdvanceDays)
-        return `Bookings must be made ${settings.minAdvanceDays}–${settings.maxAdvanceDays} days in advance.`
-      const open = parseHM(settings.openTime)
-      const close = parseHM(settings.closeTime)
-      const sMin = start.getHours() * 60 + start.getMinutes()
-      const eMin = end.getHours() * 60 + end.getMinutes() || 24 * 60
-      if (sMin < open.h * 60 + open.m || eMin > close.h * 60 + close.m)
-        return `Outside opening hours (${settings.openTime}–${settings.closeTime}).`
-      const maxDur = Math.min(120, settings.maxDurationMinutes || 120)
-      if (durationMin(start, end) > maxDur)
-        return `Maximum booking duration is 2 hours (${maxDur} minutes).`
+  const refreshSettings = useCallback(async () => {
+    await load('settings', apiForSession().apiGetSettings, setSettings)
+  }, [apiForSession, load])
 
-      // Check if current user already has a PENDING booking on that room overlapping this slot
-      const myPendingClash = bookings.find(
-        (b) =>
-          b.roomId === roomId &&
-          b.id !== ignoreBookingId &&
-          b.status === 'PENDING' &&
-          b.userId === currentUser?.id &&
-          overlaps(b.start, b.end, start, end),
-      )
-      if (myPendingClash) return 'You already have a pending request for this time window.'
-
-      const clash = bookings.find(
-        (b) =>
-          b.roomId === roomId &&
-          b.id !== ignoreBookingId &&
-          (b.status === 'APPROVED' || b.status === 'KEY_CHECKED_OUT') &&
-          overlaps(b.start, b.end, start, end),
-      )
-      if (clash) return 'Overlaps an existing reservation.'
-      const blk = blocks.find((k) => k.active && k.roomId === roomId && overlaps(k.start, k.end, start, end))
-      if (blk) return `Room blocked: ${blk.reason}.`
-      return null
-    },
-    [rooms, settings, bookings, blocks, currentUser],
-  )
-
-  // Background refresh from REST API
   const refreshData = useCallback(async () => {
-    try {
-      setIsLoading(true)
-      const [remoteRooms, remoteSettings, calRes, personalBookings] = await Promise.all([
-        apiGetRooms(),
-        apiGetSettings(),
-        apiGetCalendar(),
-        sessionReady && currentUser ? apiGetMyBookings() : Promise.resolve([]),
-      ])
+    await Promise.all([
+      refreshCalendar(), refreshRooms(), refreshMyBookings(), refreshKeyDesk(),
+      refreshSettings(),
+      userQuery.current && loadUsers(userQuery.current), auditQuery.current && loadAudit(auditQuery.current),
+    ])
+  }, [loadAudit, loadUsers, refreshCalendar, refreshKeyDesk, refreshMyBookings, refreshRooms, refreshSettings])
 
-      if (remoteRooms && remoteRooms.length > 0) {
-        setRooms(remoteRooms)
-        setApiConnected(true)
-      }
-      if (remoteSettings) {
-        setSettings(remoteSettings)
-        setApiConnected(true)
-      }
-      if (calRes.ok) {
-        const allBookings = new Map(calRes.bookings.map((booking) => [booking.id, booking]))
-        personalBookings.forEach((booking) => allBookings.set(booking.id, booking))
-        setBookings([...allBookings.values()])
-        setBlocks(calRes.blocks)
-        setUsers((prev) => {
-          const map = new Map(prev.map((user) => [user.id, user]))
-          calRes.users.forEach((user) => map.set(user.id, { ...map.get(user.id), ...user }))
-          return [...map.values()]
-        })
-        setApiConnected(true)
-      }
-
-      // If user is Admin or Manager, also sync users and audit logs
-      if (currentUser?.role === 'ADMIN') {
-        const [remoteUsers, remoteAudit] = await Promise.all([
-          apiGetUsers(),
-          apiGetAuditLogs(),
-        ])
-        if (remoteUsers && remoteUsers.length > 0) {
-          setUsers((prev) => {
-            const map = new Map(prev.map((u) => [u.id, u]))
-            remoteUsers.forEach((u) => map.set(u.id, { ...map.get(u.id), ...u }))
-            return Array.from(map.values())
-          })
-        }
-        if (remoteAudit && remoteAudit.length > 0) {
-          setAudit(remoteAudit)
-        }
-      }
-    } catch {
-      // Offline fallback: keep local state
-    } finally {
-      setIsLoading(false)
-    }
-  }, [currentUser?.id, currentUser?.role, sessionReady])
-
-  // Probe API connection on initial mount
   useEffect(() => {
-    refreshData().catch(() => {})
-  }, [refreshData])
+    if (!sessionRecovery) void refreshData()
+  }, [refreshData, sessionRecovery, session])
+
+  useEffect(() => {
+    if (!session || session.user.role === 'USER') return
+    const timer = window.setInterval(() => void refreshKeyDesk(), 60_000)
+    return () => window.clearInterval(timer)
+  }, [refreshKeyDesk, session])
+
+  const renderedEpoch = epoch.current
+
+  const startSession = ({ accessToken, user, expiresIn }: ApiAuth) => {
+    if (renderedEpoch !== epoch.current) throw new Error(translator.current('core.changed'))
+    if (!accessToken || !user || !Number.isFinite(expiresIn) || expiresIn <= 0) {
+      throw new Error(t('core.invalidSession'))
+    }
+    const next = { token: accessToken, user: mapUser(user), expiresAt: Date.now() + expiresIn * 1000 }
+    reset()
+    clearLegacyStorage()
+    install(next)
+  }
+
+  const authenticate = async (request: (api: Api) => ReturnType<Api['apiLogin']>): Promise<Result> => {
+    if (renderedEpoch !== epoch.current) return translator.current('core.changed')
+    const started = epoch.current
+    const initialStorage = localStorage.getItem(TOKEN_KEY)
+    const result = await request(createApi(null, () => {}))
+    if (started !== epoch.current || localStorage.getItem(TOKEN_KEY) !== initialStorage) return translator.current('core.changed')
+    if (!result.ok) return localError(result.message)
+    try {
+      startSession(result.data)
+    } catch (error) {
+      if (error instanceof Error) return error.message
+      throw error
+    }
+    return null
+  }
+
+  const reconcileBookings = async () => {
+    await Promise.all([refreshCalendar(), refreshMyBookings(), refreshKeyDesk()])
+  }
+
+  const mutate = async <T,>(request: (api: Api) => Promise<ApiResponse<T>>, onSuccess?: (data: T) => void | Promise<void>): Promise<Result> => {
+    if (renderedEpoch !== epoch.current) return translator.current('core.changed')
+    const started = epoch.current
+    if (!activeSession.current) return t('core.signInRequired')
+    const result = await request(apiForSession())
+    if (started !== epoch.current) return !result.ok && result.status === 401 ? localError(result.message) : translator.current('core.changed')
+    if (!result.ok) {
+      if (result.status === 409) await reconcileBookings()
+      return started === epoch.current ? localError(result.message) : translator.current('core.changed')
+    }
+    await onSuccess?.(result.data)
+    return started === epoch.current ? null : translator.current('core.changed')
+  }
+
+  const reconcileTransition = async (booking: Booking) => {
+    setBookings((items) => {
+      if (booking.status === 'CANCELLED' || booking.status === 'REJECTED') return items.filter((item) => item.id !== booking.id)
+      return items.map((item) => item.id === booking.id ? { ...booking, passCode: null } : item)
+    })
+    setMyBookings((items) => items.map((item) => item.id === booking.id ? booking : item))
+    if (activeSession.current?.user.role !== 'USER' && booking.status !== 'PENDING') {
+      setPendingQueue((items) => items.filter((item) => item.id !== booking.id))
+    }
+    setManagerToday((items) => items.map((item) => item.id === booking.id ? booking : item))
+    setOverdueKeys((items) => items.filter((item) => item.id !== booking.id || booking.status === 'KEY_CHECKED_OUT'))
+    await reconcileBookings()
+  }
+
+  const postBooking = (input: BookingInput, isEvent: boolean) => mutate((api) => api.apiCreateBooking({
+    roomId: input.roomId, title: input.title.trim(), attendeeCount: input.attendeeCount, isEvent,
+    purpose: input.memberList?.length
+      ? `${input.purpose.trim()} [Members: ${input.memberList.map((m) => `${m.name?.trim() ?? ''} (${[m.hcmutId && `HCMUT: ${m.hcmutId}`, m.utsId && `UTS: ${m.utsId}`].filter(Boolean).join(' · ')})`).join(', ')}]`
+      : input.purpose.trim(),
+    startTime: toCampusIso(input.start), endTime: toCampusIso(input.end),
+  }), async (booking) => {
+    if (recentRanges.current.some(({ from, to }) => overlaps(booking.start, booking.end, from, to))) {
+      setBookings((items) => upsert(items, { ...booking, passCode: null }))
+    }
+    if (booking.isMine) setMyBookings((items) => upsert(items, booking))
+    await reconcileBookings()
+  })
+
+  const createBlock = (input: BlockInput) => mutate((api) => api.apiCreateRoomBlock({
+    roomId: input.roomId, startTime: toCampusIso(input.start), endTime: toCampusIso(input.end),
+    reason: input.reason.trim(), displaceBookings: input.displace,
+  }), async (block) => {
+    setBlocks((items) => upsert(items, block))
+    await reconcileBookings()
+  })
+
+  const refreshDirectory = async () => {
+    await Promise.all([userQuery.current && loadUsers(userQuery.current), auditQuery.current && loadAudit(auditQuery.current)])
+  }
+
+  const currentUser = session?.user ?? null
+  const connection = sessionRecovery === 'offline' || Object.values(reads).includes(false) ? 'offline' :
+    !sessionRecovery && reads.rooms && reads.calendar && reads.settings &&
+    (!currentUser || (reads.mine && (currentUser.role === 'USER' || (reads.today && reads.overdue && reads.pending)))) ? 'live' : 'connecting'
+  const settingsLoaded = reads.settings === true && settings !== null
 
   const store: Store = {
-    currentUser,
-    users,
-    rooms,
-    bookings,
-    blocks,
-    settings,
-    audit,
-    toasts,
-    apiConnected,
-    sessionReady,
-    isLoading,
-    notify,
-    validateSlot,
-    refreshData,
-
-    async loginAsync(email: string, password: string) {
-      const result = await apiLogin(email, password)
-      if ('error' in result) {
-        if (result.offline) {
-          const normEmail = email.trim().toLowerCase()
-          const pool = [...users, ...seedUsers]
-          const found = pool.find((u) => u.email.toLowerCase() === normEmail && u.password === password)
-          if (!found) return { error: 'Invalid email or password (offline demo mode).' }
-          if (found.status === 'SUSPENDED') return { error: 'Account is suspended.' }
-          acceptLocalDemoSession(found)
-          log('AUTH_LOGIN', `user:${found.id}`, { role: found.role, method: 'LOCAL_DEMO' }, found.id)
-          notify(`Welcome back, ${found.fullName} (Local Demo Mode)`)
-          return { error: null, user: found }
-        }
-        return { error: result.error }
-      }
-      acceptSession(result.user)
-      log('AUTH_LOGIN', `user:${result.user.id}`, { role: result.user.role, method: 'API' }, result.user.id)
-      notify(`Welcome back, ${result.user.fullName}`)
-      return { error: null, user: result.user }
+    currentUser, users, usersTotal, rooms, bookings, myBookings, blocks, managerToday, overdueKeys, pendingQueue,
+    settings: settings ?? INITIAL_SETTINGS, settingsLoaded, audit, auditTotal, toasts, connection,
+    sessionRecovery, retrySession: syncSession,
+    notify: (message, tone) => {
+      if (renderedEpoch === epoch.current) addToast(message, tone)
     },
-
-    async registerAsync(input) {
-      const hcmut = (input.hcmutId ?? input.studentCode ?? '').trim().toUpperCase()
-      const uts = (input.utsId ?? '').trim().toUpperCase()
-      if (!input.fullName.trim() || !input.email.trim() || !input.password || !hcmut || !uts) {
-        return { error: 'All fields (including both HCMUT ID and UTS ID) are required.' }
-      }
-      if (!/^\S+@\S+\.\S+$/.test(input.email)) {
-        return { error: 'Enter a valid email address.' }
-      }
-      if (input.password.length < 8 || !/[a-z]/.test(input.password) || !/[A-Z]/.test(input.password) || !/\d/.test(input.password)) {
-        return { error: 'Password must have at least 8 characters, including uppercase, lowercase and a number.' }
-      }
-      if (hcmut.length < 5) {
-        return { error: 'Enter a valid HCMUT Student ID (e.g. 2110123).' }
-      }
-      if (uts.length < 5) {
-        return { error: 'Enter a valid UTS Student ID (e.g. 14234567).' }
-      }
-
-      const combinedCode = `${hcmut} / ${uts}`
-
-      const result = await apiRegister({ ...input, studentCode: combinedCode, hcmutId: hcmut, utsId: uts })
-      if ('error' in result) {
-        if (result.offline) {
-          const normEmail = input.email.trim().toLowerCase()
-          const pool = [...users, ...seedUsers]
-          if (pool.some((u) => u.email.toLowerCase() === normEmail)) {
-            return { error: 'Email is already registered.' }
-          }
-          const newUser: User = {
-            id: uid('u_stu'),
-            fullName: input.fullName.trim(),
-            email: input.email.trim(),
-            password: input.password,
-            role: 'USER',
-            studentCode: combinedCode,
-            hcmutId: hcmut,
-            utsId: uts,
-            status: 'ACTIVE',
-            createdAt: new Date().toISOString(),
-          }
-          acceptLocalDemoSession(newUser)
-          log('USER_REGISTER', `user:${newUser.id}`, { role: newUser.role, method: 'LOCAL_DEMO' }, newUser.id)
-          notify('Account created (Local Demo Mode).')
-          return { error: null, user: newUser }
-        }
-        return { error: result.error }
-      }
-      acceptSession(result.user)
-      log('USER_REGISTER', `user:${result.user.id}`, { role: result.user.role, method: 'API' }, result.user.id)
-      notify('Account created successfully.')
-      return { error: null, user: result.user }
+    login: (email, password) => authenticate((api) => api.apiLogin(email, password)),
+    startSession,
+    register: (input) => authenticate((api) => api.apiRegister(input)),
+    logout, refreshData, refreshSettings, refreshMyBookings, refreshKeyDesk, setVisibleRange, loadUsers, loadAudit,
+    updateProfile: ({ fullName }) => mutate((api) => api.apiUpdateProfile(fullName), (user) => {
+      const current = activeSession.current
+      // A sign-out or account switch in another tab may precede its storage event.
+      if (!sameIdentity(readSession(localStorage.getItem(TOKEN_KEY)), current)) return syncSession()
+      if (current && current.user.id === user.id) install({ ...current, user })
+    }),
+    createBooking: (input) => postBooking(input, false),
+    cancelBooking: (id) => mutate((api) => api.apiCancelBooking(id), reconcileTransition),
+    approveBooking: (id, note) => mutate((api) => api.apiApproveBooking(id, note), reconcileTransition),
+    rejectBooking: (id, note) => mutate((api) => api.apiRejectBooking(id, note), reconcileTransition),
+    checkoutKey: (id, passCode) => mutate((api) => api.apiCheckoutKey(id, passCode.trim()), reconcileTransition),
+    returnKey: (id) => mutate((api) => api.apiReturnKey(id), reconcileTransition),
+    createBlock,
+    cancelBlock: (roomId, expected) => mutate((api) => api.apiCancelRoomBlock(roomId, expected && {
+      startTime: expected.start.toISOString(), endTime: expected.end.toISOString(),
+    }), async () => {
+      setBlocks((items) => items.filter((block) => block.roomId !== roomId || (expected &&
+        (+new Date(block.start) !== +expected.start || +new Date(block.end) !== +expected.end))))
+      await reconcileBookings()
+    }),
+    saveRoom: (room) => mutate((api) => api.apiSaveRoom(room), async (saved) => {
+      setRooms((items) => upsert(items, saved))
+      await Promise.all([refreshRooms(), auditQuery.current && loadAudit(auditQuery.current)])
+    }),
+    setRoomStatus: (id, status) => mutate((api) => api.apiUpdateRoomStatus(id, status), async (saved) => {
+      setRooms((items) => upsert(items, saved))
+      await Promise.all([refreshRooms(), auditQuery.current && loadAudit(auditQuery.current)])
+    }),
+    updateUserRole: (id, role, studentCode) => mutate((api) => api.apiUpdateUserRole(id, role, studentCode), refreshDirectory),
+    setUserStatus: (id, status) => mutate((api) => api.apiUpdateUserStatus(id, status), refreshDirectory),
+    createManagerAccount: (input) => mutate((api) => api.apiCreateManager(input), refreshDirectory),
+    updateSettings: (value) => settingsLoaded ? mutate((api) => api.apiUpdateSettings(value), async (saved) => {
+      setReads((state) => ({ ...state, settings: true }))
+      delete pending.current.settings
+      setSettings(saved)
+      if (auditQuery.current) await loadAudit(auditQuery.current)
+    }) : Promise.resolve(t('core.settingsUnavailable')),
+    assignRoomSchedule(input) {
+      const category = input.category || 'EVENT'
+      return input.mode === 'BLOCK'
+        ? createBlock({ ...input, reason: `[${category}] ${input.title}: ${input.purpose}`, displace: input.displace ?? false })
+        : postBooking({ ...input, title: `[${category}] ${input.title.trim()}`, attendeeCount: input.attendeeCount ?? 1 }, true)
     },
-
-    logout() {
-      if (currentUser) log('AUTH_LOGOUT', `user:${currentUser.id}`, {})
-      clearAuth()
-      setCurrentUserId(null)
-      notify('Signed out.')
-    },
-
-    async createManagerAccount(input) {
-      const fullName = input.fullName.trim()
-      const email = input.email.trim()
-      const password = input.password
-
-      if (!fullName || fullName.length < 2) return 'Full name is required (min 2 characters).'
-      if (!/^\S+@\S+\.\S+$/.test(email)) return 'Enter a valid email address.'
-      if (password.length < 8) return 'Password must be at least 8 characters.'
-      if (users.some((u) => u.email.toLowerCase() === email.toLowerCase())) {
-        return 'Email is already registered.'
-      }
-
-      let newId = uid('u_mgr')
-
-      // Call live API if connected
-      if (apiConnected) {
-        try {
-          const res = await apiCreateManager({ fullName, email, password })
-          if (res.user) {
-            newId = res.user.id
-          }
-        } catch {}
-      }
-
-      const newManager: User = {
-        id: newId,
-        fullName,
-        email,
-        password,
-        role: 'MANAGER',
-        status: 'ACTIVE',
-        createdAt: new Date().toISOString(),
-      }
-
-      setUsers((prev) => [...prev, newManager])
-      log('USER_CREATE_MANAGER', `user:${newManager.id}`, { fullName, email, role: 'MANAGER' })
-      notify(`Manager account created for ${fullName}.`)
+    validateSlot(roomId, start, end, ignoreBookingId) {
+      const room = rooms.find((entry) => entry.id === roomId)
+      if (!room) return t('core.roomMissing')
+      if (room.status !== 'AVAILABLE') return t('core.roomUnavailable')
+      if (!settings) return t('core.noRules')
+      if (!Number.isFinite(+start) || !Number.isFinite(+end) || end <= start) return t('core.invalidEnd')
+      const now = new Date()
+      if (start <= now) return t('core.pastStart')
+      if (start > addDays(now, settings.maxAdvanceDays)) return t('core.advance', { n: settings.maxAdvanceDays })
+      if (!sameDay(start, end) || isWeekend(start)) return t('core.workday')
+      const open = parseHM(settings.openTime)
+      const close = parseHM(settings.closeTime)
+      if (start < at(start, open.h, open.m) || end > at(end, close.h, close.m)) return t('core.openHours', { open: settings.openTime, close: settings.closeTime })
+      if (durationMin(start, end) > settings.maxDurationMinutes) return t('core.duration', { n: settings.maxDurationMinutes })
+      if (blocks.some((block) => block.active && block.roomId === roomId && overlaps(block.start, block.end, start, end))) return t('core.blocked')
+      if (bookings.some((booking) => booking.id !== ignoreBookingId && booking.roomId === roomId &&
+        ((!room.autoApprove && (booking.status === 'APPROVED' || booking.status === 'KEY_CHECKED_OUT')) || (booking.status === 'PENDING' && booking.isMine)) &&
+        overlaps(booking.start, booking.end, start, end))) return t('core.booked')
+      if (myBookings.some((booking) => booking.id !== ignoreBookingId && booking.roomId === roomId && booking.status === 'PENDING' && overlaps(booking.start, booking.end, start, end))) return t('core.myPending')
       return null
     },
-
-    async createBooking({ roomId, start, end, phone, title, purpose, members, memberList }) {
-      if (!currentUser) return 'Not signed in.'
-      if (durationMin(start, end) > 120) return 'Maximum booking duration is 2 hours (120 minutes).'
-      const err = validateSlot(roomId, start, end)
-      if (err) return err
-      const room = rooms.find((r) => r.id === roomId)!
-      if (!/^\+?[\d\s().-]{8,20}$/.test(phone.trim())) return 'Enter a valid phone number.'
-      if (!title.trim()) return 'Booking title is required.'
-      if (!purpose.trim()) return 'Purpose is required.'
-      const active = bookings.filter((b) => b.userId === currentUser.id && !b.isEvent && ACTIVE_STATUSES.includes(b.status) && new Date(b.end) > new Date()).length
-      if (active >= settings.maxActiveBookings) return `You already hold ${active} active bookings (limit ${settings.maxActiveBookings}).`
-
-      const validMemberList =
-        memberList?.filter(
-          (m) => m.hcmutId?.trim() || m.utsId?.trim() || m.studentId?.trim() || m.name?.trim(),
-        ) ?? []
-      if (validMemberList.length === 0 && (!members || !members.trim())) {
-        return 'At least 1 participating group member with student ID (HCMUT or UTS) is required.'
-      }
-
-      const formattedMembers = validMemberList.length > 0
-        ? validMemberList
-            .map((m, idx) => {
-              const displayName = m.name?.trim() || `Member #${idx + 1}`
-              const ids = [m.hcmutId ? `HCMUT: ${m.hcmutId}` : '', m.utsId ? `UTS: ${m.utsId}` : '']
-                .filter(Boolean)
-                .join(' · ')
-              return ids ? `${displayName} (${ids})` : `${displayName} (${m.studentId || 'Member'})`
-            })
-            .join(', ')
-        : members?.trim()
-
-      const memberIds = validMemberList.length > 0
-        ? (validMemberList.flatMap((m) => [m.hcmutId, m.utsId, m.studentId].filter(Boolean)) as string[])
-        : (members ? members.split(',').map((s) => s.trim()).filter(Boolean) : [])
-
-      const booking: Booking = {
-        id: uid('bk'),
-        roomId,
-        userId: currentUser.id,
-        start: start.toISOString(),
-        end: end.toISOString(),
-        phone: phone.trim(),
-        title: title.trim(),
-        purpose: purpose.trim(),
-        members: formattedMembers,
-        memberIds: memberIds.length > 0 ? memberIds : undefined,
-        memberList: validMemberList.length > 0 ? validMemberList : undefined,
-        attendeeCount: 1 + (validMemberList.length > 0 ? validMemberList.length : memberIds.length),
-        status: 'PENDING',
-        passCode: makePassCode(room.code),
-        createdAt: new Date().toISOString(),
-      }
-      let saved: Booking
-      if (apiConnected) {
-        try {
-          const remote = await apiCreateBooking({
-            roomId, title: booking.title,
-            purpose: booking.members ? `${booking.purpose} [Members: ${booking.members}]` : booking.purpose,
-            attendeeCount: booking.attendeeCount ?? 1,
-            isEvent: false, startTime: booking.start, endTime: booking.end,
-          })
-          saved = { ...booking, ...remote }
-        } catch (error) {
-          return error instanceof Error ? error.message : 'Unable to submit the booking request. Please try again.'
-        }
-      } else {
-        saved = booking
-      }
-      setBookings((bs) => [...bs, saved])
-      log('BOOKING_CREATE', `booking:${saved.id}`, { room: room.code, status: saved.status, title: saved.title })
-      notify('Booking request submitted successfully. Your manager will be notified when email notifications are enabled.')
-      return null
-    },
-
-    assignRoomSchedule({ roomId, start, end, title, purpose, category, mode = 'EVENT', attendeeCount }) {
-      if (mode === 'BLOCK') {
-        return store.createBlock({
-          roomId,
-          start,
-          end,
-          reason: `[${category || 'EVENT'}] ${title}: ${purpose}`,
-        })
-      }
-
-      const room = rooms.find((r) => r.id === roomId)
-      if (!room) return 'Room not found.'
-      if (end <= start) return 'End time must be after start time.'
-
-      // Displace overlapping PENDING bookings
-      const displaced = bookings.filter(
-        (b) => b.roomId === roomId && b.status === 'PENDING' && overlaps(b.start, b.end, start, end),
-      )
-      if (displaced.length > 0) {
-        setBookings((bs) =>
-          bs.map((b) =>
-            displaced.some((d) => d.id === b.id)
-              ? { ...b, status: 'REJECTED', note: `Displaced by scheduled activity: ${title.trim()}` }
-              : b,
-          ),
-        )
-        if (apiConnected) {
-          displaced.forEach((d) => {
-            apiRejectBooking(d.id, `Displaced by scheduled activity: ${title.trim()}`).catch(() => {})
-          })
-        }
-      }
-
-      const newBooking: Booking = {
-        id: uid('bk_evt'),
-        roomId,
-        userId: currentUser?.id ?? 'u_mgr',
-        start: start.toISOString(),
-        end: end.toISOString(),
-        title: title.trim(),
-        purpose: purpose.trim(),
-        phone: '+84 90 000 0000',
-        status: 'APPROVED',
-        passCode: makePassCode(room.code),
-        category: category || 'EVENT',
-        attendeeCount: attendeeCount || room.capacity,
-        isEvent: true,
-        createdAt: new Date().toISOString(),
-        note: `Scheduled activity (${category || 'EVENT'}) assigned by ${currentUser?.fullName ?? 'Manager'}`,
-      }
-
-      setBookings((bs) => [...bs, newBooking])
-      log('SCHEDULE_ASSIGN', `room:${roomId}`, {
-        title: newBooking.title,
-        start: newBooking.start,
-        end: newBooking.end,
-        displacedCount: displaced.length,
-      })
-      notify(`Scheduled activity assigned to Room ${room.code}.`)
-
-      if (apiConnected) {
-        apiCreateBooking({
-          roomId,
-          isEvent: true,
-          title: newBooking.title,
-          purpose: newBooking.purpose,
-          attendeeCount: newBooking.attendeeCount,
-          startTime: newBooking.start,
-          endTime: newBooking.end,
-        }).then((created) => {
-          if (created) {
-            apiApproveBooking(created.id, newBooking.note).catch(() => {})
-          }
-        }).catch(() => {})
-      }
-      return null
-    },
-
-    cancelBooking(id) {
-      patchBooking(id, { status: 'CANCELLED' })
-      log('BOOKING_CANCEL', `booking:${id}`, {})
-      notify('Booking cancelled.')
-      if (apiConnected) {
-        apiCancelBooking(id).catch(() => {})
-      }
-    },
-
-    approveBooking(id, note) {
-      const target = bookings.find((b) => b.id === id)
-      const nowIso = new Date().toISOString()
-      const overlappingPending = target
-        ? bookings.filter(
-            (b) =>
-              b.id !== id &&
-              b.roomId === target.roomId &&
-              b.status === 'PENDING' &&
-              overlaps(b.start, b.end, target.start, target.end),
-          )
-        : []
-
-      setBookings((bs) =>
-        bs.map((b) => {
-          if (b.id === id) {
-            return { ...b, status: 'APPROVED', note: note?.trim() || undefined, reviewedAt: nowIso }
-          }
-          if (overlappingPending.some((p) => p.id === b.id)) {
-            return {
-              ...b,
-              status: 'REJECTED',
-              note: 'Slot awarded to another approved reservation.',
-              reviewedAt: nowIso,
-            }
-          }
-          return b
-        }),
-      )
-
-      log('BOOKING_APPROVE', `booking:${id}`, {
-        note: note?.trim() || null,
-        previous: 'PENDING',
-        next: 'APPROVED',
-        autoDeclinedCount: overlappingPending.length,
-      })
-      notify(
-        overlappingPending.length > 0
-          ? `Booking approved. Automatically declined ${overlappingPending.length} competing request(s).`
-          : 'Booking approved. Pass issued to student.',
-      )
-      if (apiConnected) {
-        apiApproveBooking(id, note).catch(() => {})
-      }
-    },
-
-    rejectBooking(id, note) {
-      if (!note.trim()) return 'A rejection note is required.'
-      patchBooking(id, { status: 'REJECTED', note: note.trim() })
-      log('BOOKING_REJECT', `booking:${id}`, { note: note.trim() })
-      notify('Booking rejected.')
-      if (apiConnected) {
-        apiRejectBooking(id, note.trim()).catch(() => {})
-      }
-      return null
-    },
-
-    checkoutKey(id) {
-      const bk = bookings.find((b) => b.id === id)
-      if (!bk || bk.status !== 'APPROVED') return
-      patchBooking(id, { status: 'KEY_CHECKED_OUT', checkedOutAt: new Date().toISOString() })
-      log('KEY_CHECKOUT', `booking:${id}`, { passCode: bk.passCode })
-      notify(`Key issued · ${users.find((u) => u.id === bk.userId)?.studentCode ?? bk.id}`)
-      if (apiConnected) {
-        apiCheckoutKey(id).catch(() => {})
-      }
-    },
-
-    returnKey(id) {
-      const bk = bookings.find((b) => b.id === id)
-      if (!bk || bk.status !== 'KEY_CHECKED_OUT') return
-      const late = new Date() > new Date(bk.end)
-      patchBooking(id, { status: 'COMPLETED', returnedAt: new Date().toISOString() })
-      log('KEY_RETURN', `booking:${id}`, { passCode: bk.passCode, late })
-      notify(`Key returned · ${users.find((u) => u.id === bk.userId)?.studentCode ?? bk.id}`)
-      if (apiConnected) {
-        apiReturnKey(id).catch(() => {})
-      }
-    },
-
-    createBlock({ roomId, start, end, reason }) {
-      if (!reason.trim()) return 'A reason is required.'
-      if (end <= start) return 'End must be after start.'
-      const blk: RoomBlock = {
-        id: uid('blk'),
-        roomId,
-        start: start.toISOString(),
-        end: end.toISOString(),
-        reason: reason.trim(),
-        createdBy: actor,
-        active: true,
-      }
-      const displaced = bookings.filter(
-        (b) => b.roomId === roomId && (b.status === 'PENDING' || b.status === 'APPROVED') && overlaps(b.start, b.end, start, end),
-      )
-      if (displaced.length) {
-        setBookings((bs) =>
-          bs.map((b) => (displaced.some((d) => d.id === b.id) ? { ...b, status: 'REJECTED', note: `Displaced by university event: ${reason.trim()}` } : b)),
-        )
-      }
-      setBlocks((ks) => [blk, ...ks])
-      log('ROOM_BLOCK_CREATE', `room:${roomId}`, { reason: blk.reason, start: blk.start, end: blk.end, displaced: displaced.map((d) => d.id) })
-      notify(displaced.length ? `Room blocked. ${displaced.length} booking(s) displaced.` : 'Room blocked for event.')
-
-      if (apiConnected) {
-        apiCreateRoomBlock({
-          roomId,
-          startTime: blk.start,
-          endTime: blk.end,
-          reason: blk.reason,
-        }).catch(() => {})
-      }
-      return null
-    },
-
-    blockFacilityWindow({ roomIds, start, end, reason }) {
-      if (!reason.trim()) return 'A reason is required.'
-      if (end <= start) return 'End must be after start.'
-      const cleanReason = reason.trim()
-      const newBlocks: RoomBlock[] = roomIds.map((roomId) => ({
-        id: uid('blk'),
-        roomId,
-        start: start.toISOString(),
-        end: end.toISOString(),
-        reason: cleanReason,
-        createdBy: actor,
-        active: true,
-      }))
-
-      // Find ALL displaced bookings (PENDING, APPROVED, KEY_CHECKED_OUT) across all targeted rooms
-      const displaced = bookings.filter(
-        (b) =>
-          roomIds.includes(b.roomId) &&
-          (b.status === 'PENDING' || b.status === 'APPROVED' || b.status === 'KEY_CHECKED_OUT') &&
-          overlaps(b.start, b.end, start, end),
-      )
-
-      if (displaced.length) {
-        setBookings((bs) =>
-          bs.map((b) =>
-            displaced.some((d) => d.id === b.id)
-              ? {
-                  ...b,
-                  status: 'REJECTED',
-                  note: `Cancelled due to facility lock: ${cleanReason}`,
-                }
-              : b,
-          ),
-        )
-      }
-
-      setBlocks((ks) => [...newBlocks, ...ks])
-      log('ROOM_BLOCK_CREATE', `rooms:${roomIds.join(',')}`, {
-        reason: cleanReason,
-        start: start.toISOString(),
-        end: end.toISOString(),
-        displaced: displaced.map((d) => d.id),
-      })
-
-      const msg = displaced.length
-        ? `${roomIds.length > 1 ? 'All rooms' : 'Room'} locked. ${displaced.length} pending reservation(s) cancelled.`
-        : `${roomIds.length > 1 ? 'All rooms' : 'Room'} locked.`
-      notify(msg)
-
-      if (apiConnected) {
-        roomIds.forEach((roomId) => {
-          apiCreateRoomBlock({
-            roomId,
-            startTime: start.toISOString(),
-            endTime: end.toISOString(),
-            reason: cleanReason,
-          }).catch(() => {})
-        })
-        displaced.forEach((d) => {
-          apiRejectBooking(d.id, `Cancelled due to facility lock: ${cleanReason}`).catch(() => {})
-        })
-      }
-      return null
-    },
-
-    cancelBlock(id) {
-      const blk = blocks.find((k) => k.id === id)
-      setBlocks((ks) => ks.map((k) => (k.id === id ? { ...k, active: false } : k)))
-      log('ROOM_BLOCK_CANCEL', `block:${id}`, {})
-      notify('Block cancelled. Slots released.')
-      if (apiConnected && blk) {
-        apiCancelRoomBlock(blk.roomId).catch(() => {})
-      }
-    },
-
-    deleteBlock(id) {
-      store.cancelBlock(id)
-    },
-
-    saveRoom(room) {
-      if (!/^\d{3}$/.test(room.code)) return 'Room code must be three digits.'
-      if (room.capacity < 1) return 'Capacity must be at least 1.'
-      if (!room.name.trim()) return 'Room name is required.'
-      const exists = rooms.find((r) => r.id === room.id)
-      if (rooms.some((r) => r.code === room.code && r.id !== room.id)) return `Room ${room.code} already exists.`
-      if (exists) {
-        const diff: Record<string, unknown> = {}
-        for (const k of Object.keys(room) as (keyof Room)[])
-          if (JSON.stringify(room[k]) !== JSON.stringify(exists[k])) diff[k] = { from: exists[k], to: room[k] }
-        setRooms((rs) => rs.map((r) => (r.id === room.id ? room : r)))
-        log('ROOM_UPDATE', `room:${room.id}`, diff)
-
-        if (apiConnected) {
-          apiUpdateRoom(room.id, encodeRoomToBackend(room)).catch(() => {})
-        }
-      } else {
-        setRooms((rs) => [...rs, room])
-        log('ROOM_CREATE', `room:${room.id}`, { code: room.code, capacity: room.capacity })
-
-        if (apiConnected) {
-          apiCreateRoom(encodeRoomToBackend(room)).catch(() => {})
-        }
-      }
-      notify(`Room ${room.code} saved.`)
-      return null
-    },
-
-    deleteRoom(id) {
-      const r = rooms.find((x) => x.id === id)
-      setRooms((rs) => rs.filter((x) => x.id !== id))
-      log('ROOM_DELETE', `room:${id}`, { code: r?.code })
-      notify(`Room ${r?.code} deleted.`)
-    },
-
-    updateUserRole(id, role, studentCode) {
-      const u = users.find((x) => x.id === id)
-      if (!u) return 'User not found.'
-      let code = u.studentCode
-      if (role === 'USER') {
-        code = (studentCode ?? u.studentCode ?? '').trim().toUpperCase()
-        if (!code) return 'Student ID is mandatory for USER role.'
-        if (!/^[A-Z]{2}\d{6}$/.test(code)) return 'Student ID format: two letters + six digits.'
-        if (users.some((x) => x.studentCode === code && x.id !== id)) return `Student ID ${code} is taken.`
-      }
-      setUsers((us) => us.map((x) => (x.id === id ? { ...x, role, studentCode: role === 'USER' ? code : x.studentCode } : x)))
-      log('USER_ROLE', `user:${id}`, { from: u.role, to: role, studentCode: role === 'USER' ? code : undefined })
-      notify(`${u.fullName} is now ${role}.`)
-
-      if (apiConnected) {
-        apiUpdateUserRole(id, role, code).catch(() => {})
-      }
-      return null
-    },
-
-    updateProfile(patch) {
-      if (!currentUser) return 'Not authenticated.'
-      const name = patch.fullName.trim()
-      if (!name) return 'Full name cannot be empty.'
-
-      const hcmut = patch.hcmutId ? patch.hcmutId.trim().toUpperCase() : currentUser.hcmutId
-      const uts = patch.utsId ? patch.utsId.trim().toUpperCase() : currentUser.utsId
-
-      if (hcmut && users.some((x) => x.id !== currentUser.id && (x.hcmutId === hcmut || x.studentCode === hcmut))) {
-        return `HCMUT Student ID ${hcmut} is already registered to another account.`
-      }
-      if (uts && users.some((x) => x.id !== currentUser.id && x.utsId === uts)) {
-        return `UTS Student ID ${uts} is already registered to another account.`
-      }
-
-      const updatedUser: User = {
-        ...currentUser,
-        fullName: name,
-        hcmutId: hcmut,
-        utsId: uts,
-        studentCode: hcmut || currentUser.studentCode,
-      }
-
-      setUsers((us) => us.map((x) => (x.id === currentUser.id ? updatedUser : x)))
-      setStoredUser(updatedUser)
-      log('USER_PROFILE_UPDATE', `user:${currentUser.id}`, { fullName: name, hcmutId: hcmut, utsId: uts })
-      notify('Profile updated successfully.')
-      return null
-    },
-
-    toggleUserStatus(id) {
-      const u = users.find((x) => x.id === id)
-      if (!u) return
-      const next = u.status === 'ACTIVE' ? 'SUSPENDED' : 'ACTIVE'
-      setUsers((us) => us.map((x) => (x.id === id ? { ...x, status: next } : x)))
-      log('USER_STATUS', `user:${id}`, { from: u.status, to: next })
-      notify(`${u.fullName} ${next === 'ACTIVE' ? 'reactivated' : 'suspended'}.`)
-
-      if (apiConnected) {
-        apiUpdateUserStatus(id, next).catch(() => {})
-      }
-    },
-
-    updateSettings(s) {
-      const o = parseHM(s.openTime)
-      const c = parseHM(s.closeTime)
-      if (o.h * 60 + o.m >= c.h * 60 + c.m) return 'Opening time must be earlier than closing time.'
-      if (s.minAdvanceDays > s.maxAdvanceDays) return 'Minimum lead time cannot exceed max advance days.'
-      if (s.maxDurationMinutes < 30) return 'Max duration must be at least 30 minutes.'
-      if (s.maxActiveBookings < 1) return 'Max active bookings must be at least 1.'
-      const diff: Record<string, unknown> = {}
-      for (const k of Object.keys(s) as (keyof Settings)[]) if (s[k] !== settings[k]) diff[k] = { from: settings[k], to: s[k] }
-      setSettings(s)
-      log('SETTINGS_UPDATE', 'settings:global', diff)
-      notify('System settings saved.')
-
-      if (apiConnected) {
-        apiUpdateSettings(s).catch(() => {})
-      }
-      return null
-    },
+    user: (id) => (currentUser && currentUser.id === id ? currentUser : users.find((entry) => entry.id === id) ?? calendarUsers.find((entry) => entry.id === id) ?? deskUsers.find((entry) => entry.id === id)),
+    room: (id) => rooms.find((entry) => entry.id === id),
   }
 
   return <Ctx.Provider value={store}>{children}</Ctx.Provider>
 }
 
 export function useStore() {
-  const s = useContext(Ctx)
-  if (!s) throw new Error('useStore outside provider')
-  return s
+  const store = useContext(Ctx)
+  if (!store) throw new Error('useStore outside provider')
+  return store
 }
 
 export function useLookups() {
-  const { users, rooms } = useStore()
-  return useMemo(
-    () => ({
-      user: (id: string) => users.find((u) => u.id === id),
-      room: (id: string) => rooms.find((r) => r.id === id),
-    }),
-    [users, rooms],
-  )
-}
-
-/** Bookable window helpers derived from settings */
-export function windowBounds(settings: Settings) {
-  const today = startOfDay(new Date())
-  return { first: addDays(today, settings.minAdvanceDays), last: addDays(today, settings.maxAdvanceDays) }
+  const { user, room } = useStore()
+  return { user, room }
 }

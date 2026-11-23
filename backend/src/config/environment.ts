@@ -1,101 +1,119 @@
-const REQUIRED = ['DATABASE_URL', 'JWT_ACCESS_SECRET'] as const;
+import { isIP } from 'node:net';
 
-type BaseEnvironment = {
-  DATABASE_URL: string;
-  JWT_ACCESS_SECRET: string;
-  PORT: number;
-  JWT_ACCESS_TTL_SECONDS: number;
-  EMAIL_BATCH_SIZE: number;
-  EMAIL_MAX_ATTEMPTS: number;
-};
+const exampleAccessSecret = 'replace-with-' + 'at-least-32-random-characters-access';
 
-type EmailEnvironment =
-  | { EMAIL_NOTIFICATIONS_ENABLED: false }
-  | {
-      EMAIL_NOTIFICATIONS_ENABLED: true;
-      RESEND_API_KEY: string;
-      EMAIL_FROM: string;
-      EMAIL_REPLY_TO?: string;
-      FRONTEND_URL: string;
-    };
-
-export type ValidatedEnvironment = BaseEnvironment & EmailEnvironment;
-
-function parseBoolean(value: unknown, key: string) {
-  if (value === undefined) return false;
-  if (typeof value === 'boolean') return value;
-  if (typeof value === 'string' && ['true', 'false'].includes(value.toLowerCase())) {
-    return value.toLowerCase() === 'true';
-  }
-  throw new Error(`${key} must be true or false`);
+export interface Environment {
+  databaseUrl: string;
+  port: number;
+  apiPrefix: string;
+  corsOrigins: string[];
+  trustProxy: false | number | string;
+  devToolsEnabled: boolean;
+  email: {
+    provider: { apiKey: string; from: string; replyTo?: string };
+    worker: { frontendUrl: string; batchSize: number; maxAttempts: number };
+  } | null;
+  jwt: {
+    secret: string;
+    expiresIn: number;
+    issuer?: string;
+    audience?: string;
+  };
 }
 
-function parseInteger(value: unknown, fallback: number, key: string, min: number, max: number) {
+function parseTrustProxy(value: string): Environment['trustProxy'] {
+  if (value === 'loopback') return value;
+  if (value === 'false') return false;
+  if (/^\d+$/.test(value) && Number.isSafeInteger(Number(value))) return Number(value);
+
+  const addresses = value.split(',').map((address) => address.trim());
+  if (
+    addresses.every((address) => {
+      const [ip, prefix, extra] = address.split('/');
+      const family = isIP(ip);
+      if (!family || extra !== undefined) return false;
+      return (
+        prefix === undefined ||
+        (/^\d+$/.test(prefix) && Number(prefix) <= (family === 4 ? 32 : 128))
+      );
+    })
+  ) {
+    return addresses.join(', ');
+  }
+
+  throw new Error('TRUST_PROXY must be loopback, false, a non-negative hop count, or IPs/CIDRs');
+}
+
+function emailInteger(value: string | undefined, fallback: number, key: string, max: number) {
   const parsed = Number(value ?? fallback);
-  if (!Number.isInteger(parsed) || parsed < min || parsed > max) {
-    throw new Error(`${key} must be an integer between ${min} and ${max}`);
+  if (!Number.isInteger(parsed) || parsed < 1 || parsed > max) {
+    throw new Error(`${key} must be an integer between 1 and ${max}`);
   }
   return parsed;
 }
 
-export function validateEnvironment(config: Record<string, unknown>): ValidatedEnvironment {
-  for (const key of REQUIRED) {
-    if (typeof config[key] !== 'string' || !config[key]) {
-      throw new Error(`Missing required environment variable: ${key}`);
-    }
+function parseEmail(config: NodeJS.ProcessEnv): Environment['email'] {
+  const enabled = (config.EMAIL_NOTIFICATIONS_ENABLED ?? 'false').toLowerCase();
+  const batchSize = emailInteger(config.EMAIL_BATCH_SIZE, 10, 'EMAIL_BATCH_SIZE', 100);
+  const maxAttempts = emailInteger(config.EMAIL_MAX_ATTEMPTS, 5, 'EMAIL_MAX_ATTEMPTS', 10);
+  if (enabled === 'false') return null;
+  if (enabled !== 'true') throw new Error('EMAIL_NOTIFICATIONS_ENABLED must be true or false');
+
+  const required = (key: string) => {
+    const value = config[key]?.trim();
+    if (!value) throw new Error(`Missing required environment variable: ${key}`);
+    return value;
+  };
+  const apiKey = required('RESEND_API_KEY');
+  const from = required('EMAIL_FROM');
+  const frontendUrl = required('FRONTEND_URL');
+  if (!URL.canParse(frontendUrl) || !['http:', 'https:'].includes(new URL(frontendUrl).protocol)) {
+    throw new Error('FRONTEND_URL must be an absolute HTTP(S) URL');
+  }
+  return {
+    provider: { apiKey, from, replyTo: config.EMAIL_REPLY_TO?.trim() || undefined },
+    worker: { frontendUrl, batchSize, maxAttempts },
+  };
+}
+
+export function validateEnvironment(config: NodeJS.ProcessEnv): Environment {
+  const devToolsEnabled = config.DEV_TOOLS_ENABLED === 'true';
+  if (devToolsEnabled && config.NODE_ENV === 'production') {
+    throw new Error('DEV_TOOLS_ENABLED cannot be true in production');
   }
 
-  if ((config.JWT_ACCESS_SECRET as string).length < 32) {
-    throw new Error('JWT_ACCESS_SECRET must contain at least 32 characters');
+  const databaseUrl = config.DATABASE_URL;
+  if (!databaseUrl?.trim()) throw new Error('Missing required environment variable: DATABASE_URL');
+
+  const secret = config.JWT_ACCESS_SECRET;
+  if (!secret?.trim()) throw new Error('Missing required environment variable: JWT_ACCESS_SECRET');
+  if (secret.trim().length < 32 || secret.trim() === exampleAccessSecret) {
+    throw new Error('JWT_ACCESS_SECRET must be at least 32 characters and not the example value');
   }
 
   const port = Number(config.PORT ?? 3000);
-  const accessTtl = Number(config.JWT_ACCESS_TTL_SECONDS ?? 28_800);
+  const expiresIn = Number(config.JWT_ACCESS_TTL_SECONDS ?? 28_800);
   if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error('PORT is invalid');
-  if (!Number.isInteger(accessTtl) || accessTtl < 60) {
-    throw new Error('JWT_ACCESS_TTL_SECONDS must be at least 60');
+  if (!Number.isSafeInteger(expiresIn) || expiresIn < 300) {
+    throw new Error('JWT_ACCESS_TTL_SECONDS must be an integer of at least 300');
   }
 
-  const emailNotificationsEnabled = parseBoolean(
-    config.EMAIL_NOTIFICATIONS_ENABLED,
-    'EMAIL_NOTIFICATIONS_ENABLED',
-  );
-  const emailBatchSize = parseInteger(config.EMAIL_BATCH_SIZE, 10, 'EMAIL_BATCH_SIZE', 1, 100);
-  const emailMaxAttempts = parseInteger(config.EMAIL_MAX_ATTEMPTS, 5, 'EMAIL_MAX_ATTEMPTS', 1, 10);
-
-  if (emailNotificationsEnabled) {
-    for (const key of ['RESEND_API_KEY', 'EMAIL_FROM', 'FRONTEND_URL'] as const) {
-      if (typeof config[key] !== 'string' || !config[key]) {
-        throw new Error(`Missing required environment variable: ${key}`);
-      }
-    }
-    try {
-      new URL(config.FRONTEND_URL as string);
-    } catch {
-      throw new Error('FRONTEND_URL must be a valid absolute URL');
-    }
-  }
-
-  const base: BaseEnvironment = {
-    DATABASE_URL: config.DATABASE_URL as string,
-    JWT_ACCESS_SECRET: config.JWT_ACCESS_SECRET as string,
-    PORT: port,
-    JWT_ACCESS_TTL_SECONDS: accessTtl,
-    EMAIL_BATCH_SIZE: emailBatchSize,
-    EMAIL_MAX_ATTEMPTS: emailMaxAttempts,
-  };
-  if (!emailNotificationsEnabled) {
-    return { ...base, EMAIL_NOTIFICATIONS_ENABLED: false };
-  }
   return {
-    ...base,
-    EMAIL_NOTIFICATIONS_ENABLED: true,
-    RESEND_API_KEY: config.RESEND_API_KEY as string,
-    EMAIL_FROM: config.EMAIL_FROM as string,
-    EMAIL_REPLY_TO:
-      typeof config.EMAIL_REPLY_TO === 'string' && config.EMAIL_REPLY_TO.trim()
-        ? config.EMAIL_REPLY_TO.trim()
-        : undefined,
-    FRONTEND_URL: config.FRONTEND_URL as string,
+    databaseUrl,
+    port,
+    apiPrefix: `/${(config.API_PREFIX || 'api/v1').replace(/^\/+|\/+$/g, '')}`,
+    trustProxy: parseTrustProxy(config.TRUST_PROXY ?? 'loopback'),
+    devToolsEnabled,
+    email: parseEmail(config),
+    corsOrigins: (config.CORS_ORIGINS ?? '')
+      .split(',')
+      .map((origin) => origin.trim())
+      .filter(Boolean),
+    jwt: {
+      secret,
+      expiresIn,
+      issuer: config.JWT_ISSUER?.trim() || undefined,
+      audience: config.JWT_AUDIENCE?.trim() || undefined,
+    },
   };
 }

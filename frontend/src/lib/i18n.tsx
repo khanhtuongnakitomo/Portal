@@ -1,10 +1,89 @@
-import { createContext, useContext, useEffect, useState, type ReactNode } from 'react'
+import { createContext, useCallback, useContext, useState, type ReactNode } from 'react'
+
+import { studentTranslations } from '../student/studentTranslations'
+import { staffTranslations } from '../manager/staffTranslations'
+import { adminTranslations } from '../admin/adminTranslations'
+import { devTranslations } from '../dev/devTranslations'
 
 export type Locale = 'vi' | 'en'
 
 // Dictionary containing translations for Vietnamese and English
 export const translations = {
   vi: {
+    staff: staffTranslations.vi,
+    admin: adminTranslations.vi,
+    dev: import.meta.env.DEV ? devTranslations.vi : {},
+    core: {
+      combined: 'Tổng hợp {rooms}',
+      MAINTENANCE: 'Đang bảo trì',
+      INACTIVE: 'Ngừng hoạt động',
+      keyOut: 'Đang giữ chìa',
+      USER: 'Sinh viên',
+      MANAGER: 'Quản lý cơ sở',
+      ADMIN: 'Quản trị viên',
+      restoring: 'Đang khôi phục phiên đăng nhập…',
+      restoreFailed: 'Không thể khôi phục phiên đăng nhập',
+      live: 'Đã kết nối API',
+      offline: 'Kết nối API bị gián đoạn',
+      connecting: 'Đang kết nối API…',
+      retry: 'Thử kết nối lại',
+      workspace: 'Không gian làm việc',
+      personal: 'Đặt phòng cá nhân',
+      manage: 'Quản lý phòng',
+      admin: 'Quản trị',
+      accessDenied: 'Không có quyền truy cập',
+      needsRole: 'Không gian này yêu cầu quyền {role}.',
+      yourRole: 'Vai trò hiện tại của bạn: {role}.',
+      backWorkspace: 'Về khu vực làm việc',
+      rooms: 'Phòng học',
+      policy: 'Quy định',
+      bookingLimits: 'Giới hạn đặt phòng',
+      custody: 'Quy định mượn và trả chìa khóa',
+      eventPriority: 'Ưu tiên sự kiện',
+      support: 'Hỗ trợ',
+      desk: 'Bộ phận cơ sở vật chất · Tầng 1',
+      ext: 'Máy nhánh 6021',
+      campus: 'Cơ sở',
+      location: 'Tầng 6, tòa nhà TNE · UTS × HCMUT',
+      tagline: 'Đặt phòng, nhận chìa, theo dõi lịch mượn.',
+      registerStudent: 'Đăng ký sinh viên',
+      email: 'Email',
+      passwordHint: 'Ít nhất 8 ký tự, gồm chữ hoa, chữ thường và chữ số',
+      signingIn: 'Đang đăng nhập…',
+      creating: 'Đang tạo tài khoản…',
+      rolePolicy: 'Tài khoản mới có quyền sinh viên. Chỉ quản trị viên hệ thống mới có thể cấp quyền nhân viên.',
+      profileSaved: 'Đã cập nhật hồ sơ.',
+      workspace_USER: 'Bàn sinh viên',
+      workspace_MANAGER: 'Bàn quản lý',
+      workspace_ADMIN: 'Bàn quản trị',
+      authenticated: 'Đã đăng nhập',
+      readOnlyIds: 'Các mã số này đã được đăng ký cho tài khoản và không thể thay đổi tại đây.',
+      readOnly: 'Chỉ đọc',
+      emailNote: 'Không thể thay đổi email tài khoản tại đây.',
+      minutes: '{n} phút',
+      days: 'Tối đa {n} ngày',
+      advanceNote: 'Áp dụng khi đặt phòng cá nhân.',
+      suspended: 'Bị đình chỉ',
+      expired: 'Phiên đăng nhập đã hết hạn. Vui lòng đăng nhập lại.',
+      changed: 'Phiên đăng nhập đã thay đổi. Vui lòng thử lại.',
+      invalidSession: 'Máy chủ trả về phiên đăng nhập không hợp lệ.',
+      signInRequired: 'Vui lòng đăng nhập để tiếp tục.',
+      settingsUnavailable: 'Không tải được cài đặt. Hãy tải lại trước khi lưu.',
+      roomMissing: 'Không tìm thấy phòng.',
+      roomUnavailable: 'Phòng này không sẵn sàng.',
+      noRules: 'Không tải được quy định đặt phòng.',
+      invalidEnd: 'Giờ kết thúc phải sau giờ bắt đầu.',
+      pastStart: 'Giờ bắt đầu phải ở tương lai.',
+      advance: 'Có thể đặt phòng trước tối đa {n} ngày.',
+      workday: 'Lịch đặt phải bắt đầu và kết thúc trong cùng một ngày làm việc.',
+      openHours: 'Chọn khung giờ từ {open} đến {close}.',
+      duration: 'Thời lượng đặt phòng tối đa là {n} phút.',
+      blocked: 'Phòng bị khóa trong khung giờ này.',
+      booked: 'Phòng đã có lịch đặt trong khung giờ này.',
+      myPending: 'Bạn đã có yêu cầu đang chờ duyệt trong khung giờ này.',
+      invalidResponse: 'Máy chủ trả về dữ liệu không hợp lệ.',
+      offlineError: 'Không thể kết nối tới máy chủ đặt phòng.',
+    },
     common: {
       appName: 'Hệ thống đặt phòng dành cho TNE - UTS',
       cancel: 'Hủy',
@@ -103,7 +182,6 @@ export const translations = {
     student: {
       eyebrow: 'KHÔNG GIAN SINH VIÊN · ĐẶT PHÒNG HỌC',
       heroTitle: 'Đặt phòng học. Nhận chìa khóa.',
-      heroBody: 'Chọn phòng, sau đó kéo chọn khung giờ còn trống trong tuần. Đặt trước từ 2 đến 7 ngày; nhận và trả chìa khóa tại phòng Manager.',
       allRooms: 'TẤT CẢ PHÒNG',
       combined: 'Tổng hợp 601 · 602 · 605',
       approval: 'DUYỆT BỞI',
@@ -111,9 +189,6 @@ export const translations = {
       keyPickup: 'NƠI LẤY CHÌA',
       managerOffice: 'PHÒNG MANAGER',
       howItWorks: 'HƯỚNG DẪN ĐẶT PHÒNG',
-      step1: 'Kéo chọn các khung giờ còn trống trên lịch tuần.',
-      step2: 'Điền thông tin thành viên, lý do mượn phòng và cam kết trách nhiệm.',
-      step3: 'Chờ Manager duyệt yêu cầu, sau đó qua phòng Manager nhận chìa khóa.',
       openMyBookings: 'Xem các phòng đã đặt',
       myBookingsTitle: 'Lịch Đặt Phòng Của Tôi',
       passTitle: 'CHÌA KHÓA PHÒNG • NHẬN & TRẢ TẠI PHÒNG MANAGER',
@@ -125,6 +200,7 @@ export const translations = {
       hcmutId: 'MÃ SỐ HCMUT',
       utsId: 'MÃ SỐ UTS',
       membersList: 'DANH SÁCH THÀNH VIÊN THAM GIA',
+      ...studentTranslations.vi,
     },
     bookingModal: {
       modalTitle: 'Yêu cầu đặt phòng học',
@@ -240,6 +316,80 @@ export const translations = {
     },
   },
   en: {
+    staff: staffTranslations.en,
+    admin: adminTranslations.en,
+    dev: import.meta.env.DEV ? devTranslations.en : {},
+    core: {
+      combined: '{rooms} combined',
+      MAINTENANCE: 'Maintenance',
+      INACTIVE: 'Inactive',
+      keyOut: 'Key checked out',
+      USER: 'Student',
+      MANAGER: 'Facilities manager',
+      ADMIN: 'System administrator',
+      restoring: 'Restoring session…',
+      restoreFailed: 'Could not restore your session',
+      live: 'API connected',
+      offline: 'API connection degraded',
+      connecting: 'Connecting to API…',
+      retry: 'Retry connection',
+      workspace: 'Workspace',
+      personal: 'Personal bookings',
+      manage: 'Manage rooms',
+      admin: 'Administration',
+      accessDenied: 'Access denied',
+      needsRole: 'This workspace requires {role} access.',
+      yourRole: 'Your current role: {role}.',
+      backWorkspace: 'Go to my workspace',
+      rooms: 'Rooms',
+      policy: 'Policy',
+      bookingLimits: 'Booking limits',
+      custody: 'Key custody rules',
+      eventPriority: 'Event priority',
+      support: 'Support',
+      desk: 'Facilities desk · Level 1',
+      ext: 'Ext. 6021',
+      campus: 'Campus',
+      location: 'Level 6, TNE Building · UTS × HCMUT',
+      tagline: 'Rooms, keys, on the record.',
+      registerStudent: 'Register as a student',
+      email: 'Email',
+      passwordHint: 'At least 8 characters with uppercase, lowercase and a number',
+      signingIn: 'Signing in…',
+      creating: 'Creating account…',
+      rolePolicy: 'New accounts have student access. Only a system administrator can grant staff access.',
+      profileSaved: 'Profile updated.',
+      workspace_USER: 'Student workspace',
+      workspace_MANAGER: 'Facilities desk',
+      workspace_ADMIN: 'Admin console',
+      authenticated: 'Signed in',
+      readOnlyIds: 'These identifiers are registered to your account and cannot be changed here.',
+      readOnly: 'Read only',
+      emailNote: 'The account email cannot be edited here.',
+      minutes: '{n} minutes',
+      days: 'Up to {n} days',
+      advanceNote: 'For personal room bookings.',
+      suspended: 'Suspended',
+      expired: 'Session expired. Please sign in again.',
+      changed: 'The session changed. Please try again.',
+      invalidSession: 'The server returned an invalid session.',
+      signInRequired: 'Sign in to continue.',
+      settingsUnavailable: 'Settings are unavailable. Reload them before saving.',
+      roomMissing: 'Room not found.',
+      roomUnavailable: 'This room is not available.',
+      noRules: 'Booking rules are unavailable.',
+      invalidEnd: 'End time must be after start time.',
+      pastStart: 'Start time must be in the future.',
+      advance: 'Bookings can be made up to {n} days in advance.',
+      workday: 'Bookings must start and end on the same workday.',
+      openHours: 'Choose a time between {open} and {close}.',
+      duration: 'Bookings can last up to {n} minutes.',
+      blocked: 'This room is blocked during that time.',
+      booked: 'This room is already booked during that time.',
+      myPending: 'You already have a pending request during that time.',
+      invalidResponse: 'The server returned an invalid response.',
+      offlineError: 'Cannot connect to the booking server.',
+    },
     common: {
       appName: 'Room Booking System for TNE - UTS',
       cancel: 'Cancel',
@@ -338,7 +488,6 @@ export const translations = {
     student: {
       eyebrow: 'STUDENT WORKSPACE · ROOM RESERVATION',
       heroTitle: 'Reserve a room. Collect the key.',
-      heroBody: 'Choose a room tab, then drag across open slots in the weekly ledger. Bookings open two to seven days ahead; collect and return the physical key at Manager Office.',
       allRooms: 'ALL ROOMS',
       combined: '601 · 602 · 605 Combined',
       approval: 'APPROVAL',
@@ -346,9 +495,6 @@ export const translations = {
       keyPickup: 'KEY PICKUP',
       managerOffice: "MANAGER'S OFFICE",
       howItWorks: 'HOW IT WORKS',
-      step1: 'Drag across open slots on a highlighted day.',
-      step2: 'Confirm your contact details, member IDs, and purpose in the ledger entry.',
-      step3: 'Wait for Manager approval, then collect the physical key at Manager Office.',
       openMyBookings: 'Open my bookings',
       myBookingsTitle: 'My Reservations',
       passTitle: "ROOM KEY • PICK UP & RETURN AT MANAGER'S OFFICE",
@@ -360,6 +506,7 @@ export const translations = {
       hcmutId: 'HCMUT ID',
       utsId: 'UTS ID',
       membersList: 'PARTICIPATING MEMBERS',
+      ...studentTranslations.en,
     },
     bookingModal: {
       modalTitle: 'Reserve a room',
@@ -523,7 +670,7 @@ export function I18nProvider({ children }: { children: ReactNode }) {
   }
 
   // Translation lookup with fallback
-  const t = (path: string, params?: Record<string, string | number>): string => {
+  const t = useCallback((path: string, params?: Record<string, string | number>): string => {
     const keys = path.split('.')
     let current: any = translations[locale]
     for (const k of keys) {
@@ -560,7 +707,7 @@ export function I18nProvider({ children }: { children: ReactNode }) {
     }
 
     return String(current ?? path)
-  }
+  }, [locale])
 
   return (
     <I18nContext.Provider value={{ locale, setLocale, toggleLocale, t }}>

@@ -1,12 +1,12 @@
 import { useEffect, useRef, useState } from 'react'
-import { ChevronDown, Edit3, LogOut, ShieldCheck, User as UserIcon } from 'lucide-react'
+import { ChevronDown, LogOut, User as UserIcon } from 'lucide-react'
 import { useStore } from '@/lib/store'
 import { useI18n } from '@/lib/i18n'
 import { cx } from './ui'
 
 export function ProfileMenu() {
   const { currentUser, logout } = useStore()
-  const { t, locale } = useI18n()
+  const { t } = useI18n()
   const [open, setOpen] = useState(false)
   const menuRef = useRef<HTMLDivElement>(null)
 
@@ -39,8 +39,8 @@ export function ProfileMenu() {
     .join('')
     .toUpperCase() || 'U'
 
-  const hcmutId = currentUser.hcmutId || currentUser.studentCode || '2110123'
-  const utsId = currentUser.utsId || '14234567'
+  const hcmutId = currentUser.hcmutId || '—'
+  const utsId = currentUser.utsId || '—'
 
   return (
     <div className="relative" ref={menuRef}>
@@ -68,11 +68,7 @@ export function ProfileMenu() {
             {currentUser.fullName}
           </span>
           <span className="text-[10px] font-mono leading-tight text-steel">
-            {currentUser.role === 'USER'
-              ? (locale === 'vi' ? 'Sinh viên' : 'Student')
-              : currentUser.role === 'MANAGER'
-                ? (locale === 'vi' ? 'Quản lý cơ sở' : 'Facilities Manager')
-                : (locale === 'vi' ? 'Quản trị viên' : 'System Admin')}
+            {t(`core.${currentUser.role}`)}
           </span>
         </div>
 
@@ -100,15 +96,11 @@ export function ProfileMenu() {
                 <div className="truncate text-[11px] text-steel font-mono">{currentUser.email}</div>
                 <div className="mt-1 flex items-center gap-1.5">
                   <span className="rounded-sm bg-ink px-1.5 py-0.2 font-mono text-[9px] font-bold text-paper">
-                    {currentUser.role === 'USER'
-                      ? 'STUDENT'
-                      : currentUser.role === 'MANAGER'
-                        ? 'FACILITIES MANAGER'
-                        : 'SYSTEM ADMIN'}
+                    {t(`core.${currentUser.role}`)}
                   </span>
                   <span className="flex items-center gap-1 font-mono text-[10px] text-emerald-700 font-semibold">
                     <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" />
-                    Active
+                    {t(currentUser.status === 'ACTIVE' ? 'common.active' : 'core.suspended')}
                   </span>
                 </div>
               </div>
@@ -118,26 +110,26 @@ export function ProfileMenu() {
           {/* Student Identification Cards (Hạ xuống đây thay vì để ngoài Navbar) */}
           <div className="p-3.5 border-b border-rule bg-paper">
             <div className="font-mono text-[10px] font-bold text-steel uppercase tracking-wider mb-2 flex items-center justify-between">
-              <span>Institutional Credentials</span>
-              <span className="text-[9px] text-graphite font-normal">Verified</span>
+              <span>{t('profile.credentialTitle')}</span>
+              <span className="text-[9px] text-graphite font-normal">{t('core.readOnly')}</span>
             </div>
 
             {currentUser.role === 'USER' ? (
               <div className="grid grid-cols-2 gap-2">
                 <div className="rounded-md border border-rule bg-ice/40 p-2">
-                  <div className="font-mono text-[9px] font-semibold text-steel">HCMUT ID</div>
+                  <div className="font-mono text-[9px] font-semibold text-steel">{t('student.hcmutId')}</div>
                   <div className="font-mono text-[13px] font-bold text-ink mt-0.5">{hcmutId}</div>
                 </div>
                 <div className="rounded-md border border-rule bg-ice/40 p-2">
-                  <div className="font-mono text-[9px] font-semibold text-steel">UTS ID</div>
+                  <div className="font-mono text-[9px] font-semibold text-steel">{t('student.utsId')}</div>
                   <div className="font-mono text-[13px] font-bold text-accent mt-0.5">{utsId}</div>
                 </div>
               </div>
             ) : (
               <div className="rounded-md border border-rule bg-ice/40 p-2">
-                <div className="font-mono text-[9px] font-semibold text-steel">STAFF IDENTIFIER</div>
+                <div className="font-mono text-[9px] font-semibold text-steel">{t('profile.staffIdLabel')}</div>
                 <div className="font-mono text-[13px] font-bold text-ink mt-0.5">
-                  STAFF-{currentUser.id.slice(2).toUpperCase()}
+                  {currentUser.id}
                 </div>
               </div>
             )}

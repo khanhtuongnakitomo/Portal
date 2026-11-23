@@ -1,7 +1,8 @@
+import { Type } from 'class-transformer';
 import {
   IsDateString,
   IsBoolean,
-  IsOptional,
+  ValidateIf,
   IsInt,
   IsString,
   IsUUID,
@@ -12,7 +13,8 @@ import {
 } from 'class-validator';
 
 export class CreateBookingDto {
-  @IsOptional()
+  @Type(() => Object)
+  @ValidateIf((_: unknown, value: unknown) => value !== undefined)
   @IsBoolean()
   isEvent?: boolean;
 

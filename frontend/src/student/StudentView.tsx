@@ -1,46 +1,76 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { ArrowRight, ChevronLeft, ChevronRight } from 'lucide-react'
 import { ACTIVE_STATUSES, useStore } from '@/lib/store'
 import { useI18n } from '@/lib/i18n'
-import { addDays, fmtShort, startOfWeek } from '@/lib/time'
+import { addDays, at, ensureWorkday, fmtDuration, fmtShort, minutesOfDay, parseHM, sameDay, startOfWeek } from '@/lib/time'
 import { Button, Eyebrow, Tag, cx } from '@/components/ui'
 import { NavItem, PageHeader, TopNav } from '@/components/Shell'
 import { RoomTabs } from '@/components/RoomTabs'
 import { Reveal, ScrollRevealText, SplitText } from '@/components/effects'
-import { WeekCalendar, firstBookableWeek, type Selection } from './WeekCalendar'
+import { WeekCalendar, type Selection } from './WeekCalendar'
 import { BookingModal } from './BookingModal'
 import { MyBookingsDrawer } from './MyBookings'
 import { DigitalPass } from './DigitalPass'
 import { StudentBookingPopover } from './StudentBookingPopover'
 
 export function StudentView() {
-  const { rooms, bookings, blocks, settings, currentUser, notify } = useStore()
-  const { t } = useI18n()
+  const { rooms, bookings, myBookings, blocks, settings, currentUser, notify, connection, refreshData, refreshMyBookings } = useStore()
+  const { t, locale } = useI18n()
   const [roomId, setRoomId] = useState<string>(() => rooms[0]?.id ?? '')
-  const [weekStart, setWeekStart] = useState(() => startOfWeek(firstBookableWeek(settings)))
+  const [weekStart, setWeekStart] = useState(() => startOfWeek(new Date()))
   const [selection, setSelection] = useState<Selection | null>(null)
   const [activeBooking, setActiveBooking] = useState<{ id: string; el: HTMLElement } | null>(null)
+  const checkingBooking = useRef<typeof activeBooking>(null)
   const [drawer, setDrawer] = useState(false)
 
-  // Ensure student always selects a specific single room (never 'ALL')
   useEffect(() => {
-    if (rooms.length > 0 && (!roomId || roomId === 'ALL' || !rooms.some((r) => r.id === roomId))) {
-      setRoomId(rooms[0].id)
+    const first = rooms[0]
+    if (first && (!roomId || roomId === 'ALL' || !rooms.some((entry) => entry.id === roomId))) {
+      setRoomId(first.id)
     }
   }, [rooms, roomId])
 
-  const room = rooms.find((r) => r.id === roomId) ?? rooms[0]
+  const room = rooms.find((entry) => entry.id === roomId) ?? rooms[0]
+  const activeBookingObj = myBookings.find((b) => b.id === activeBooking?.id)
 
-  const activeBookingObj = bookings.find((b) => b.id === activeBooking?.id)
+  const now = new Date()
+  const active = myBookings.filter((b) => ACTIVE_STATUSES.includes(b.status) && new Date(b.end) > now)
+  const nextPass = myBookings
+    .filter((b) => b.passCode && (b.status === 'KEY_CHECKED_OUT' || (b.status === 'APPROVED' && new Date(b.end) > now)))
+    .sort((a, b) => Number(b.status === 'KEY_CHECKED_OUT') - Number(a.status === 'KEY_CHECKED_OUT') || +new Date(a.start) - +new Date(b.start))[0]
 
-  const mine = useMemo(() => bookings.filter((b) => b.userId === currentUser?.id && !b.isEvent), [bookings, currentUser])
-  const active = mine.filter((b) => ACTIVE_STATUSES.includes(b.status))
-  const nextPass = mine
-    .filter((b) => b.status === 'KEY_CHECKED_OUT' || b.status === 'APPROVED')
-    .sort((a, b) => (a.status === 'KEY_CHECKED_OUT' ? -1 : b.status === 'KEY_CHECKED_OUT' ? 1 : +new Date(a.start) - +new Date(b.start)))[0]
-
-  if (!currentUser || !room) return null
-  const thisWeek = startOfWeek(new Date())
+  if (!currentUser) return null
+  if (!room) return (
+    <>
+      <TopNav />
+      <main className="mx-auto max-w-[1440px] px-6 pt-10">
+        <PageHeader
+          eyebrow={t('student.eyebrow')}
+          title={t(connection === 'connecting' ? 'student.loadingRooms' : connection === 'offline' ? 'student.inventoryUnavailable' : 'student.noRooms')}
+          right={<Button variant="outline" onClick={() => setDrawer(true)}>{t('nav.myBookings')}</Button>}
+        />
+        {connection === 'offline' && <Button className="mt-4" onClick={() => void refreshData()}>{t('student.retryConnection')}</Button>}
+      </main>
+      <MyBookingsDrawer open={drawer} onClose={() => setDrawer(false)} />
+    </>
+  )
+  const thisWeek = startOfWeek(now)
+  const openReservation = () => {
+    const open = parseHM(settings.openTime)
+    const close = parseHM(settings.closeTime)
+    const first = open.h * 60 + open.m
+    const last = close.h * 60 + close.m
+    let day = ensureWorkday(weekStart > now ? weekStart : now)
+    let start = sameDay(now, day) && minutesOfDay(now) >= first
+      ? first + 30 * (Math.floor((minutesOfDay(now) - first) / 30) + 1) : first
+    if (start >= last) {
+      day = ensureWorkday(addDays(day, 1))
+      start = first
+    }
+    checkingBooking.current = null
+    setActiveBooking(null)
+    setSelection({ start: at(day, 0, start), end: at(day, 0, Math.min(last, start + 30, start + settings.maxDurationMinutes)), roomId: room.id })
+  }
 
   return (
     <>
@@ -59,10 +89,10 @@ export function StudentView() {
           right={
             <Reveal stagger className="grid grid-cols-2 border-t border-l border-rule sm:grid-cols-4">
               {[
-                ['WINDOW', `T-${settings.minAdvanceDays} → T-${settings.maxAdvanceDays}`],
-                ['HOURS', `${settings.openTime}–${settings.closeTime}`],
-                ['MAX LENGTH', `${settings.maxDurationMinutes / 60}h`],
-                ['ACTIVE', `${active.length} / ${settings.maxActiveBookings}`],
+                [t('student.bookingWindow'), t('student.windowValue', { count: settings.maxAdvanceDays })],
+                [t('common.hours'), `${settings.openTime}–${settings.closeTime}`],
+                [t('common.maxLength'), fmtDuration(settings.maxDurationMinutes, locale)],
+                [t('common.activeBookings'), `${active.length} / ${settings.maxActiveBookings}`],
               ].map(([k, v]) => (
                 <div key={k} className="min-w-[120px] border-r border-b border-rule px-4 py-3">
                   <div className="font-mono text-[11px] text-steel">{k}</div>
@@ -80,6 +110,7 @@ export function StudentView() {
               activeId={room.id}
               showAllTab={false}
               onChange={(id) => {
+                checkingBooking.current = null
                 setRoomId(id)
                 setSelection(null)
                 setActiveBooking(null)
@@ -93,8 +124,9 @@ export function StudentView() {
                   <Button
                     variant="outline"
                     className="!rounded-md !p-1.5"
-                    aria-label="Previous week"
+                    aria-label={t('student.previousWeek')}
                     onClick={() => {
+                      checkingBooking.current = null
                       setWeekStart((w) => addDays(w, -7))
                       setActiveBooking(null)
                     }}
@@ -104,8 +136,9 @@ export function StudentView() {
                   <Button
                     variant="outline"
                     className="!rounded-md !p-1.5"
-                    aria-label="Next week"
+                    aria-label={t('student.nextWeek')}
                     onClick={() => {
+                      checkingBooking.current = null
                       setWeekStart((w) => addDays(w, 7))
                       setActiveBooking(null)
                     }}
@@ -117,28 +150,30 @@ export function StudentView() {
                     size="xs"
                     className="!rounded-md"
                     onClick={() => {
+                      checkingBooking.current = null
                       setWeekStart(thisWeek)
                       setActiveBooking(null)
                     }}
                   >
-                    This week
+                    {t('student.thisWeek')}
                   </Button>
                   <div className="ml-2 font-mono text-[13px] font-semibold text-ink">
-                    {fmtShort(weekStart)} — {fmtShort(addDays(weekStart, 6))} · MON–SUN
+                    {fmtShort(weekStart, locale)} — {fmtShort(addDays(weekStart, 6), locale)} · {t('student.monToSun')}
                   </div>
+                  <Button size="xs" onClick={openReservation}>{t('student.newReservation')}</Button>
                 </div>
                 <div className="flex flex-wrap items-center gap-3 text-[11px] text-graphite">
-                  <Legend swatch="border border-accent bg-accent" label="Yours" />
-                  <Legend swatch="border border-dashed border-meta" label="Yours · pending" />
-                  <Legend swatch="border border-[#b9c0cb] bg-reserved" label="Reserved" />
-                  <Legend swatch="hatch-slate border border-ink" label="Event block" />
-                  <Legend swatch="hatch border border-edge bg-paper" label="Unavailable" />
-                  <Legend swatch="border border-accent bg-tint" label="Selection" />
+                  <Legend swatch="border border-accent bg-accent" label={t('student.yours')} />
+                  <Legend swatch="border border-dashed border-meta" label={t('student.yoursPending')} />
+                  <Legend swatch="border border-[#b9c0cb] bg-reserved" label={t('student.reserved')} />
+                  <Legend swatch="hatch-slate border border-ink" label={t('student.eventBlock')} />
+                  <Legend swatch="hatch border border-edge bg-paper" label={t('student.unavailable')} />
+                  <Legend swatch="border border-accent bg-tint" label={t('student.selection')} />
                 </div>
               </div>
               {room.status !== 'AVAILABLE' && (
                 <div className="border-b border-plum/30 bg-plum/[0.06] px-4 py-2 font-mono text-[12px] font-semibold text-plum">
-                  ROOM {room.code} IS {room.status} — BOOKINGS SUSPENDED
+                  {t('student.roomSuspended', { code: room.code, status: t(`student.roomStatus.${room.status}`) })}
                 </div>
               )}
               <div className="scrollbar-thin overflow-x-auto">
@@ -149,16 +184,33 @@ export function StudentView() {
                     bookings={bookings}
                     blocks={blocks}
                     settings={settings}
-                    currentUserId={currentUser.id}
                     selection={selection}
                     onSelect={(s) => {
+                      checkingBooking.current = null
                       setActiveBooking(null)
                       setSelection(s)
                     }}
                     onReject={(m) => notify(m, 'error')}
-                    onEventClick={(b, el) => {
+                    onEventClick={async (b, el) => {
                       setSelection(null)
-                      setActiveBooking((prev) => (prev?.id === b.id ? null : { id: b.id, el }))
+                      const wasOpen = activeBooking?.id === b.id || checkingBooking.current?.id === b.id
+                      checkingBooking.current = null
+                      setActiveBooking(null)
+                      if (wasOpen) return
+                      const target = { id: b.id, el }
+                      const personal = myBookings.find((booking) => booking.id === b.id)
+                      if (personal?.status !== b.status || ((b.status === 'APPROVED' || b.status === 'KEY_CHECKED_OUT') && !personal?.passCode)) {
+                        checkingBooking.current = target
+                        const refreshed = await refreshMyBookings()
+                        if (checkingBooking.current !== target) return
+                        checkingBooking.current = null
+                        if (!el.isConnected) return
+                        if (!refreshed) {
+                          notify(t('student.bookingRefreshFailed'), 'error')
+                          return
+                        }
+                      }
+                      setActiveBooking(target)
                     }}
                     activeId={activeBooking?.id}
                     allRooms={false}
@@ -172,7 +224,7 @@ export function StudentView() {
           <Reveal as="aside" stagger className="flex flex-col gap-6">
             <div className="rounded-lg bg-ice p-6">
               <Eyebrow>
-                {`ROOM ${room.code} · LEVEL ${room.floor}`}
+                {t('student.roomFloor', { code: room.code, floor: room.floor })}
               </Eyebrow>
               <h3 className="mt-3 font-display text-feature font-w450 text-ink">
                 <SplitText key={room.id} text={room.name} />
@@ -180,7 +232,7 @@ export function StudentView() {
               <div className="mt-4 grid grid-cols-2 gap-px border border-rule bg-rule">
                 <div className="bg-paper px-3 py-2">
                   <div className="font-mono text-[10px] text-steel">{t('student.approval')}</div>
-                  <div className="font-mono text-[13px] font-semibold text-accent">{t('student.managerRole')}</div>
+                  <div className="font-mono text-[13px] font-semibold text-accent">{t(room.autoApprove ? 'student.autoWhenFree' : 'student.managerRole')}</div>
                 </div>
                 <div className="bg-paper px-3 py-2">
                   <div className="font-mono text-[10px] text-steel">{t('student.keyPickup')}</div>
@@ -213,9 +265,9 @@ export function StudentView() {
             {nextPass ? (
               <div className="flex flex-col gap-3">
                 <div className="flex items-center justify-between">
-                  <Eyebrow tone="ink">{nextPass.status === 'KEY_CHECKED_OUT' ? 'KEY IN CUSTODY' : 'NEXT KEY PICKUP'}</Eyebrow>
+                  <Eyebrow tone="ink">{t(nextPass.status === 'KEY_CHECKED_OUT' ? 'student.keyInCustody' : 'student.nextKeyPickup')}</Eyebrow>
                   <button onClick={() => setDrawer(true)} className="flex items-center gap-1 text-[13px] font-semibold text-ink hover:text-accent">
-                    All bookings <ArrowRight size={14} />
+                    {t('student.allBookings')} <ArrowRight size={14} />
                   </button>
                 </div>
                 <DigitalPass
@@ -229,26 +281,21 @@ export function StudentView() {
               </div>
             ) : (
               <Button variant="outline" onClick={() => setDrawer(true)}>
-                Open my bookings <ArrowRight size={14} />
+                {t('student.openMyBookings')} <ArrowRight size={14} />
               </Button>
             )}
           </Reveal>
         </div>
       </main>
 
-      <BookingModal
-        room={room}
-        rooms={[room]}
-        allowRoomChange={false}
-        selection={selection}
-        onClose={() => setSelection(null)}
-      />
+      {selection && <BookingModal room={room} rooms={[room]} allowRoomChange={false} selection={selection} onClose={() => setSelection(null)} />}
       <MyBookingsDrawer open={drawer} onClose={() => setDrawer(false)} />
       {activeBooking && activeBookingObj && (
         <StudentBookingPopover
+          key={activeBooking.id}
           booking={activeBookingObj}
           anchor={activeBooking.el}
-          onClose={() => setActiveBooking(null)}
+          onClose={() => setActiveBooking((current) => current?.id === activeBooking.id ? null : current)}
         />
       )}
     </>

@@ -3,37 +3,25 @@ import {
   ArrowLeft,
   Check,
   GraduationCap,
-  Info,
-  KeyRound,
   Lock,
-  Mail,
-  Phone,
   Save,
   ShieldCheck,
-  UserCheck,
-  Users,
 } from 'lucide-react'
 import { useStore } from '@/lib/store'
 import { useI18n } from '@/lib/i18n'
-import { Button, Eyebrow, Field, Input, Mono, Tag, cx } from './ui'
+import { Eyebrow, Field, Input, Tag } from './ui'
 import { NavItem, PageHeader, TopNav, homeFor, type Route } from './Shell'
 import { UtsLogo } from './UtsLogo'
-import { Reveal } from './effects'
 
 export function ProfileView({ go }: { go: (r: Route) => void }) {
-  const { currentUser, updateProfile, notify, logout } = useStore()
-  const { t, locale } = useI18n()
-
-  if (!currentUser) {
-    return null
-  }
-
-  const [fullName, setFullName] = useState(currentUser.fullName)
-  const [hcmutId, setHcmutId] = useState(currentUser.hcmutId || currentUser.studentCode || '')
-  const [utsId, setUtsId] = useState(currentUser.utsId || '')
+  const { currentUser, updateProfile, notify, logout, settings, settingsLoaded } = useStore()
+  const { t } = useI18n()
+  const [fullName, setFullName] = useState(currentUser?.fullName ?? '')
   const [error, setError] = useState<string | null>(null)
-  const [success, setSuccess] = useState<string | null>(null)
+  const [success, setSuccess] = useState(false)
   const [saving, setSaving] = useState(false)
+  if (!currentUser) return null
+  const { hcmutId, utsId } = currentUser
 
   const isStudent = currentUser.role === 'USER'
 
@@ -47,50 +35,29 @@ export function ProfileView({ go }: { go: (r: Route) => void }) {
       .join('')
       .toUpperCase() || 'U'
 
-  const handleSubmit = (e: FormEvent) => {
+  const handleSubmit = async (e: FormEvent) => {
     e.preventDefault()
+    if (saving) return
     setError(null)
-    setSuccess(null)
-
-    if (!fullName.trim()) {
-      setError('Full name cannot be empty.')
-      return
-    }
-
-    if (isStudent) {
-      if (hcmutId.trim() && !/^\d{7}$/.test(hcmutId.trim())) {
-        setError('HCMUT Student ID must be exactly 7 numeric digits (e.g. 2110123).')
-        return
-      }
-      if (utsId.trim() && !/^\d{8}$/.test(utsId.trim())) {
-        setError('UTS Student ID must be exactly 8 numeric digits (e.g. 14234567).')
-        return
-      }
-    }
-
+    setSuccess(false)
     setSaving(true)
-    const err = updateProfile({
-      fullName: fullName.trim(),
-      hcmutId: hcmutId.trim(),
-      utsId: utsId.trim(),
-    })
-    setSaving(false)
-
-    if (err) {
-      setError(err)
-    } else {
-      setSuccess('Profile and institutional credentials updated successfully.')
-      notify('Profile updated successfully.')
+    try {
+      const err = await updateProfile({ fullName })
+      if (err) {
+        setError(err)
+        notify(err, 'error')
+      } else {
+        setFullName(fullName.trim())
+        setSuccess(true)
+        notify(t('core.profileSaved'))
+      }
+    } finally {
+      setSaving(false)
     }
   }
 
   const backRoute = homeFor(currentUser.role)
-  const workspaceName =
-    currentUser.role === 'USER'
-      ? (locale === 'vi' ? 'Bàn Sinh viên' : 'Student Workspace')
-      : currentUser.role === 'MANAGER'
-        ? (locale === 'vi' ? 'Bàn Quản lý' : 'Facilities Manager Desk')
-        : (locale === 'vi' ? 'Bàn Quản trị' : 'System Admin Console')
+  const workspaceName = t(`core.workspace_${currentUser.role}`)
 
   return (
     <>
@@ -98,7 +65,7 @@ export function ProfileView({ go }: { go: (r: Route) => void }) {
       <TopNav>
         <NavItem onClick={() => go(backRoute)}>
           <span className="flex items-center gap-1.5 font-mono text-[13px]">
-            <ArrowLeft size={14} /> {locale === 'vi' ? 'Quay lại' : 'Back to'} {workspaceName}
+            <ArrowLeft size={14} /> {t('common.back')} {workspaceName}
           </span>
         </NavItem>
         <NavItem active>
@@ -116,12 +83,12 @@ export function ProfileView({ go }: { go: (r: Route) => void }) {
             className="group inline-flex items-center gap-2 rounded-sm border border-rule bg-paper px-3 py-1.5 font-mono text-[12px] font-semibold text-ink shadow-xs transition-colors hover:border-ink hover:bg-ice cursor-pointer"
           >
             <ArrowLeft size={14} className="text-steel transition-transform group-hover:-translate-x-0.5 group-hover:text-ink" />
-            <span>{locale === 'vi' ? 'QUAY LẠI' : 'RETURN TO'} {workspaceName.toUpperCase()}</span>
+            <span>{t('common.back')} {workspaceName.toUpperCase()}</span>
           </button>
 
           <div className="flex items-center gap-2 font-mono text-[11px] text-steel">
             <span className="inline-block h-2 w-2 rounded-full bg-emerald-500" />
-            <span>SESSION AUTHENTICATED · {currentUser.email}</span>
+            <span>{t('core.authenticated')} · {currentUser.email}</span>
           </div>
         </div>
 
@@ -146,7 +113,7 @@ export function ProfileView({ go }: { go: (r: Route) => void }) {
                       {t('profile.cardSubtitle')}
                     </h2>
                   </div>
-                  <Tag tone="accent">AUTHENTICATED LEDGER</Tag>
+                  <Tag tone="accent">{t('core.authenticated')}</Tag>
                 </div>
 
                 <div className="p-6 flex flex-col gap-5">
@@ -161,7 +128,7 @@ export function ProfileView({ go }: { go: (r: Route) => void }) {
                   {success && (
                     <div className="rounded-md border border-emerald-300 bg-emerald-50 p-3.5 text-[12.5px] text-emerald-800 font-mono flex items-start gap-2.5">
                       <Check size={16} className="text-emerald-600 shrink-0 mt-0.5" />
-                      <span>{t('profile.successUpdate')}</span>
+                      <span>{t('core.profileSaved')}</span>
                     </div>
                   )}
 
@@ -173,15 +140,15 @@ export function ProfileView({ go }: { go: (r: Route) => void }) {
                       onChange={(e) => {
                         setFullName(e.target.value)
                         setError(null)
-                        setSuccess(null)
+                        setSuccess(false)
                       }}
-                      placeholder="e.g. Linh Nguyen"
+                      required minLength={2} maxLength={120} disabled={saving}
                       className="text-[14px]"
                     />
                   </Field>
 
                   {/* Institutional Email (Read-only) */}
-                  <Field label={t('profile.emailLabel')} hint={t('profile.emailHint')}>
+                  <Field label={t('profile.emailLabel')} hint={t('core.readOnly')}>
                     <div className="relative">
                       <Input
                         type="email"
@@ -192,7 +159,7 @@ export function ProfileView({ go }: { go: (r: Route) => void }) {
                       <Lock size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-steel" />
                     </div>
                     <span className="font-mono text-[11px] text-steel mt-1 block">
-                      {t('profile.emailSubtext')}
+                      {t('core.emailNote')}
                     </span>
                   </Field>
 
@@ -204,57 +171,11 @@ export function ProfileView({ go }: { go: (r: Route) => void }) {
                           <GraduationCap size={15} className="text-accent" />
                           <span>{t('profile.identifiersTitle')}</span>
                         </span>
-                        <span className="font-mono text-[10px] text-steel">
-                          Dual Verification Required
-                        </span>
                       </div>
-
-                      <p className="text-[12px] text-graphite">
-                        {t('profile.identifiersNote')}
-                      </p>
-
-                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mt-1">
-                        <div>
-                          <label className="block font-mono text-[11px] font-bold text-steel mb-1.5">
-                            {t('profile.hcmutLabel')}
-                          </label>
-                          <Input
-                            type="text"
-                            value={hcmutId}
-                            onChange={(e) => {
-                              setHcmutId(e.target.value)
-                              setError(null)
-                              setSuccess(null)
-                            }}
-                            placeholder="e.g. 2110123"
-                            className="font-mono text-[13.5px]"
-                            maxLength={7}
-                          />
-                          <span className="font-mono text-[10.5px] text-steel mt-1 block">
-                            {t('profile.hcmutHint')}
-                          </span>
-                        </div>
-
-                        <div>
-                          <label className="block font-mono text-[11px] font-bold text-steel mb-1.5">
-                            {t('profile.utsLabel')}
-                          </label>
-                          <Input
-                            type="text"
-                            value={utsId}
-                            onChange={(e) => {
-                              setUtsId(e.target.value)
-                              setError(null)
-                              setSuccess(null)
-                            }}
-                            placeholder="e.g. 14234567"
-                            className="font-mono text-[13.5px]"
-                            maxLength={8}
-                          />
-                          <span className="font-mono text-[10.5px] text-steel mt-1 block">
-                            {t('profile.utsHint')}
-                          </span>
-                        </div>
+                      <p className="text-[12px] text-graphite">{t('core.readOnlyIds')}</p>
+                      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                        <Field label={t('student.hcmutId')}><Input readOnly value={hcmutId || '—'} /></Field>
+                        <Field label={t('student.utsId')}><Input readOnly value={utsId || '—'} /></Field>
                       </div>
                     </div>
                   ) : (
@@ -263,7 +184,7 @@ export function ProfileView({ go }: { go: (r: Route) => void }) {
                         {t('profile.staffIdLabel')}
                       </div>
                       <div className="font-mono text-[13px] font-bold text-ink">
-                        STAFF-{currentUser.id.slice(2).toUpperCase()}
+                        {currentUser.id}
                       </div>
                       <span className="font-mono text-[10.5px] text-steel mt-1 block">
                         {t('profile.staffIdSub')}
@@ -304,14 +225,14 @@ export function ProfileView({ go }: { go: (r: Route) => void }) {
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
                 <div className="rounded-md border border-rule bg-ice/40 p-3.5">
                   <div className="font-mono text-[10px] text-steel uppercase">{t('profile.maxSlotTitle')}</div>
-                  <div className="font-mono text-[15px] font-bold text-ink mt-0.5">{t('profile.maxSlotVal')}</div>
+                  <div className="font-mono text-[15px] font-bold text-ink mt-0.5">{settingsLoaded ? t('core.minutes', { n: settings.maxDurationMinutes }) : '—'}</div>
                   <div className="text-[11px] text-graphite mt-1">{t('profile.maxSlotSub')}</div>
                 </div>
 
                 <div className="rounded-md border border-rule bg-ice/40 p-3.5">
                   <div className="font-mono text-[10px] text-steel uppercase">{t('profile.advanceTitle')}</div>
-                  <div className="font-mono text-[15px] font-bold text-ink mt-0.5">{t('profile.advanceVal')}</div>
-                  <div className="text-[11px] text-graphite mt-1">{t('profile.advanceSub')}</div>
+                  <div className="font-mono text-[15px] font-bold text-ink mt-0.5">{settingsLoaded ? t('core.days', { n: settings.maxAdvanceDays }) : '—'}</div>
+                  <div className="text-[11px] text-graphite mt-1">{t('core.advanceNote')}</div>
                 </div>
 
                 <div className="rounded-md border border-rule bg-ice/40 p-3.5">
@@ -343,11 +264,7 @@ export function ProfileView({ go }: { go: (r: Route) => void }) {
                   <div className="font-mono text-[11px] text-steel truncate">{currentUser.email}</div>
                   <div className="mt-1">
                     <span className="inline-block rounded-sm bg-ink px-2 py-0.5 font-mono text-[9px] font-bold text-paper">
-                      {currentUser.role === 'USER'
-                        ? (locale === 'vi' ? 'SINH VIÊN · CHƯƠNG TRÌNH TNE' : 'STUDENT · TNE ACADEMIC PROGRAM')
-                        : currentUser.role === 'MANAGER'
-                          ? (locale === 'vi' ? 'QUẢN LÝ CƠ SỞ VẬT CHẤT' : 'FACILITIES MANAGER')
-                          : (locale === 'vi' ? 'QUẢN TRỊ VIÊN HỆ THỐNG' : 'SYSTEM ADMINISTRATOR')}
+                      {t(`core.${currentUser.role}`)}
                     </span>
                   </div>
                 </div>
@@ -356,13 +273,13 @@ export function ProfileView({ go }: { go: (r: Route) => void }) {
               {/* ID Details */}
               <div className="grid grid-cols-2 gap-2 border-t border-b border-rule py-3">
                 <div className="rounded-md border border-rule bg-ice/60 p-2.5">
-                  <div className="font-mono text-[9px] font-bold text-steel uppercase">HCMUT ID</div>
+                  <div className="font-mono text-[9px] font-bold text-steel uppercase">{t('student.hcmutId')}</div>
                   <div className="font-mono text-[14px] font-bold text-ink mt-0.5">
                     {hcmutId || '—'}
                   </div>
                 </div>
                 <div className="rounded-md border border-rule bg-ice/60 p-2.5">
-                  <div className="font-mono text-[9px] font-bold text-steel uppercase">UTS ID</div>
+                  <div className="font-mono text-[9px] font-bold text-steel uppercase">{t('student.utsId')}</div>
                   <div className="font-mono text-[14px] font-bold text-accent mt-0.5">
                     {utsId || '—'}
                   </div>
@@ -373,9 +290,9 @@ export function ProfileView({ go }: { go: (r: Route) => void }) {
               <div className="flex items-center justify-between font-mono text-[11px]">
                 <div className="flex items-center gap-1.5 text-emerald-700 font-semibold">
                   <ShieldCheck size={14} className="text-emerald-600" />
-                  <span>{t('profile.verifiedIdentity')}</span>
+                  <span>{t('core.authenticated')}</span>
                 </div>
-                <span className="text-steel">{t('profile.accessLevel')}</span>
+                <span className="text-steel">{t(`core.${currentUser.role}`)}</span>
               </div>
             </div>
 
@@ -403,7 +320,7 @@ export function ProfileView({ go }: { go: (r: Route) => void }) {
                 className="flex items-center justify-between rounded-md border border-plum/30 px-3 py-2 text-[12.5px] font-medium text-plum hover:bg-plum/10 transition-colors cursor-pointer"
               >
                 <span>{t('profile.signOut')}</span>
-                <span className="font-mono text-[10px] text-plum/70">DISCONNECT</span>
+                <span className="font-mono text-[10px] text-plum/70">{t('nav.logout')}</span>
               </button>
             </div>
           </div>

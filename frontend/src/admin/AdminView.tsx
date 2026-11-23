@@ -1,5 +1,7 @@
+import { useI18n } from '@/lib/i18n'
 import { Fragment, useEffect, useMemo, useState } from 'react'
 import {
+  Archive,
   ArrowRight,
   Building2,
   Calendar,
@@ -12,15 +14,11 @@ import {
   Search,
   ShieldCheck,
   Sliders,
-  Trash2,
-  UserCheck,
-  UserPlus,
   Users,
 } from 'lucide-react'
 import { ACTIVE_STATUSES, useLookups, useStore } from '@/lib/store'
 import type { Role, Room, RoomStatus, Settings, User } from '@/lib/types'
-import { fmtDate, fmtShort, fmtStamp, fmtTime, sameDay } from '@/lib/time'
-import { uid } from '@/lib/seed'
+import { CAMPUS_TZ, dayKey, fmtDate, fmtStamp } from '@/lib/time'
 import { Button, EmptyState, Eyebrow, Field, Input, Modal, Select, Tag, cx } from '@/components/ui'
 import { NavItem, PageHeader, TopNav } from '@/components/Shell'
 import { Reveal, ScrollRevealText, SplitText } from '@/components/effects'
@@ -29,65 +27,42 @@ import { OperationsWorkspace } from '@/manager/ManagerView'
 export type AdminTab = 'schedule' | 'users' | 'rooms' | 'settings' | 'audit'
 
 export function AdminView() {
-  const { rooms, users, bookings, audit } = useStore()
+  const { pendingQueue, bookings } = useStore()
   const [tab, setTab] = useState<AdminTab>('schedule')
+  const { t } = useI18n()
 
-  const pending = useMemo(() => bookings.filter((b) => b.status === 'PENDING'), [bookings])
-  const now = new Date()
-  const today = useMemo(
-    () =>
-      bookings.filter(
-        (b) => sameDay(new Date(b.start), now) && ['APPROVED', 'COMPLETED', 'KEY_CHECKED_OUT'].includes(b.status),
-      ),
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [bookings],
-  )
+  const pendingCount = pendingQueue.length
   const scheduled = useMemo(
     () => bookings.filter((b) => ['APPROVED', 'KEY_CHECKED_OUT'].includes(b.status)).length,
     [bookings],
   )
 
-  const studentCount = useMemo(() => users.filter((u) => u.role === 'USER').length, [users])
-  const managerCount = useMemo(() => users.filter((u) => u.role === 'MANAGER').length, [users])
 
-  const tabs = [
+  const tabs: { id: AdminTab; label: string; icon: React.ReactNode; badge?: number }[] = [
     {
-      id: 'schedule' as AdminTab,
-      n: '01',
-      label: 'Schedule & Approvals',
-      shortLabel: 'Schedule',
-      badge: pending.length,
+      id: 'schedule',
+      label: t('admin.tabSchedule'),
+      badge: pendingCount,
       icon: <Calendar size={14} />,
     },
     {
-      id: 'users' as AdminTab,
-      n: '02',
-      label: 'User Accounts',
-      shortLabel: 'Accounts',
-      count: users.length,
+      id: 'users',
+      label: t('admin.tabUsers'),
       icon: <Users size={14} />,
     },
     {
-      id: 'rooms' as AdminTab,
-      n: '03',
-      label: 'Room Inventory',
-      shortLabel: 'Rooms',
-      count: rooms.length,
+      id: 'rooms',
+      label: t('admin.tabRooms'),
       icon: <Building2 size={14} />,
     },
     {
-      id: 'settings' as AdminTab,
-      n: '04',
-      label: 'System Settings',
-      shortLabel: 'Settings',
+      id: 'settings',
+      label: t('admin.tabSettings'),
       icon: <Sliders size={14} />,
     },
     {
-      id: 'audit' as AdminTab,
-      n: '05',
-      label: 'Audit Ledger',
-      shortLabel: 'Audit',
-      count: audit.length,
+      id: 'audit',
+      label: t('admin.tabAudit'),
       icon: <ShieldCheck size={14} />,
     },
   ]
@@ -112,37 +87,35 @@ export function AdminView() {
 
       <main className="mx-auto max-w-[1440px] px-6 pt-10 pb-24">
         <PageHeader
-          eyebrow="SYSTEM ADMINISTRATOR COMMAND · ROLE=ADMIN"
+          eyebrow={t('admin.adminEyebrow')}
           title={
             tab === 'schedule'
-              ? 'Facility schedule & approvals'
+              ? t('admin.scheduleTitle')
               : tab === 'users'
-                ? 'Accounts & role management'
+                ? t('admin.accountsTitle')
                 : tab === 'rooms'
-                  ? 'Room inventory & status'
+                  ? t('admin.roomsTitle')
                   : tab === 'settings'
-                    ? 'System settings & policy'
-                    : 'Immutable audit ledger'
+                    ? t('admin.settingsTitle')
+                    : t('admin.auditTitle')
           }
           body={
             tab === 'schedule'
-              ? 'Direct facilities schedule and approval queue mirroring manager operations. Review requests, monitor real-time room occupancy, and assign schedule overrides across rooms 601, 602, and 605.'
+              ? t('admin.scheduleBody')
               : tab === 'users'
-                ? 'Directory of student and facility manager accounts. Filter and sort by role, manage activation status, and provision new Manager staff accounts.'
+                ? t('admin.accountsBody')
                 : tab === 'rooms'
-                  ? 'Manage university rooms 601, 602, and 605. Configure capacity, amenities, and maintenance states. All room bookings require manager/admin approval.'
+                  ? t('admin.roomsBody')
                   : tab === 'settings'
-                    ? 'Global operating hours (08:00–17:00), advance reservation limits, and student booking allowances.'
-                    : 'Cryptographically structured, append-only log of every mutation in the facilities ledger.'
+                    ? t('admin.settingsBody')
+                    : t('admin.auditBody')
           }
           right={
             <div className="flex flex-col items-end gap-3">
-              <Reveal stagger className="grid grid-cols-2 border-t border-l border-rule sm:grid-cols-4">
+              <Reveal stagger className="grid grid-cols-2 border-t border-l border-rule">
                 {[
-                  ['PENDING', pending.length, pending.length ? 'text-accent' : ''],
-                  ['STUDENTS', studentCount, ''],
-                  ['MANAGERS', managerCount, 'text-accent'],
-                  ['SCHEDULED', scheduled, ''],
+                  [t('common.pending'), pendingCount, pendingCount ? 'text-accent' : ''],
+                  [t('admin.scheduled'), scheduled, ''],
                 ].map(([k, v, c]) => (
                   <div key={k as string} className="min-w-[110px] border-r border-b border-rule px-4 py-3 bg-paper">
                     <div className="font-mono text-[11px] text-steel">{k}</div>
@@ -161,8 +134,8 @@ export function AdminView() {
           <Reveal key={tab} className="min-w-0">
             {tab === 'schedule' && (
               <OperationsWorkspace
-                eyebrow="01 / ADMINISTRATIVE SCHEDULE & OCCUPANCY"
-                title="Master facility calendar & approvals"
+                eyebrow={t('admin.adminScheduleEyebrow')}
+                title={t('admin.masterCalendar')}
               />
             )}
             {tab === 'users' && <UsersPanel />}
@@ -193,73 +166,63 @@ function PanelHead({ eyebrow, title, right }: { eyebrow: string; title: string; 
 const TH = 'px-4 py-2.5 text-left font-mono text-[11px] font-semibold text-steel whitespace-nowrap'
 const TD = 'px-4 py-3 align-middle'
 
-/* ───────────── 02 · Accounts Directory (Sorted by Student & Manager) ───────────── */
+/* ───────────── 02 · Accounts Directory ───────────── */
 
-type AccountFilterTab = 'ALL' | 'STUDENTS' | 'MANAGERS' | 'ADMINS'
-type AccountSortMode = 'MANAGERS_FIRST' | 'STUDENTS_FIRST' | 'NEWEST' | 'NAME'
+const PAGE_SIZE = 20
+
+function Pager({ page, total, count, loading, onPage }: {
+  page: number
+  total: number
+  count: number
+  loading: boolean
+  onPage: (page: number) => void
+}) {
+  const lastPage = Math.max(1, Math.ceil(total / PAGE_SIZE))
+  const { t } = useI18n()
+  return (
+    <div className="mt-3 flex flex-wrap items-center justify-between gap-2 font-mono text-[11px] text-steel">
+      <span aria-live="polite">{loading ? t('admin.loading') : t('admin.pageCounts', { count, total, page, lastPage })}</span>
+      <div className="flex gap-2">
+        <Button size="xs" variant="outline" disabled={loading || page <= 1} onClick={() => onPage(page - 1)}>{t('admin.previous')}</Button>
+        <Button size="xs" variant="outline" disabled={loading || page >= lastPage} onClick={() => onPage(page + 1)}>{t('admin.next')}</Button>
+      </div>
+    </div>
+  )
+}
 
 function UsersPanel() {
-  const { users, currentUser, toggleUserStatus } = useStore()
+  const { users, usersTotal, currentUser, loadUsers } = useStore()
+  const { t } = useI18n()
   const [q, setQ] = useState('')
-  const [accountTab, setAccountTab] = useState<AccountFilterTab>('ALL')
-  const [sortMode, setSortMode] = useState<AccountSortMode>('MANAGERS_FIRST')
+  const [query, setQuery] = useState<{ page: number; search?: string; role?: Role }>({ page: 1 })
+  const [loadedQuery, setLoadedQuery] = useState<typeof query | null>(null)
   const [showManagerModal, setShowManagerModal] = useState(false)
+  const loading = loadedQuery !== query
 
-  const studentCount = useMemo(() => users.filter((u) => u.role === 'USER').length, [users])
-  const managerCount = useMemo(() => users.filter((u) => u.role === 'MANAGER').length, [users])
-  const adminCount = useMemo(() => users.filter((u) => u.role === 'ADMIN').length, [users])
+  useEffect(() => {
+    let current = true
+    void loadUsers(query).finally(() => { if (current) setLoadedQuery(query) })
+    return () => { current = false }
+  }, [loadUsers, query])
 
-  const filteredAndSortedList = useMemo(() => {
-    const s = q.trim().toLowerCase()
-    let list = users.filter((u) => {
-      if (accountTab === 'STUDENTS' && u.role !== 'USER') return false
-      if (accountTab === 'MANAGERS' && u.role !== 'MANAGER') return false
-      if (accountTab === 'ADMINS' && u.role !== 'ADMIN') return false
-      if (!s) return true
-      return (
-        u.fullName.toLowerCase().includes(s) ||
-        u.email.toLowerCase().includes(s) ||
-        u.studentCode?.toLowerCase().includes(s)
-      )
-    })
-
-    list = [...list].sort((a, b) => {
-      if (sortMode === 'MANAGERS_FIRST') {
-        const rank = (role: Role) => (role === 'MANAGER' ? 0 : role === 'USER' ? 1 : 2)
-        const diff = rank(a.role) - rank(b.role)
-        if (diff !== 0) return diff
-        return a.fullName.localeCompare(b.fullName)
-      }
-      if (sortMode === 'STUDENTS_FIRST') {
-        const rank = (role: Role) => (role === 'USER' ? 0 : role === 'MANAGER' ? 1 : 2)
-        const diff = rank(a.role) - rank(b.role)
-        if (diff !== 0) return diff
-        return a.fullName.localeCompare(b.fullName)
-      }
-      if (sortMode === 'NEWEST') {
-        return +new Date(b.createdAt) - +new Date(a.createdAt)
-      }
-      if (sortMode === 'NAME') {
-        return a.fullName.localeCompare(b.fullName)
-      }
-      return 0
-    })
-
-    return list
-  }, [users, accountTab, sortMode, q])
+  useEffect(() => {
+    if (loading || usersTotal === 0) return
+    const lastPage = Math.ceil(usersTotal / PAGE_SIZE)
+    if (query.page > lastPage) setQuery({ ...query, page: lastPage })
+  }, [loading, query, usersTotal])
 
   return (
     <section>
       <PanelHead
-        eyebrow="02 / USER & ROLE MANAGEMENT · ACCOUNTS DIRECTORY"
-        title="Accounts directory"
+        eyebrow={t('admin.directoryEyebrow')}
+        title={t('admin.directory')}
         right={
           <Button
             variant="accent"
             onClick={() => setShowManagerModal(true)}
             className="gap-1.5 shadow-xs"
           >
-            <Plus size={14} strokeWidth={2.5} /> New Manager account
+            <Plus size={14} strokeWidth={2.5} /> {t('admin.newManager')}
           </Button>
         }
       />
@@ -268,153 +231,74 @@ function UsersPanel() {
       <div className="mb-5 flex flex-wrap items-center justify-between gap-3 rounded-md border border-edge bg-ice px-4 py-3 text-[13px] text-graphite">
         <div className="flex items-center gap-2.5">
           <span className="flex h-5 items-center rounded-sm bg-accent px-2 font-mono text-[10px] font-bold text-paper">
-            GOVERNANCE RULE
+            {t('admin.governance')}
           </span>
           <span>
-            <strong className="text-ink">Manager accounts can ONLY be created by System Administrator.</strong> Students self-register with Student ID.
+            <strong className="text-ink">{t('admin.managerProvisionRule')}</strong> {t('admin.studentSelfRegister')}
           </span>
         </div>
-        <div className="flex items-center gap-3 font-mono text-[11px] text-steel">
-          <span>STUDENTS: <b className="text-ink">{studentCount}</b></span>
-          <span>•</span>
-          <span>MANAGERS: <b className="text-accent">{managerCount}</b></span>
-          <span>•</span>
-          <span>ADMINS: <b className="text-ink">{adminCount}</b></span>
-        </div>
       </div>
 
-      {/* Filter and Sort Toolbar */}
-      <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
-        {/* Filter Tabs */}
-        <div className="flex flex-wrap items-center gap-1.5">
-          <button
-            type="button"
-            onClick={() => setAccountTab('ALL')}
-            className={cx(
-              'rounded-[4px] px-3 py-1.5 font-mono text-[12px] font-semibold transition-all',
-              accountTab === 'ALL'
-                ? 'border border-ink bg-paper text-ink shadow-xs'
-                : 'text-steel hover:bg-ice hover:text-ink',
-            )}
-          >
-            ALL ACCOUNTS ({users.length})
-          </button>
-
-          <button
-            type="button"
-            onClick={() => setAccountTab('STUDENTS')}
-            className={cx(
-              'flex items-center gap-1.5 rounded-[4px] px-3 py-1.5 font-mono text-[12px] font-semibold transition-all',
-              accountTab === 'STUDENTS'
-                ? 'border border-accent bg-paper text-accent shadow-xs'
-                : 'text-steel hover:bg-ice hover:text-ink',
-            )}
-          >
-            <span className="h-1.5 w-1.5 rounded-sm bg-accent" />
-            STUDENTS · USER ({studentCount})
-          </button>
-
-          <button
-            type="button"
-            onClick={() => setAccountTab('MANAGERS')}
-            className={cx(
-              'flex items-center gap-1.5 rounded-[4px] px-3 py-1.5 font-mono text-[12px] font-semibold transition-all',
-              accountTab === 'MANAGERS'
-                ? 'border border-ink bg-ink text-paper shadow-xs'
-                : 'text-steel hover:bg-ice hover:text-ink',
-            )}
-          >
-            <span className="h-1.5 w-1.5 rounded-sm bg-white" />
-            MANAGERS · STAFF ({managerCount})
-          </button>
-
-          <button
-            type="button"
-            onClick={() => setAccountTab('ADMINS')}
-            className={cx(
-              'flex items-center gap-1.5 rounded-[4px] px-3 py-1.5 font-mono text-[12px] font-semibold transition-all',
-              accountTab === 'ADMINS'
-                ? 'border border-edge bg-paper text-ink shadow-xs'
-                : 'text-steel hover:bg-ice hover:text-ink',
-            )}
-          >
-            ADMINS ({adminCount})
-          </button>
+      <form className="mb-4 flex flex-wrap items-center gap-3" onSubmit={(event) => {
+        event.preventDefault()
+        setQuery((previous) => ({ ...previous, page: 1, search: q.trim() || undefined }))
+      }}>
+        <Select aria-label={t('admin.accountRole')} value={query.role ?? ''} onChange={(event) => {
+          const role = (event.target.value || undefined) as Role | undefined
+          setQuery((previous) => ({ ...previous, page: 1, role }))
+        }} className="!w-auto font-mono">
+          <option value="">{t('admin.allRoles')}</option>
+          <option value="USER">{t('admin.students')}</option>
+          <option value="MANAGER">{t('admin.managers')}</option>
+          <option value="ADMIN">{t('admin.admins')}</option>
+        </Select>
+        <div className="relative flex-1">
+          <Search size={15} className="pointer-events-none absolute top-1/2 left-3 -translate-y-1/2 text-steel" />
+          <Input aria-label={t('admin.accountSearch')} value={q} onChange={(event) => setQ(event.target.value)} placeholder={t('admin.accountSearchPlaceholder')} className="pl-9" />
         </div>
-
-        {/* Right: Search and Sort */}
-        <div className="flex flex-wrap items-center gap-3">
-          {accountTab === 'ALL' && (
-            <div className="flex items-center gap-1.5">
-              <span className="font-mono text-[11px] text-steel">SORT:</span>
-              <Select
-                value={sortMode}
-                onChange={(e) => setSortMode(e.target.value as AccountSortMode)}
-                className="!w-[170px] !py-1 font-mono !text-[12px]"
-              >
-                <option value="MANAGERS_FIRST">Managers First</option>
-                <option value="STUDENTS_FIRST">Students First</option>
-                <option value="NEWEST">Newest Joined</option>
-                <option value="NAME">Name (A-Z)</option>
-              </Select>
-            </div>
-          )}
-
-          <div className="relative min-w-[240px]">
-            <Search size={15} className="pointer-events-none absolute top-1/2 left-3 -translate-y-1/2 text-steel" />
-            <Input
-              value={q}
-              onChange={(e) => setQ(e.target.value)}
-              placeholder="Search name, email, or Student ID..."
-              className="pl-9 font-sans text-[13px]"
-            />
-          </div>
-        </div>
-      </div>
+        <Button type="submit" variant="outline">{t('admin.search')}</Button>
+      </form>
 
       {/* Accounts Table */}
       <div className="overflow-x-auto rounded-lg border border-edge bg-paper">
         <table className="w-full min-w-[900px] border-collapse">
           <thead className="border-b border-ink bg-ice">
             <tr>
-              <th className={TH}>ACCOUNT / NAME</th>
-              <th className={TH}>STUDENT ID</th>
-              <th className={TH}>ROLE</th>
-              <th className={TH}>STATUS</th>
-              <th className={TH}>JOINED</th>
+              <th className={TH}>{t('admin.accountName')}</th>
+              <th className={TH}>{t('admin.studentId')}</th>
+              <th className={TH}>{t('admin.role')}</th>
+              <th className={TH}>{t('admin.status')}</th>
+              <th className={TH}>{t('admin.joined')}</th>
             </tr>
           </thead>
           <tbody>
-            {filteredAndSortedList.length === 0 ? (
+            {loading ? (
+              <tr><td colSpan={5} className="p-8 text-center text-steel">{t('admin.loadingAccounts')}</td></tr>
+            ) : users.length === 0 ? (
               <tr>
                 <td colSpan={5} className="p-8 text-center">
                   <EmptyState
-                    title="NO ACCOUNTS MATCHING"
-                    body={
-                      accountTab === 'MANAGERS'
-                        ? 'No manager accounts match this filter. Click "+ New Manager account" to provision staff.'
-                        : 'No accounts match the current query.'
-                    }
+                    title={t('admin.noMatchingAccounts')}
+                    body={t('admin.accountsEmptyMessage')}
                   />
-                  {accountTab === 'MANAGERS' && (
+                  {query.role === 'MANAGER' && (
                     <Button
                       variant="accent"
                       size="sm"
                       onClick={() => setShowManagerModal(true)}
                       className="mt-3 inline-flex gap-1.5"
                     >
-                      <Plus size={14} /> Provision First Manager
+                      <Plus size={14} /> {t('admin.firstManager')}
                     </Button>
                   )}
                 </td>
               </tr>
             ) : (
-              filteredAndSortedList.map((u) => (
+              users.map((u) => (
                 <UserRow
                   key={u.id}
                   u={u}
                   self={u.id === currentUser?.id}
-                  onToggle={() => toggleUserStatus(u.id)}
                 />
               ))
             )}
@@ -422,13 +306,15 @@ function UsersPanel() {
         </table>
       </div>
 
-      <CreateManagerModal open={showManagerModal} onClose={() => setShowManagerModal(false)} />
+      <Pager page={query.page} total={usersTotal} count={users.length} loading={loading} onPage={(page) => setQuery((previous) => ({ ...previous, page }))} />
+      {showManagerModal && <CreateManagerModal onClose={() => setShowManagerModal(false)} />}
     </section>
   )
 }
 
-function CreateManagerModal({ open, onClose }: { open: boolean; onClose: () => void }) {
-  const { createManagerAccount } = useStore()
+function CreateManagerModal({ onClose }: { onClose: () => void }) {
+  const { createManagerAccount, notify } = useStore()
+  const { t } = useI18n()
   const [fullName, setFullName] = useState('')
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
@@ -438,22 +324,22 @@ function CreateManagerModal({ open, onClose }: { open: boolean; onClose: () => v
   const generateStrongPassword = () => {
     const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789!@#$%^&*'
     let pw = 'Mgr!'
-    for (let i = 0; i < 10; i++) pw += chars[Math.floor(Math.random() * chars.length)]
+    for (const value of crypto.getRandomValues(new Uint16Array(10))) pw += chars[value % chars.length]
     setPassword(pw)
   }
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
+    if (loading) return
     setError(null)
     setLoading(true)
     try {
       const err = await createManagerAccount({ fullName, email, password })
       if (err) {
         setError(err)
+        notify(err, 'error')
       } else {
-        setFullName('')
-        setEmail('')
-        setPassword('')
+        notify(t('admin.managerCreated'))
         onClose()
       }
     } finally {
@@ -461,27 +347,26 @@ function CreateManagerModal({ open, onClose }: { open: boolean; onClose: () => v
     }
   }
 
-  if (!open) return null
+  const close = () => { if (!loading) onClose() }
 
   return (
-    <Modal open onClose={onClose} title="Create Manager account" eyebrow="ADMIN PRIVILEGE · PROVISION STAFF">
+    <Modal open onClose={close} title={t('admin.createManager')} eyebrow={t('admin.adminPrivilege')}>
       <form onSubmit={handleSubmit}>
-        <div className="flex flex-col gap-4 p-6">
+        <fieldset disabled={loading} className="flex min-w-0 flex-col gap-4 p-6">
           <div className="rounded-md border border-edge bg-ice p-3 text-[13px] leading-[1.5] text-graphite">
-            <span className="font-semibold text-ink">Staff Provisioning Policy:</span> Only System Administrators can provision Manager accounts. Student accounts are created via self-registration with a valid Student ID.
+            <span className="font-semibold text-ink">{t('admin.provisionPolicy')}</span> {t('admin.provisionPolicyBody')}
           </div>
 
-          <Field label="Full name" hint="required">
+          <Field label={t('admin.fullName')} hint={t('admin.required')}>
             <Input
               value={fullName}
               onChange={(e) => setFullName(e.target.value)}
-              placeholder="Minh Hoang"
-              autoFocus
+              placeholder={t('admin.fullNameExample')}
               required
             />
           </Field>
 
-          <Field label="Email" hint="staff domain recommended">
+          <Field label={t('admin.email')} hint={t('admin.staffDomain')}>
             <Input
               type="email"
               value={email}
@@ -491,21 +376,10 @@ function CreateManagerModal({ open, onClose }: { open: boolean; onClose: () => v
             />
           </Field>
 
-          <Field
-            label="Initial password"
-            hint="min 8 chars"
-            action={
-              <button
-                type="button"
-                onClick={generateStrongPassword}
-                className="font-mono text-[11px] font-semibold text-accent hover:underline"
-              >
-                Generate strong
-              </button>
-            }
-          >
+          <Field label={t('admin.initialPassword')} hint={t('admin.minPassword')}>
             <Input
               type="text"
+              autoComplete="new-password"
               value={password}
               onChange={(e) => setPassword(e.target.value)}
               placeholder="••••••••••••"
@@ -513,20 +387,28 @@ function CreateManagerModal({ open, onClose }: { open: boolean; onClose: () => v
               required
             />
           </Field>
+          <button
+            type="button"
+            onClick={generateStrongPassword}
+            disabled={loading}
+            className="self-start font-mono text-[11px] font-semibold text-accent hover:underline"
+          >
+            {t('admin.generatePassword')}
+          </button>
 
           {error && (
-            <div className="border-l-2 border-plum bg-plum/[0.06] px-3 py-2 text-[13px] font-medium text-plum">
+            <div role="alert" className="border-l-2 border-plum bg-plum/[0.06] px-3 py-2 text-[13px] font-medium text-plum">
               {error}
             </div>
           )}
-        </div>
+        </fieldset>
 
         <div className="flex justify-end gap-2 border-t border-rule px-6 py-4">
           <Button variant="ghost" type="button" onClick={onClose} disabled={loading}>
-            Cancel
+            {t('admin.cancel')}
           </Button>
           <Button size="md" type="submit" disabled={loading}>
-            {loading ? 'Provisioning...' : 'Provision Manager account'} <ArrowRight size={16} />
+            {loading ? t('admin.provisioning') : t('admin.provisionManager')} <ArrowRight size={16} />
           </Button>
         </div>
       </form>
@@ -534,22 +416,59 @@ function CreateManagerModal({ open, onClose }: { open: boolean; onClose: () => v
   )
 }
 
-function UserRow({ u, self, onToggle }: { u: User; self: boolean; onToggle: () => void }) {
-  const { updateUserRole } = useStore()
+function UserRow({ u, self }: { u: User; self: boolean }) {
+  const { updateUserRole, setUserStatus, notify } = useStore()
+  const { t, locale } = useI18n()
   const [pendingRole, setPendingRole] = useState<Role | null>(null)
   const [code, setCode] = useState('')
   const [error, setError] = useState<string | null>(null)
+  const [busy, setBusy] = useState(false)
+
+  const updateRole = async (role: Role, studentCode?: string) => {
+    if (busy) return
+    setError(null)
+    setBusy(true)
+    try {
+      const error = await updateUserRole(u.id, role, studentCode)
+      if (error) {
+        setError(error)
+        notify(error, 'error')
+      } else {
+        setPendingRole(null)
+        notify(t('admin.roleUpdated'))
+      }
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const changeStatus = async () => {
+    if (busy || self) return
+    setBusy(true)
+    const status = u.status === 'ACTIVE' ? 'SUSPENDED' : 'ACTIVE'
+    try {
+      const error = await setUserStatus(u.id, status)
+      if (error) notify(error, 'error')
+      else notify(status === 'SUSPENDED' ? t('admin.accountSuspended') : t('admin.accountActivated'))
+    } finally {
+      setBusy(false)
+    }
+  }
 
   const change = (role: Role) => {
-    if (role === u.role) return
+    if (busy || role === (pendingRole ?? u.role)) return
+    if (role === u.role) {
+      setPendingRole(null)
+      setError(null)
+      return
+    }
     if (role === 'USER' && !u.studentCode) {
       setPendingRole('USER')
       setCode('')
       setError(null)
       return
     }
-    const err = updateUserRole(u.id, role)
-    setError(err)
+    void updateRole(role)
   }
 
   const isAdmin = u.role === 'ADMIN'
@@ -584,7 +503,7 @@ function UserRow({ u, self, onToggle }: { u: User; self: boolean; onToggle: () =
             </span>
             <div className="min-w-0">
               <div className="flex items-center gap-2 text-[14px] font-medium">
-                {u.fullName} {self && <Tag tone="accent">YOU</Tag>}
+                {u.fullName} {self && <Tag tone="accent">{t('admin.you')}</Tag>}
               </div>
               <div className="truncate text-[12px] text-steel">{u.email}</div>
             </div>
@@ -595,7 +514,7 @@ function UserRow({ u, self, onToggle }: { u: User; self: boolean; onToggle: () =
           {u.studentCode ? (
             <span className="text-meta">{u.studentCode}</span>
           ) : isManager ? (
-            <span className="font-mono text-[11px] text-steel uppercase">— (STAFF)</span>
+            <span className="font-mono text-[11px] text-steel uppercase">{t('admin.staff')}</span>
           ) : (
             <span className="text-steel/60">—</span>
           )}
@@ -603,20 +522,21 @@ function UserRow({ u, self, onToggle }: { u: User; self: boolean; onToggle: () =
 
         <td className={TD}>
           {isAdmin ? (
-            <div className="flex items-center gap-1.5" title="System Admin account is protected">
-              <Tag tone="ink">ADMIN</Tag>
+            <div className="flex items-center gap-1.5" title={t('admin.adminProtected')}>
+              <Tag tone="ink">{t('admin.role_ADMIN')}</Tag>
               <Lock size={12} className="text-steel" />
             </div>
           ) : (
             <>
               <Select
+                aria-label={t('admin.accountRole')}
                 value={pendingRole ?? u.role}
-                disabled={self}
+                disabled={self || busy}
                 onChange={(e) => change(e.target.value as Role)}
                 className="!w-[130px] !py-1 font-mono !text-[12px]"
               >
-                <option value="USER">USER</option>
-                <option value="MANAGER">MANAGER</option>
+                <option value="USER">{t('admin.role_USER')}</option>
+                <option value="MANAGER">{t('admin.role_MANAGER')}</option>
               </Select>
               {error && !pendingRole && <div className="mt-1 text-[11px] text-plum">{error}</div>}
             </>
@@ -625,23 +545,24 @@ function UserRow({ u, self, onToggle }: { u: User; self: boolean; onToggle: () =
 
         <td className={TD}>
           <button
-            disabled={self}
-            onClick={onToggle}
+            type="button"
+            disabled={self || busy}
+            onClick={changeStatus}
             className={cx(
               'flex items-center gap-2 rounded-md border px-2 py-1 font-mono text-[11px] font-semibold transition-colors disabled:cursor-not-allowed disabled:opacity-50',
               u.status === 'ACTIVE'
                 ? 'border-accent/50 bg-tint text-forest hover:border-accent'
                 : 'border-plum/40 bg-plum/[0.07] text-plum hover:border-plum',
             )}
-            title={self ? 'You cannot change your own status' : u.status === 'ACTIVE' ? 'Suspend account' : 'Reactivate account'}
+            title={self ? t('admin.ownStatus') : u.status === 'ACTIVE' ? t('admin.suspend') : t('admin.reactivate')}
           >
             <span className={cx('h-1.5 w-1.5 rounded-sm', u.status === 'ACTIVE' ? 'bg-accent' : 'bg-plum')} />
-            {u.status}
+            {t(`admin.accountStatus_${u.status}`)}
           </button>
         </td>
 
         <td className={cx(TD, 'font-mono text-[12px] text-steel')}>
-          {fmtStamp(u.createdAt).slice(0, 10)}
+          {fmtDate(u.createdAt, locale)}
         </td>
       </tr>
 
@@ -650,27 +571,26 @@ function UserRow({ u, self, onToggle }: { u: User; self: boolean; onToggle: () =
           <td colSpan={5} className="px-4 py-3">
             <div className="flex flex-wrap items-end gap-3">
               <div className="text-[13px] text-graphite">
-                Assigning <span className="font-mono font-semibold text-ink">USER</span> to {u.fullName} requires a unique Student ID.
+                {t('admin.studentRolePrompt', { name: u.fullName })}
               </div>
               <Input
+                disabled={busy}
                 value={code}
                 onChange={(e) => setCode(e.target.value.toUpperCase().slice(0, 8))}
+                aria-label={t('admin.studentId')}
                 placeholder="SE000000"
                 className="!w-[160px] font-mono"
                 autoFocus
               />
               <Button
                 size="sm"
-                onClick={() => {
-                  const err = updateUserRole(u.id, 'USER', code)
-                  setError(err)
-                  if (!err) setPendingRole(null)
-                }}
+                disabled={busy || !code.trim()}
+                onClick={() => updateRole('USER', code)}
               >
-                Assign role <ArrowRight size={14} />
+                {t('admin.assignRole')} <ArrowRight size={14} />
               </Button>
-              <Button size="sm" variant="ghost" onClick={() => setPendingRole(null)}>
-                Cancel
+              <Button size="sm" variant="ghost" disabled={busy} onClick={() => { setPendingRole(null); setError(null) }}>
+                {t('admin.cancel')}
               </Button>
               {error && <span className="text-[12px] font-medium text-plum">{error}</span>}
             </div>
@@ -690,20 +610,37 @@ const statusTone: Record<RoomStatus, 'accent' | 'meta' | 'neutral'> = {
 }
 
 function RoomsPanel() {
-  const { rooms, bookings, saveRoom, deleteRoom } = useStore()
+  const { rooms, bookings, setRoomStatus, notify } = useStore()
+  const { t } = useI18n()
   const [editing, setEditing] = useState<Room | null>(null)
-  const [confirmDel, setConfirmDel] = useState<string | null>(null)
+  const [confirmArchive, setConfirmArchive] = useState<string | null>(null)
+  const [updatingStatus, setUpdatingStatus] = useState(false)
+
+  const changeStatus = async (room: Room, status: RoomStatus) => {
+    if (updatingStatus || room.status === status) return
+    setUpdatingStatus(true)
+    try {
+      const error = await setRoomStatus(room.id, status)
+      if (error) notify(error, 'error')
+      else {
+        notify(status === 'INACTIVE' ? t('admin.roomArchived', { code: room.code }) : t('admin.roomStatusUpdated', { code: room.code }))
+        setConfirmArchive(null)
+      }
+    } finally {
+      setUpdatingStatus(false)
+    }
+  }
 
   return (
     <section>
       <PanelHead
-        eyebrow="03 / ROOMS MANAGEMENT · ROOMS 601, 602, 605"
-        title="Rooms (601, 602, 605)"
+        eyebrow={t('admin.roomsEyebrow')}
+        title={t('admin.rooms')}
         right={
           <Button
             onClick={() =>
               setEditing({
-                id: uid('r'),
+                id: '',
                 code: '601',
                 name: '',
                 floor: 6,
@@ -714,30 +651,22 @@ function RoomsPanel() {
               })
             }
           >
-            <Plus size={14} /> New room
+            <Plus size={14} /> {t('admin.newRoom')}
           </Button>
         }
       />
 
-      {/* Auto-Approve Policy Notice */}
-      <div className="mb-4 flex items-center justify-between rounded-md border border-rule bg-ice px-4 py-2.5 font-mono text-[11px] text-steel">
-        <span className="flex items-center gap-2">
-          <span className="h-2 w-2 rounded-sm bg-accent" />
-          ALL BOOKINGS GO THROUGH FACILITY MANAGER / ADMIN APPROVAL · NO AUTO-APPROVE
-        </span>
-        <span>ROOMS LIMITED TO 601, 602, 605</span>
-      </div>
 
       <div className="overflow-x-auto rounded-lg border border-edge bg-paper">
         <table className="w-full min-w-[760px] border-collapse">
           <thead className="border-b border-ink bg-ice">
             <tr>
-              <th className={TH}>CODE</th>
-              <th className={TH}>NAME &amp; LEVEL</th>
-              <th className={TH}>CAPACITY</th>
-              <th className={TH}>STATUS</th>
-              <th className={TH}>ACTIVE BKGS</th>
-              <th className={cx(TH, 'text-right')}>ACTIONS</th>
+              <th className={TH}>{t('admin.code')}</th>
+              <th className={TH}>{t('admin.nameLevel')}</th>
+              <th className={TH}>{t('admin.capacityUpper')}</th>
+              <th className={TH}>{t('admin.status')}</th>
+              <th className={TH}>{t('admin.activeBookings')}</th>
+              <th className={cx(TH, 'text-right')}>{t('admin.actions')}</th>
             </tr>
           </thead>
           <tbody>
@@ -751,55 +680,56 @@ function RoomsPanel() {
                   <td className={TD}>
                     <div className="text-[14px] font-medium">{r.name}</div>
                     <div className="font-mono text-[11px] text-steel">
-                      L{r.floor} · {r.features.join(' · ') || 'no features'}
+                      {t('admin.floorNumber', { number: r.floor })} · {r.features.join(' · ') || t('admin.noFeatures')}
                     </div>
                   </td>
                   <td className={cx(TD, 'font-mono text-[14px] font-semibold')}>{r.capacity}</td>
                   <td className={TD}>
                     <Select
                       value={r.status}
-                      onChange={(e) => saveRoom({ ...r, status: e.target.value as RoomStatus })}
+                      aria-label={t('admin.roomStatusFor', { code: r.code })}
+                      disabled={updatingStatus}
+                      onChange={(event) => {
+                        const status = event.target.value as RoomStatus
+                        if (status === 'INACTIVE') setConfirmArchive(r.id)
+                        else void changeStatus(r, status)
+                      }}
                       className="!w-[150px] !py-1 font-mono !text-[12px]"
                     >
-                      <option>AVAILABLE</option>
-                      <option>MAINTENANCE</option>
-                      <option>INACTIVE</option>
+                      <option value="AVAILABLE">{t('admin.roomStatus_AVAILABLE')}</option>
+                      <option value="MAINTENANCE">{t('admin.roomStatus_MAINTENANCE')}</option>
+                      <option value="INACTIVE">{t('admin.roomStatus_INACTIVE')}</option>
                     </Select>
                   </td>
                   <td className={TD}>
                     <Tag tone={act ? 'ink' : 'neutral'}>{String(act).padStart(2, '0')}</Tag>
                   </td>
                   <td className={cx(TD, 'text-right')}>
-                    {confirmDel === r.id ? (
+                    {confirmArchive === r.id && r.status !== 'INACTIVE' ? (
                       <div className="flex items-center justify-end gap-2">
-                        <span className="text-[12px] text-plum">{act ? `${act} active booking(s).` : ''} Delete?</span>
+                        <span className="text-[12px] text-plum">{t('admin.archivePrompt', { code: r.code })}</span>
                         <Button
                           size="xs"
                           variant="plum"
-                          onClick={() => {
-                            deleteRoom(r.id)
-                            setConfirmDel(null)
-                          }}
+                          disabled={updatingStatus}
+                          onClick={() => changeStatus(r, 'INACTIVE')}
                         >
-                          Delete
+                          {t('admin.confirmArchive')}
                         </Button>
-                        <Button size="xs" variant="ghost" onClick={() => setConfirmDel(null)}>
-                          Keep
+                        <Button size="xs" variant="ghost" disabled={updatingStatus} onClick={() => setConfirmArchive(null)}>
+                          {t('admin.keep')}
                         </Button>
                       </div>
                     ) : (
                       <div className="flex justify-end gap-1">
                         <Button size="xs" variant="outline" onClick={() => setEditing(r)}>
-                          <Pencil size={12} /> Edit
+                          <Pencil size={12} /> {t('admin.edit')}
                         </Button>
-                        <Button
-                          size="xs"
-                          variant="ghost"
-                          aria-label={`Delete room ${r.code}`}
-                          onClick={() => setConfirmDel(r.id)}
-                        >
-                          <Trash2 size={13} />
-                        </Button>
+                        {r.status !== 'INACTIVE' && (
+                          <Button size="xs" variant="ghost" disabled={updatingStatus} onClick={() => setConfirmArchive(r.id)}>
+                            <Archive size={13} /> {t('admin.archive')}
+                          </Button>
+                        )}
                       </div>
                     )}
                   </td>
@@ -813,50 +743,32 @@ function RoomsPanel() {
       <div className="mt-4 flex flex-wrap gap-4 font-mono text-[11px] text-steel">
         {(['AVAILABLE', 'MAINTENANCE', 'INACTIVE'] as RoomStatus[]).map((s) => (
           <span key={s} className="flex items-center gap-2">
-            <Tag tone={statusTone[s]}>{s}</Tag>
-            {s === 'AVAILABLE' ? 'open for booking' : s === 'MAINTENANCE' ? 'temporarily closed' : 'hidden from new bookings'}
+            <Tag tone={statusTone[s]}>{t(`admin.roomStatus_${s}`)}</Tag>
+            {s === 'AVAILABLE' ? t('admin.roomOpen') : s === 'MAINTENANCE' ? t('admin.roomClosed') : t('admin.roomHidden')}
           </span>
         ))}
       </div>
 
-      <RoomEditor
-        room={editing}
-        onClose={() => setEditing(null)}
-        onSave={saveRoom}
-        isNew={!!editing && !rooms.some((r) => r.id === editing.id)}
-      />
+      {editing && <RoomEditor room={editing} onClose={() => setEditing(null)} />}
     </section>
   )
 }
 
-function RoomEditor({
-  room,
-  onClose,
-  onSave,
-  isNew,
-}: {
-  room: Room | null
-  onClose: () => void
-  onSave: (r: Room) => string | null
-  isNew: boolean
-}) {
-  const [draft, setDraft] = useState<Room | null>(room)
-  const [features, setFeatures] = useState('')
+function RoomEditor({ room, onClose }: { room: Room; onClose: () => void }) {
+  const { saveRoom, notify } = useStore()
+  const { t } = useI18n()
+  const [draft, setDraft] = useState(room)
+  const [features, setFeatures] = useState(() => room.features.join(', '))
   const [error, setError] = useState<string | null>(null)
+  const [saving, setSaving] = useState(false)
 
-  useEffect(() => {
-    setDraft(room)
-    setFeatures(room?.features.join(', ') ?? '')
-    setError(null)
-  }, [room])
-
-  if (!room || !draft) return null
-  const up = (p: Partial<Room>) => setDraft((d) => (d ? { ...d, ...p } : d))
+  const up = (p: Partial<Room>) => setDraft((d) => ({ ...d, ...p }))
+  const close = () => { if (!saving) onClose() }
 
   return (
-    <Modal open onClose={onClose} title={isNew ? 'Create room' : `Edit room ${room.code}`} eyebrow={`ROOM RECORD · ${draft.id}`}>
-      <div className="grid grid-cols-2 gap-4 p-6">
-        <Field label="Room code" hint="3 digits (601, 602, 605)">
+    <Modal open onClose={close} title={room.id ? t('admin.editRoom', { code: room.code }) : t('admin.createRoom')} eyebrow={t('admin.roomRecord')}>
+      <fieldset disabled={saving} className="grid grid-cols-2 gap-4 p-6">
+        <Field label={t('admin.roomCode')} hint={t('admin.roomCodeHint')}>
           <Input
             value={draft.code}
             onChange={(e) => up({ code: e.target.value.replace(/\D/g, '').slice(0, 3) })}
@@ -864,7 +776,7 @@ function RoomEditor({
             placeholder="601"
           />
         </Field>
-        <Field label="Floor">
+        <Field label={t('admin.floor')}>
           <Input
             type="number"
             value={draft.floor}
@@ -872,10 +784,10 @@ function RoomEditor({
             className="font-mono"
           />
         </Field>
-        <Field label="Name" className="col-span-2">
-          <Input value={draft.name} onChange={(e) => up({ name: e.target.value })} placeholder="Seminar Hall 601" />
+        <Field label={t('admin.name')} className="col-span-2">
+          <Input value={draft.name} onChange={(e) => up({ name: e.target.value })} placeholder={t('admin.roomNameExample')} />
         </Field>
-        <Field label="Capacity">
+        <Field label={t('admin.capacity')}>
           <Input
             type="number"
             min={1}
@@ -884,49 +796,54 @@ function RoomEditor({
             className="font-mono"
           />
         </Field>
-        <Field label="Status">
-          <Select
-            value={draft.status}
-            onChange={(e) => up({ status: e.target.value as RoomStatus })}
-            className="font-mono"
-          >
-            <option>AVAILABLE</option>
-            <option>MAINTENANCE</option>
-            <option>INACTIVE</option>
-          </Select>
-        </Field>
-        <Field label="Features" hint="comma separated" className="col-span-2">
+        <label className="flex items-center gap-2 self-center text-[13px] font-semibold text-ink">
+          <input type="checkbox" checked={draft.autoApprove} onChange={(event) => up({ autoApprove: event.target.checked })} />
+          {t('admin.autoApprove')}
+        </label>
+        <Field label={t('admin.features')} hint={t('admin.commaSeparated')} className="col-span-2">
           <Input
             value={features}
             onChange={(e) => setFeatures(e.target.value)}
-            placeholder="Projector, Whiteboard, Video Conference"
+            placeholder={t('admin.featureExamples')}
           />
         </Field>
 
         {error && (
-          <div className="col-span-2 border-l-2 border-plum bg-plum/[0.06] px-3 py-2 text-[13px] font-medium text-plum">
+          <div role="alert" className="col-span-2 border-l-2 border-plum bg-plum/[0.06] px-3 py-2 text-[13px] font-medium text-plum">
             {error}
           </div>
         )}
-      </div>
+      </fieldset>
 
       <div className="flex justify-end gap-2 border-t border-rule px-6 py-4">
-        <Button variant="ghost" onClick={onClose}>
-          Cancel
+        <Button variant="ghost" onClick={close} disabled={saving}>
+          {t('admin.cancel')}
         </Button>
         <Button
           size="md"
-          onClick={() => {
-            const err = onSave({
-              ...draft,
-              autoApprove: false, // Strict governance: all bookings require manager approval
-              features: features.split(',').map((f) => f.trim()).filter(Boolean),
-            })
-            if (err) setError(err)
-            else onClose()
+          disabled={saving}
+          onClick={async () => {
+            if (saving) return
+            setError(null)
+            setSaving(true)
+            try {
+              const error = await saveRoom({
+                ...draft,
+                features: features.split(',').map((f) => f.trim()).filter(Boolean),
+              })
+              if (error) {
+                setError(error)
+                notify(error, 'error')
+              } else {
+                notify(t('admin.roomSaved'))
+                onClose()
+              }
+            } finally {
+              setSaving(false)
+            }
           }}
         >
-          Save room <ArrowRight size={16} />
+          {t('admin.saveRoom')} <ArrowRight size={16} />
         </Button>
       </div>
     </Modal>
@@ -935,21 +852,19 @@ function RoomEditor({
 
 /* ───────────── 04 · System Settings ───────────── */
 
-const TIMEZONES = [
-  'Asia/Ho_Chi_Minh (UTC+07:00)',
-  'Asia/Singapore (UTC+08:00)',
-  'Australia/Sydney (UTC+10:00)',
-  'UTC (UTC+00:00)',
-]
-
 function SettingsPanel() {
-  const { settings, updateSettings } = useStore()
-  const [draft, setDraft] = useState<Settings>(settings)
+  const { settings, settingsLoaded, refreshSettings, updateSettings, notify } = useStore()
+  const { t } = useI18n()
+  const [edit, setEdit] = useState<{ base: Settings; value: Settings } | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const [saving, setSaving] = useState(false)
+  const [retrying, setRetrying] = useState(false)
 
-  useEffect(() => setDraft(settings), [settings])
+  const draft = edit?.base === settings ? edit.value : settings
   const dirty = JSON.stringify(draft) !== JSON.stringify(settings)
-  const up = (p: Partial<Settings>) => setDraft((d) => ({ ...d, ...p }))
+  const up = (p: Partial<Settings>) => setEdit((current) => ({
+    base: settings, value: { ...(current?.base === settings ? current.value : settings), ...p },
+  }))
   const hours = Array.from({ length: 25 }, (_, h) => `${String(h).padStart(2, '0')}:00`)
   const num = (k: keyof Settings) => (e: React.ChangeEvent<HTMLInputElement>) =>
     up({ [k]: Number(e.target.value) } as Partial<Settings>)
@@ -957,32 +872,40 @@ function SettingsPanel() {
   return (
     <section>
       <PanelHead
-        eyebrow="04 / GLOBAL CONFIGURATION"
-        title="System settings"
-        right={dirty ? <Tag tone="meta">UNSAVED CHANGES</Tag> : <Tag tone="accent">IN SYNC</Tag>}
+        eyebrow={t('admin.settingsEyebrow')}
+        title={t('admin.settings')}
+        right={settingsLoaded && (dirty ? <Tag tone="meta">{t('admin.unsaved')}</Tag> : <Tag tone="accent">{t('admin.inSync')}</Tag>)}
       />
+      {!settingsLoaded && (
+        <div className="mb-4 flex flex-wrap items-center gap-3 rounded-md border border-plum p-3 text-[13px]">
+          <p role="alert">{t('admin.settingsUnavailable')}</p>
+          <Button variant="outline" size="sm" disabled={retrying} onClick={async () => {
+            setRetrying(true)
+            try { await refreshSettings() } finally { setRetrying(false) }
+          }}>
+            {retrying ? t('admin.loading') : t('admin.retrySettings')}
+          </Button>
+        </div>
+      )}
       <Reveal stagger className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_320px]">
-        <div className="rounded-lg border border-edge bg-paper">
+        <fieldset disabled={!settingsLoaded || saving} className="min-w-0 rounded-lg border border-edge bg-paper">
           <SettingGroup
             n="A"
-            title="Locale & hours"
-            body="Defines the bookable operating band shown on every room calendar (08:00–17:00)."
+            title={t('admin.localeHours')}
+            body={t('admin.localeHoursBody')}
           >
-            <Field label="Timezone" className="sm:col-span-2">
-              <Select value={draft.timezone} onChange={(e) => up({ timezone: e.target.value })} className="font-mono">
-                {TIMEZONES.map((t) => (
-                  <option key={t}>{t}</option>
-                ))}
-              </Select>
-            </Field>
-            <Field label="Opening time">
+            <div className="flex flex-col gap-1.5 sm:col-span-2">
+              <span className="text-[13px] font-semibold text-ink">{t('admin.campusTimezone')}</span>
+              <span className="font-mono text-[13px] text-steel">{CAMPUS_TZ} (UTC+07:00)</span>
+            </div>
+            <Field label={t('admin.openingTime')}>
               <Select value={draft.openTime} onChange={(e) => up({ openTime: e.target.value })} className="font-mono">
                 {hours.slice(0, 24).map((h) => (
                   <option key={h}>{h}</option>
                 ))}
               </Select>
             </Field>
-            <Field label="Closing time">
+            <Field label={t('admin.closingTime')}>
               <Select value={draft.closeTime} onChange={(e) => up({ closeTime: e.target.value })} className="font-mono">
                 {hours.slice(1).map((h) => (
                   <option key={h}>{h}</option>
@@ -991,8 +914,8 @@ function SettingsPanel() {
             </Field>
           </SettingGroup>
 
-          <SettingGroup n="B" title="Booking policy" body="Limits enforced on every new student reservation request.">
-            <Field label="Max duration" hint="minutes">
+          <SettingGroup n="B" title={t('admin.policy')} body={t('admin.policyBody')}>
+            <Field label={t('admin.maxDuration')} hint={t('admin.minutes')}>
               <Input
                 type="number"
                 step={30}
@@ -1002,7 +925,7 @@ function SettingsPanel() {
                 className="font-mono"
               />
             </Field>
-            <Field label="Max active bookings" hint="per user">
+            <Field label={t('admin.maxActive')} hint={t('admin.perUser')}>
               <Input
                 type="number"
                 min={1}
@@ -1011,16 +934,7 @@ function SettingsPanel() {
                 className="font-mono"
               />
             </Field>
-            <Field label="Min advance" hint="days">
-              <Input
-                type="number"
-                min={0}
-                value={draft.minAdvanceDays}
-                onChange={num('minAdvanceDays')}
-                className="font-mono"
-              />
-            </Field>
-            <Field label="Max advance" hint="days">
+            <Field label={t('admin.maxAdvance')} hint={t('admin.days')}>
               <Input
                 type="number"
                 min={1}
@@ -1038,27 +952,37 @@ function SettingsPanel() {
           )}
 
           <div className="flex justify-end gap-2 border-t border-rule px-6 py-4">
-            <Button variant="ghost" disabled={!dirty} onClick={() => setDraft(settings)}>
-              Discard
+            <Button variant="ghost" disabled={!dirty || saving} onClick={() => { setEdit(null); setError(null) }}>
+              {t('admin.discard')}
             </Button>
-            <Button size="md" disabled={!dirty} onClick={() => setError(updateSettings(draft))}>
-              Save settings <ArrowRight size={16} />
+            <Button size="md" disabled={!settingsLoaded || !dirty || saving} onClick={async () => {
+              if (!settingsLoaded || saving) return
+              setError(null)
+              setSaving(true)
+              try {
+                const error = await updateSettings({ ...draft, timezone: CAMPUS_TZ })
+                if (error) {
+                  setError(error)
+                  notify(error, 'error')
+                } else {
+                  notify(t('admin.settingsSaved'))
+                }
+              } finally {
+                setSaving(false)
+              }
+            }}>
+              {t('admin.saveSettings')} <ArrowRight size={16} />
             </Button>
           </div>
-        </div>
+        </fieldset>
 
         <aside className="flex flex-col gap-4 self-start rounded-lg bg-ice p-6">
-          <Eyebrow>POLICY PREVIEW</Eyebrow>
+          <Eyebrow>{t('admin.policyPreview')}</Eyebrow>
           <h3 className="font-display text-feature font-w450">
-            <SplitText text="What students will see" />
+            <SplitText text={t('admin.studentPreview')} />
           </h3>
           <p className="text-[14px] leading-[1.5] text-graphite">
-            Rooms open <b className="font-semibold text-ink">{draft.openTime}–{draft.closeTime}</b>. Requests must be made{' '}
-            <b className="font-semibold text-ink">
-              {draft.minAdvanceDays}–{draft.maxAdvanceDays} days
-            </b>{' '}
-            ahead, last at most <b className="font-semibold text-ink">{draft.maxDurationMinutes} min</b>, and each student may hold{' '}
-            <b className="font-semibold text-ink">{draft.maxActiveBookings}</b> active booking(s).
+            {t('admin.policyDescription', { range: `${draft.openTime}–${draft.closeTime}`, advance: draft.maxAdvanceDays, duration: draft.maxDurationMinutes, active: draft.maxActiveBookings })}
           </p>
           <div className="flex h-8 items-stretch border border-ink bg-paper">
             {Array.from({ length: 10 }, (_, i) => (
@@ -1068,16 +992,16 @@ function SettingsPanel() {
                   'flex flex-1 items-center justify-center border-r border-rule font-mono text-[9px] last:border-0',
                   i === 0
                     ? 'bg-ink text-paper'
-                    : i >= draft.minAdvanceDays && i <= draft.maxAdvanceDays
+                    : i <= draft.maxAdvanceDays
                       ? 'bg-tint text-forest'
                       : 'hatch text-steel',
                 )}
               >
-                {i === 0 ? 'T' : `+${i}`}
+                {i === 0 ? t('admin.todayShort') : `+${i}`}
               </div>
             ))}
           </div>
-          <div className="font-mono text-[11px] text-steel">TZ · {draft.timezone}</div>
+          <div className="font-mono text-[11px] text-steel">{t('admin.timezoneShort')} · {CAMPUS_TZ}</div>
         </aside>
       </Reveal>
     </section>
@@ -1112,29 +1036,29 @@ function SettingGroup({
 /* ───────────── 05 · Immutable Audit Ledger ───────────── */
 
 function AuditPanel() {
-  const { audit } = useStore()
+  const { audit, auditTotal, loadAudit } = useStore()
   const { user } = useLookups()
-  const [q, setQ] = useState('')
-  const [action, setAction] = useState('ALL')
+  const { t, locale } = useI18n()
+  const [action, setAction] = useState('')
+  const [targetType, setTargetType] = useState('')
+  const [query, setQuery] = useState<{ page: number; action?: string; targetType?: string }>({ page: 1 })
+  const [loadedQuery, setLoadedQuery] = useState<typeof query | null>(null)
   const [open, setOpen] = useState<string | null>(null)
 
-  const actions = useMemo(() => ['ALL', ...Array.from(new Set(audit.map((a) => a.action))).sort()], [audit])
-  const list = audit.filter((a) => {
-    const s = q.trim().toLowerCase()
-    return (
-      (action === 'ALL' || a.action === action) &&
-      (!s ||
-        a.entity.toLowerCase().includes(s) ||
-        a.actorId.toLowerCase().includes(s) ||
-        JSON.stringify(a.metadata).toLowerCase().includes(s))
-    )
-  })
+  const loading = loadedQuery !== query
+
+  useEffect(() => {
+    let current = true
+    void loadAudit(query).finally(() => { if (current) setLoadedQuery(query) })
+    return () => { current = false }
+  }, [loadAudit, query])
 
   const exportJson = () => {
-    const blob = new Blob([JSON.stringify(list, null, 2)], { type: 'application/json' })
+    if (loading) return
+    const blob = new Blob([JSON.stringify(audit, null, 2)], { type: 'application/json' })
     const a = document.createElement('a')
     a.href = URL.createObjectURL(blob)
-    a.download = `audit-log-${fmtStamp(new Date()).slice(0, 10)}.json`
+    a.download = `audit-log-${dayKey(new Date())}-page-${query.page}.json`
     a.click()
     URL.revokeObjectURL(a.href)
   }
@@ -1151,47 +1075,46 @@ function AuditPanel() {
   return (
     <section>
       <PanelHead
-        eyebrow="05 / IMMUTABLE AUDIT LEDGER"
-        title="Audit logs"
+        eyebrow={t('admin.auditEyebrow')}
+        title={t('admin.audit')}
         right={
-          <Button variant="outline" onClick={exportJson}>
-            <Download size={14} /> Export JSON
+          <Button variant="outline" onClick={exportJson} disabled={loading || audit.length === 0}>
+            <Download size={14} /> {t('admin.exportJson')}
           </Button>
         }
       />
 
-      <div className="mb-4 flex flex-wrap gap-3">
-        <div className="relative min-w-[260px] flex-1">
-          <Search size={15} className="pointer-events-none absolute top-1/2 left-3 -translate-y-1/2 text-steel" />
-          <Input
-            value={q}
-            onChange={(e) => setQ(e.target.value)}
-            placeholder="Search entity, actor or metadata"
-            className="pl-9 font-mono"
-          />
-        </div>
-        <Select value={action} onChange={(e) => setAction(e.target.value)} className="!w-[220px] font-mono">
-          {actions.map((a) => (
-            <option key={a}>{a}</option>
-          ))}
-        </Select>
-      </div>
+      <form className="mb-4 flex flex-wrap items-end gap-3" onSubmit={(event) => {
+        event.preventDefault()
+        setOpen(null)
+        setQuery({ page: 1, action: action.trim() || undefined, targetType: targetType.trim() || undefined })
+      }}>
+        <Field label={t('admin.action')} hint={t('admin.exactMatch')}>
+          <Input maxLength={100} placeholder={t('admin.actionExample')} value={action} onChange={(event) => setAction(event.target.value)} className="font-mono" />
+        </Field>
+        <Field label={t('admin.targetType')} hint={t('admin.exactMatch')}>
+          <Input maxLength={100} placeholder={t('admin.targetExample')} value={targetType} onChange={(event) => setTargetType(event.target.value)} className="font-mono" />
+        </Field>
+        <Button type="submit" variant="outline">{t('admin.applyFilters')}</Button>
+      </form>
 
       <div className="overflow-x-auto rounded-lg border border-edge bg-paper">
         <table className="w-full min-w-[900px] border-collapse">
           <thead className="border-b border-ink bg-ice">
             <tr>
               <th className={cx(TH, 'w-8')} />
-              <th className={TH}>TIMESTAMP</th>
-              <th className={TH}>LOG ID</th>
-              <th className={TH}>ACTOR</th>
-              <th className={TH}>ACTION</th>
-              <th className={TH}>ENTITY</th>
-              <th className={TH}>METADATA</th>
+              <th className={TH}>{t('admin.timestamp')}</th>
+              <th className={TH}>{t('admin.logId')}</th>
+              <th className={TH}>{t('admin.actor')}</th>
+              <th className={TH}>{t('admin.actionUpper')}</th>
+              <th className={TH}>{t('admin.entity')}</th>
+              <th className={TH}>{t('admin.metadata')}</th>
             </tr>
           </thead>
           <tbody>
-            {list.map((a) => {
+            {loading || audit.length === 0 ? (
+              <tr><td colSpan={7} className="p-8 text-center text-steel">{loading ? t('admin.auditLoading') : t('admin.auditEmpty')}</td></tr>
+            ) : audit.map((a) => {
               const isOpen = open === a.id
               const meta = JSON.stringify(a.metadata)
               return (
@@ -1206,11 +1129,11 @@ function AuditPanel() {
                     <td className="pl-4 text-steel">
                       {isOpen ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
                     </td>
-                    <td className={cx(TD, 'whitespace-nowrap text-ink')}>{fmtStamp(a.ts)}</td>
+                    <td className={cx(TD, 'whitespace-nowrap text-ink')}>{fmtStamp(a.ts, locale)}</td>
                     <td className={cx(TD, 'text-steel')}>{a.id}</td>
                     <td className={TD}>
                       <div className="font-medium text-meta">{a.actorId}</div>
-                      <div className="font-sans text-[11px] text-steel">{user(a.actorId)?.fullName ?? 'System'}</div>
+                      <div className="font-sans text-[11px] text-steel">{user(a.actorId)?.fullName}</div>
                     </td>
                     <td className={TD}>
                       <Tag tone={tone(a.action)}>{a.action}</Tag>
@@ -1223,7 +1146,7 @@ function AuditPanel() {
                       <td colSpan={7} className="bg-forest p-0">
                         <div className="flex items-center justify-between border-b border-white/15 px-5 py-2 font-mono text-[11px] text-white/75">
                           <span>metadata.json · {a.id}</span>
-                          <span>{meta.length} bytes</span>
+                          <span>{t('admin.metadataSize', { count: new TextEncoder().encode(meta).length })}</span>
                         </div>
                         <pre className="overflow-x-auto px-5 py-4 font-mono text-[12px] leading-[1.6] text-tint">
                           {JSON.stringify(
@@ -1249,9 +1172,10 @@ function AuditPanel() {
         </table>
       </div>
 
-      <div className="mt-3 font-mono text-[11px] text-steel">
-        SHOWING {list.length} OF {audit.length} ENTRIES · APPEND-ONLY
-      </div>
+      <Pager page={query.page} total={auditTotal} count={audit.length} loading={loading} onPage={(page) => {
+        setOpen(null)
+        setQuery((previous) => ({ ...previous, page }))
+      }} />
     </section>
   )
 }

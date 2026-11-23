@@ -2,20 +2,14 @@ import { useState, type FormEvent } from 'react'
 import { ArrowRight } from 'lucide-react'
 import { useStore } from '@/lib/store'
 import { Button, Eyebrow, Field, Input, cx } from './ui'
-import { LogoMark, homeFor, type Route } from './Shell'
-import { BlurText, Reveal } from './effects'
-import { UtsLogo } from './UtsLogo'
-import { BrandLockup } from './BrandLockup'
+import { useI18n } from '@/lib/i18n'
 import { LanguageSwitcher } from './LanguageSwitcher'
+import { BrandLockup } from './BrandLockup'
+import { BlurText, Reveal } from './effects'
 
-const demo = [
-  { role: 'USER' as const, label: 'Student', email: 'student@tne.edu.vn', pw: 'Student123456!' },
-  { role: 'MANAGER' as const, label: 'Facilities Manager', email: 'manager@tne.edu.vn', pw: 'Manager123456!' },
-  { role: 'ADMIN' as const, label: 'System Admin', email: 'admin@tne.edu.vn', pw: 'Admin12345678!' },
-]
-
-export function AuthScreen({ go }: { go: (r: Route) => void }) {
-  const { loginAsync, registerAsync } = useStore()
+export function AuthScreen() {
+  const { t } = useI18n()
+  const { login, register, notify } = useStore()
   const [mode, setMode] = useState<'signin' | 'register'>('signin')
   const [form, setForm] = useState({ fullName: '', email: '', password: '', hcmutId: '', utsId: '' })
   const [error, setError] = useState<string | null>(null)
@@ -24,47 +18,19 @@ export function AuthScreen({ go }: { go: (r: Route) => void }) {
 
   const submit = async (e: FormEvent) => {
     e.preventDefault()
+    if (loading) return
     setError(null)
     setLoading(true)
     try {
-      if (mode === 'signin') {
-        const res = await loginAsync(form.email, form.password)
-        if (res.error) {
-          setError(res.error)
-        } else if (res.user) {
-          go(homeFor(res.user.role))
-        }
-      } else {
-        const res = await registerAsync({
-          fullName: form.fullName,
-          email: form.email,
-          password: form.password,
-          hcmutId: form.hcmutId,
-          utsId: form.utsId,
-          studentCode: form.hcmutId,
-        })
-        if (res.error) {
-          setError(res.error)
-        } else if (res.user) {
-          go(homeFor(res.user.role))
-        }
+      const error = mode === 'signin' ? await login(form.email, form.password) : await register({
+        fullName: form.fullName, email: form.email, password: form.password,
+        studentCode: `${form.hcmutId.trim()} / ${form.utsId.trim()}`,
+      })
+      if (error) {
+        setError(error)
+        notify(error, 'error')
       }
-    } finally {
-      setLoading(false)
-    }
-  }
-
-  const quickSignIn = async (email: string, pw: string) => {
-    setForm((f) => ({ ...f, email, password: pw }))
-    setError(null)
-    setLoading(true)
-    try {
-      const res = await loginAsync(email, pw)
-      if (res.error) {
-        setError(res.error)
-      } else if (res.user) {
-        go(homeFor(res.user.role))
-      }
+      setForm((current) => ({ ...current, password: '' }))
     } finally {
       setLoading(false)
     }
@@ -72,17 +38,13 @@ export function AuthScreen({ go }: { go: (r: Route) => void }) {
 
   return (
     <div className="relative flex min-h-[calc(100vh-40px)] items-center justify-center overflow-hidden px-6 py-16">
-      <div className="absolute top-4 right-6 z-20">
-        <LanguageSwitcher />
-      </div>
+      <div className="absolute top-4 right-6 z-20"><LanguageSwitcher /></div>
       <RailDiagram />
       <div className="relative z-10 w-full max-w-[440px]">
-        <div className="mb-8 flex flex-col items-center gap-3 text-center">
-          <div className="flex flex-col items-center gap-2 bg-paper px-5 py-3 rounded-md border border-rule/70 shadow-subtle">
-            <BrandLockup size="lg" />
-          </div>
+        <div className="mb-8 flex flex-col items-center gap-4 text-center">
+          <div className="rounded-md border border-rule/70 bg-paper px-5 py-3 shadow-subtle"><BrandLockup size="lg" /></div>
           <h1 className="bg-paper px-3 font-display text-[40px] leading-[1.1] font-w450 text-ink md:text-[52px]">
-            <BlurText text="Rooms, keys, on the record." shine />
+            <BlurText text={t('core.tagline')} shine />
           </h1>
         </div>
 
@@ -91,6 +53,8 @@ export function AuthScreen({ go }: { go: (r: Route) => void }) {
             {(['signin', 'register'] as const).map((m) => (
               <button
                 key={m}
+                type="button"
+                disabled={loading}
                 onClick={() => {
                   setMode(m)
                   setError(null)
@@ -100,22 +64,24 @@ export function AuthScreen({ go }: { go: (r: Route) => void }) {
                   mode === m ? 'text-ink shadow-subtle' : 'text-steel hover:text-ink',
                 )}
               >
-                {m === 'signin' ? 'Sign in' : 'Register as student'}
+                {m === 'signin' ? t('auth.signInBtn') : t('core.registerStudent')}
               </button>
             ))}
           </div>
           <form onSubmit={submit} className="flex flex-col gap-4 p-6">
-            <Eyebrow>{mode === 'signin' ? '01 / AUTHENTICATE' : '01 / NEW STUDENT ACCOUNT · ROLE=USER'}</Eyebrow>
+            <Eyebrow>{mode === 'signin' ? t('auth.signInTitle') : t('auth.signUpTitle')}</Eyebrow>
             {mode === 'register' && (
-              <Field label="Full name">
-                <Input value={form.fullName} onChange={set('fullName')} placeholder="Nguyen Van An" autoComplete="name" />
+              <Field label={t('auth.fullNameLabel')}>
+                <Input required value={form.fullName} onChange={set('fullName')} placeholder="Nguyen Van An" autoComplete="name" />
               </Field>
             )}
-            <Field label="Email">
-              <Input type="email" value={form.email} onChange={set('email')} placeholder="student@tne.edu.vn" autoComplete="email" />
+            <Field label={t('core.email')}>
+              <Input required type="email" value={form.email} onChange={set('email')} autoComplete="email" />
             </Field>
-            <Field label="Password" hint={mode === 'register' ? '8+ chars · uppercase, lowercase, number' : undefined}>
+            <Field label={t('auth.passwordLabel')} hint={mode === 'register' ? t('core.passwordHint') : undefined}>
               <Input
+                required
+                minLength={mode === 'register' ? 8 : undefined}
                 type="password"
                 value={form.password}
                 onChange={set('password')}
@@ -125,82 +91,33 @@ export function AuthScreen({ go }: { go: (r: Route) => void }) {
             </Field>
             {mode === 'register' && (
               <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-                <Field label="HCMUT Student ID" hint="required">
-                  <Input
-                    value={form.hcmutId}
-                    onChange={(e) => setForm((f) => ({ ...f, hcmutId: e.target.value.toUpperCase().slice(0, 12) }))}
-                    placeholder="e.g. 2110123"
-                    className="font-mono tracking-wider"
-                  />
+                <Field label={t('student.hcmutId')} hint={t('common.required')}>
+                  <Input required pattern="[0-9]{7}" inputMode="numeric" maxLength={7} value={form.hcmutId} onChange={set('hcmutId')} />
                 </Field>
-                <Field label="UTS Student ID" hint="required">
-                  <Input
-                    value={form.utsId}
-                    onChange={(e) => setForm((f) => ({ ...f, utsId: e.target.value.toUpperCase().slice(0, 12) }))}
-                    placeholder="e.g. 14234567"
-                    className="font-mono tracking-wider"
-                  />
+                <Field label={t('student.utsId')} hint={t('common.required')}>
+                  <Input required pattern="[0-9]{8}" inputMode="numeric" maxLength={8} value={form.utsId} onChange={set('utsId')} />
                 </Field>
               </div>
             )}
-            {error && <div className="border-l-2 border-plum bg-plum/[0.06] px-3 py-2 text-[13px] font-medium text-plum">{error}</div>}
+            {error && <div role="alert" className="border-l-2 border-plum bg-plum/[0.06] px-3 py-2 text-[13px] font-medium text-plum">{error}</div>}
             <Button type="submit" size="md" className="mt-2 w-full" disabled={loading}>
               {loading ? (
                 <span className="flex items-center gap-2">
                   <span className="h-3 w-3 animate-spin rounded-full border-2 border-paper border-t-transparent" />
-                  {mode === 'signin' ? 'Signing in...' : 'Creating account...'}
+                  {mode === 'signin' ? t('core.signingIn') : t('core.creating')}
                 </span>
               ) : (
                 <>
-                  {mode === 'signin' ? 'Sign in' : 'Create account'} <ArrowRight size={16} />
+                  {mode === 'signin' ? t('auth.signInBtn') : t('auth.signUpBtn')} <ArrowRight size={16} />
                 </>
               )}
             </Button>
             {mode === 'register' && (
               <p className="text-[12px] leading-[1.5] text-steel">
-                New accounts are assigned the <span className="font-mono font-semibold text-ink">USER</span> role. Manager and admin access is provisioned by the system administrator.
+                {t('core.rolePolicy')}
               </p>
             )}
           </form>
-          {mode === 'signin' && (
-            <div className="border-t border-rule bg-ice px-6 py-4">
-              <div className="mb-2 flex items-center justify-between">
-                <Eyebrow tone="steel" className="!text-[11px]">DEMO CREDENTIALS · 1-CLICK ACCESS</Eyebrow>
-                <span className="font-mono text-[10px] text-steel">CLICK TO FILL OR SIGN IN</span>
-              </div>
-              <div className="flex flex-col gap-1.5">
-                {demo.map((d) => (
-                  <div
-                    key={d.role}
-                    className="group flex flex-wrap items-center justify-between gap-2 rounded-md border border-edge/60 bg-paper/80 px-3 py-2 text-left transition hover:border-accent hover:bg-paper"
-                  >
-                    <button
-                      type="button"
-                      onClick={() => setForm((f) => ({ ...f, email: d.email, password: d.pw }))}
-                      className="flex flex-1 items-center gap-2.5 text-left"
-                      title="Click to populate form"
-                    >
-                      <span className="w-16 font-mono text-[11px] font-semibold text-meta">{d.role}</span>
-                      <div className="min-w-0 flex-1">
-                        <div className="truncate text-[13px] font-medium text-ink">{d.email}</div>
-                        <div className="font-mono text-[11px] text-steel">{d.pw}</div>
-                      </div>
-                    </button>
-                    <Button
-                      type="button"
-                      size="xs"
-                      variant="outline"
-                      disabled={loading}
-                      onClick={() => quickSignIn(d.email, d.pw)}
-                      className="!rounded !px-2 !py-0.5 text-[11px]"
-                    >
-                      Quick Sign In <ArrowRight size={11} />
-                    </Button>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
         </Reveal>
       </div>
     </div>
@@ -209,12 +126,13 @@ export function AuthScreen({ go }: { go: (r: Route) => void }) {
 
 /** Faint connector-path background evoking the payment-rail diagram */
 function RailDiagram() {
+  const { t } = useI18n()
   const labels = [
-    { x: 8, y: 22, t: 'ROOM 601' },
-    { x: 80, y: 18, t: 'KEY DESK' },
-    { x: 6, y: 74, t: 'APPROVAL' },
-    { x: 82, y: 78, t: 'ROOM 603' },
-    { x: 86, y: 48, t: 'ROOM 602' },
+    { x: 8, y: 22, t: `${t('common.room')} 601` },
+    { x: 80, y: 18, t: t('nav.keyCustody') },
+    { x: 6, y: 74, t: t('nav.approvalBoard') },
+    { x: 82, y: 78, t: `${t('common.room')} 605` },
+    { x: 86, y: 48, t: `${t('common.room')} 602` },
   ]
   return (
     <div className="pointer-events-none absolute inset-0 hidden md:block" aria-hidden>

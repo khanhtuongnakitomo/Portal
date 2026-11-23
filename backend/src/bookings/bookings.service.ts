@@ -18,6 +18,11 @@ import type { CalendarQueryDto } from './dto/calendar-query.dto.js';
 import type { CreateBookingDto } from './dto/create-booking.dto.js';
 import type { ListBookingsDto } from './dto/list-bookings.dto.js';
 import type { ManagerDayQueryDto } from './dto/manager-day-query.dto.js';
+import { lockRoomSchedule, overlappingSlot, rejectOverlaps } from './room-schedule.js';
+
+export function generatePassCode() {
+  return randomBytes(8).toString('hex').toUpperCase();
+}
 
 const activeBookingStatuses = [
   BookingStatus.PENDING,
@@ -32,6 +37,7 @@ const bookingInclude = {
       id: true,
       fullName: true,
       email: true,
+      role: true,
       studentProfile: { select: { studentCode: true } },
     },
   },
@@ -44,8 +50,24 @@ type BookingUserRecord = {
   id: string;
   fullName: string;
   email: string;
+  role: Role;
   studentProfile: { studentCode: string } | null;
 };
+
+function bookingKind(isEvent: boolean) {
+  return isEvent ? 'OFFICIAL' : 'STUDENT';
+}
+
+const calendarSelect = {
+  id: true,
+  roomId: true,
+  room: { select: { id: true, name: true } },
+  title: true,
+  startTime: true,
+  endTime: true,
+  status: true,
+  isEvent: true,
+} as const;
 
 export class BookingsService {
   constructor(
@@ -67,11 +89,7 @@ export class BookingsService {
     const endTime = new Date(dto.endTime);
 
     return this.prisma.$transaction(async (tx) => {
-      const locked = await tx.room.updateMany({
-        where: { id: dto.roomId },
-        data: { scheduleVersion: { increment: 1 } },
-      });
-      if (locked.count !== 1) throw new NotFoundException('Room not found');
+      await lockRoomSchedule(tx, dto.roomId);
 
       const room = await tx.room.findUniqueOrThrow({ where: { id: dto.roomId } });
       if (room.status === RoomStatus.INACTIVE) throw new NotFoundException('Room not found');
@@ -105,82 +123,6 @@ export class BookingsService {
         }
       }
 
-      if (isOfficialActivity) {
-        const firmConflict = await tx.booking.findFirst({
-          where: {
-            roomId: dto.roomId,
-            status: { in: [BookingStatus.APPROVED, BookingStatus.KEY_CHECKED_OUT] },
-            startTime: { lt: endTime },
-            endTime: { gt: startTime },
-          },
-          select: { id: true },
-        });
-        if (firmConflict) {
-          throw new ConflictException('This room is already reserved for that time range');
-        }
-
-        const overlappingPending = await tx.booking.findMany({
-          where: {
-            roomId: dto.roomId,
-            status: BookingStatus.PENDING,
-            startTime: { lt: endTime },
-            endTime: { gt: startTime },
-          },
-          select: { id: true },
-        });
-
-        if (overlappingPending.length > 0) {
-          const pendingIds = overlappingPending.map((b) => b.id);
-          const displacementNote = 'Slot assigned to an official room activity';
-          await tx.booking.updateMany({
-            where: { id: { in: pendingIds } },
-            data: {
-              status: BookingStatus.REJECTED,
-              reviewedById: userId,
-              reviewedAt: new Date(),
-              reviewNote: displacementNote,
-            },
-          });
-          await tx.bookingStatusHistory.createMany({
-            data: pendingIds.map((id) => ({
-              bookingId: id,
-              fromStatus: BookingStatus.PENDING,
-              toStatus: BookingStatus.REJECTED,
-              changedById: userId,
-              note: displacementNote,
-            })),
-          });
-          await this.notifications?.enqueueBookingDecision(tx, pendingIds);
-        }
-      } else {
-        const firmConflict = await tx.booking.findFirst({
-          where: {
-            roomId: dto.roomId,
-            status: { in: [BookingStatus.APPROVED, BookingStatus.KEY_CHECKED_OUT] },
-            startTime: { lt: endTime },
-            endTime: { gt: startTime },
-          },
-          select: { id: true },
-        });
-        if (firmConflict) {
-          throw new ConflictException('This room is already reserved for that time range');
-        }
-
-        const ownPendingConflict = await tx.booking.findFirst({
-          where: {
-            roomId: dto.roomId,
-            userId,
-            status: BookingStatus.PENDING,
-            startTime: { lt: endTime },
-            endTime: { gt: startTime },
-          },
-          select: { id: true },
-        });
-        if (ownPendingConflict) {
-          throw new ConflictException('You already have a pending request for this time slot');
-        }
-      }
-
       const isBlocked =
         room.blockStatus === RoomBlockStatus.ACTIVE &&
         room.blockStartTime !== null &&
@@ -189,12 +131,52 @@ export class BookingsService {
         room.blockEndTime > startTime;
       if (isBlocked) throw new ConflictException('This room is blocked for that time range');
 
-      const initialStatus = isOfficialActivity ? BookingStatus.APPROVED : BookingStatus.PENDING;
+      const slot = overlappingSlot(room.id, startTime, endTime);
+      const firmConflict = await tx.booking.findFirst({
+        where: { ...slot, status: { in: [BookingStatus.APPROVED, BookingStatus.KEY_CHECKED_OUT] } },
+        select: { id: true },
+      });
+      if (firmConflict && (isOfficialActivity || !room.autoApprove)) {
+        throw new ConflictException('This room is already reserved for that time range');
+      }
+
+      let autoApproved = false;
+      if (isOfficialActivity) {
+        const displaced = await rejectOverlaps(
+          tx,
+          slot,
+          BookingStatus.PENDING,
+          userId,
+          'Slot assigned to an official room activity',
+          { reason: 'OFFICIAL_ACTIVITY' },
+        );
+        await this.notifications?.enqueueBookingDecision(
+          tx,
+          displaced.map(({ id }) => id),
+        );
+      } else {
+        const pending = { ...slot, status: BookingStatus.PENDING };
+        const ownPending = await tx.booking.findFirst({
+          where: { ...pending, userId },
+          select: { id: true },
+        });
+        if (ownPending) {
+          throw new ConflictException('You already have a pending request for this time slot');
+        }
+        if (room.autoApprove && !firmConflict) {
+          autoApproved = !(await tx.booking.findFirst({ where: pending, select: { id: true } }));
+        }
+      }
+
+      const initialStatus =
+        isOfficialActivity || autoApproved ? BookingStatus.APPROVED : BookingStatus.PENDING;
       const reviewNote = isOfficialActivity
         ? 'Scheduled room activity / event assigned by Manager'
-        : undefined;
+        : autoApproved
+          ? 'Automatically approved by room policy'
+          : undefined;
       const reviewedById = isOfficialActivity ? userId : undefined;
-      const reviewedAt = isOfficialActivity ? new Date() : undefined;
+      const reviewedAt = initialStatus === BookingStatus.APPROVED ? new Date() : undefined;
 
       const created = await tx.booking.create({
         data: {
@@ -204,7 +186,7 @@ export class BookingsService {
           purpose: dto.purpose.trim(),
           attendeeCount: dto.attendeeCount,
           isEvent: isOfficialActivity,
-          passCode: randomBytes(8).toString('hex').toUpperCase(),
+          passCode: generatePassCode(),
           startTime,
           endTime,
           status: initialStatus,
@@ -221,65 +203,68 @@ export class BookingsService {
         },
         select: { id: true },
       });
+      if (autoApproved) {
+        await tx.auditLog.create({
+          data: {
+            action: 'BOOKING_APPROVED',
+            targetType: 'Booking',
+            targetId: created.id,
+            metadata: { reason: 'ROOM_AUTO_APPROVE', requestedById: userId },
+          },
+        });
+      }
       const booking = await tx.booking.findUniqueOrThrow({
         where: { id: created.id },
         include: bookingInclude,
       });
-      await this.notifications?.enqueueBookingCreated(tx, booking, settings.timezone);
+      if (autoApproved) {
+        await this.notifications?.enqueueBookingDecision(tx, [booking.id]);
+      } else {
+        await this.notifications?.enqueueBookingCreated(tx, booking, settings.timezone);
+      }
       return this.toApiBooking(booking);
     });
   }
 
-  async calendar(query: CalendarQueryDto) {
+  async calendar(query: CalendarQueryDto, viewer: AuthenticatedUser | null) {
     const from = new Date(query.from);
     const to = new Date(query.to);
     if (to <= from) throw new BadRequestException('to must be later than from');
     if (to.getTime() - from.getTime() > 90 * 86_400_000) {
       throw new BadRequestException('Calendar range cannot exceed 90 days');
     }
-    const [bookings, blockedRooms] = await Promise.all([
-      this.prisma.booking.findMany({
-        where: {
-          status: {
-            in: [
-              BookingStatus.PENDING,
-              BookingStatus.APPROVED,
-              BookingStatus.KEY_CHECKED_OUT,
-              BookingStatus.COMPLETED,
-            ],
-          },
-          roomId: query.roomId,
-          startTime: { lt: to },
-          endTime: { gt: from },
-        },
-        select: {
-          id: true,
-          roomId: true,
-          title: true,
-          purpose: true,
-          isEvent: true,
-          userId: true,
-          reviewNote: true,
-          passCode: true,
-          createdAt: true,
-          keyCheckedOutAt: true,
-          keyReturnedAt: true,
-          startTime: true,
-          endTime: true,
-          status: true,
-          room: { select: { id: true, name: true } },
-          user: {
+    const where = {
+      status: { in: [...activeBookingStatuses, BookingStatus.COMPLETED] },
+      roomId: query.roomId,
+      startTime: { lt: to },
+      endTime: { gt: from },
+    };
+    const staff = viewer?.role === Role.ADMIN || viewer?.role === Role.MANAGER;
+    const [publicRows, privateRows, blockedRooms] = await Promise.all([
+      staff
+        ? []
+        : this.prisma.booking.findMany({
+            where: { ...where, userId: viewer ? { not: viewer.id } : undefined },
+            select: calendarSelect,
+            orderBy: { startTime: 'asc' },
+          }),
+      viewer
+        ? this.prisma.booking.findMany({
+            where: { ...where, userId: staff ? undefined : viewer.id },
             select: {
-              id: true,
-              fullName: true,
-              email: true,
-              role: true,
-              studentProfile: { select: { studentCode: true } },
+              ...calendarSelect,
+              userId: true,
+              purpose: true,
+              attendeeCount: true,
+              reviewNote: true,
+              createdAt: true,
+              keyCheckedOutAt: true,
+              keyReturnedAt: true,
+              user: bookingInclude.user,
             },
-          },
-        },
-        orderBy: { startTime: 'asc' },
-      }),
+            orderBy: { startTime: 'asc' },
+          })
+        : [],
       this.prisma.room.findMany({
         where: {
           id: query.roomId,
@@ -297,13 +282,22 @@ export class BookingsService {
         orderBy: { blockStartTime: 'asc' },
       }),
     ]);
-    const mappedBookings = bookings.map((b) => ({
-      ...b,
-      user: {
-        ...b.user,
-        studentCode: b.user.studentProfile?.studentCode ?? null,
-      },
-    }));
+    const bookings = [
+      ...publicRows.map(({ isEvent, ...row }) => ({
+        ...row,
+        kind: bookingKind(isEvent),
+        isMine: false,
+      })),
+      ...privateRows.map(({ isEvent, user: { studentProfile, ...user }, ...row }) => ({
+        ...row,
+        kind: bookingKind(isEvent),
+        isMine: row.userId === viewer?.id,
+        user: { ...user, studentCode: studentProfile?.studentCode ?? null },
+      })),
+    ];
+    if (publicRows.length && privateRows.length) {
+      bookings.sort((a, b) => a.startTime.getTime() - b.startTime.getTime());
+    }
     const blocks = blockedRooms.map((room) => ({
       id: room.id,
       roomId: room.id,
@@ -312,7 +306,7 @@ export class BookingsService {
       endTime: room.blockEndTime,
       room: { id: room.id, name: room.name },
     }));
-    return { bookings: mappedBookings, blocks };
+    return { bookings, blocks };
   }
 
   async mine(userId: string, query: ListBookingsDto) {
@@ -391,7 +385,12 @@ export class BookingsService {
     return {
       bookingId: booking.id,
       passCode: booking.passCode,
-      holder: booking.user,
+      holder: {
+        id: booking.user.id,
+        fullName: booking.user.fullName,
+        email: booking.user.email,
+        studentCode: booking.user.studentCode,
+      },
       room: booking.room,
       title: booking.title,
       attendeeCount: booking.attendeeCount,
@@ -405,19 +404,19 @@ export class BookingsService {
     return this.prisma.$transaction(async (tx) => {
       const booking = await tx.booking.findUnique({
         where: { id },
+        select: { roomId: true, startTime: true, endTime: true, status: true },
       });
       if (!booking) throw new NotFoundException('Booking not found');
       if (booking.status !== BookingStatus.PENDING) {
         throw new ConflictException('Booking is no longer pending');
       }
+      await lockRoomSchedule(tx, booking.roomId);
+      const slot = overlappingSlot(booking.roomId, booking.startTime, booking.endTime);
 
       const firmConflict = await tx.booking.findFirst({
         where: {
-          roomId: booking.roomId,
-          id: { not: id },
+          ...slot,
           status: { in: [BookingStatus.APPROVED, BookingStatus.KEY_CHECKED_OUT] },
-          startTime: { lt: booking.endTime },
-          endTime: { gt: booking.startTime },
         },
         select: { id: true },
       });
@@ -457,59 +456,16 @@ export class BookingsService {
         },
       });
 
-      const overlappingPending = await tx.booking.findMany({
-        where: {
-          roomId: booking.roomId,
-          id: { not: id },
-          status: BookingStatus.PENDING,
-          startTime: { lt: booking.endTime },
-          endTime: { gt: booking.startTime },
-        },
-        select: { id: true },
-      });
+      const displaced = await rejectOverlaps(
+        tx,
+        slot,
+        BookingStatus.PENDING,
+        actorId,
+        'Slot awarded to another approved reservation',
+        { reason: 'AUTO_DECLINE_COMPETING_PENDING', approvedBookingId: id },
+      );
 
-      if (overlappingPending.length > 0) {
-        const pendingIds = overlappingPending.map((b) => b.id);
-        const declineNote = 'Slot awarded to another approved reservation';
-        await tx.booking.updateMany({
-          where: { id: { in: pendingIds } },
-          data: {
-            status: BookingStatus.REJECTED,
-            reviewedById: actorId,
-            reviewedAt: now,
-            reviewNote: declineNote,
-          },
-        });
-        await tx.bookingStatusHistory.createMany({
-          data: pendingIds.map((pendingId) => ({
-            bookingId: pendingId,
-            fromStatus: BookingStatus.PENDING,
-            toStatus: BookingStatus.REJECTED,
-            changedById: actorId,
-            note: declineNote,
-          })),
-        });
-        for (const pendingId of pendingIds) {
-          await tx.auditLog.create({
-            data: {
-              actorId,
-              action: 'BOOKING_REJECTED',
-              targetType: 'Booking',
-              targetId: pendingId,
-              metadata: {
-                note: declineNote,
-                reason: 'AUTO_DECLINE_COMPETING_PENDING',
-                approvedBookingId: id,
-              },
-            },
-          });
-        }
-      }
-
-      await this.notifications?.enqueueBookingDecision(tx, [
-        id,
-        ...overlappingPending.map((pending) => pending.id),
-      ]);
+      await this.notifications?.enqueueBookingDecision(tx, [id, ...displaced.map(({ id }) => id)]);
       const updated = await tx.booking.findUniqueOrThrow({
         where: { id },
         include: bookingInclude,
@@ -537,9 +493,18 @@ export class BookingsService {
     return this.transition(id, booking.status, BookingStatus.CANCELLED, actor.id, note);
   }
 
-  async checkoutKey(id: string, actorId: string, note?: string) {
-    const now = new Date();
+  async checkoutKey(id: string, actorId: string, passCode: string, note?: string) {
     return this.prisma.$transaction(async (tx) => {
+      const target = await tx.booking.findUnique({
+        where: { id },
+        select: { roomId: true, passCode: true },
+      });
+      if (!target) throw new NotFoundException('Booking not found');
+      await lockRoomSchedule(tx, target.roomId);
+      if (passCode.toUpperCase() !== target.passCode.toUpperCase()) {
+        throw new BadRequestException('Pass code does not match');
+      }
+      const now = new Date();
       const changed = await tx.booking.updateMany({
         where: { id, status: BookingStatus.APPROVED, endTime: { gt: now } },
         data: {
@@ -549,8 +514,6 @@ export class BookingsService {
         },
       });
       if (changed.count !== 1) {
-        const booking = await tx.booking.findUnique({ where: { id }, select: { status: true } });
-        if (!booking) throw new NotFoundException('Booking not found');
         throw new ConflictException('Only an active approved booking can receive a key');
       }
       await tx.bookingStatusHistory.create({
@@ -690,20 +653,24 @@ export class BookingsService {
     };
   }
 
-  private toApiBooking<T extends { user: BookingUserRecord }>(
-    booking: T,
-  ): Omit<T, 'user'> & {
-    user: {
-      id: string;
-      fullName: string;
-      email: string;
-      studentCode: string | null;
-    };
-  } {
-    const { user: rawUser, ...rest } = booking;
+  private toApiBooking<
+    T extends {
+      user: BookingUserRecord;
+      status: BookingStatus;
+      passCode: string;
+      isEvent: boolean;
+    },
+  >(booking: T) {
+    const { user: rawUser, passCode, ...rest } = booking;
     const { studentProfile, ...user } = rawUser;
     return {
       ...rest,
+      kind: bookingKind(booking.isEvent),
+      passCode:
+        booking.status === BookingStatus.APPROVED ||
+        booking.status === BookingStatus.KEY_CHECKED_OUT
+          ? passCode
+          : null,
       user: { ...user, studentCode: studentProfile?.studentCode ?? null },
     };
   }

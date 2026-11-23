@@ -18,7 +18,6 @@ export interface User {
   id: string
   fullName: string
   email: string
-  password: string
   role: Role
   studentCode?: string
   hcmutId?: string
@@ -35,40 +34,15 @@ export interface BookingMember {
 }
 
 export function parseBookingMembers(b?: { members?: string; memberList?: BookingMember[] }): BookingMember[] {
-  if (!b) return []
-  if (b.memberList && b.memberList.length > 0) {
-    return b.memberList.map((m, idx) => {
-      const hcmut = m.hcmutId || (m.studentId ? m.studentId.split(/[/·,-]/)[0]?.trim() : '') || '—'
-      const uts = m.utsId || (m.studentId ? m.studentId.split(/[/·,-]/)[1]?.trim() : '') || '—'
-      return {
-        name: m.name || (hcmut !== '—' || uts !== '—' ? `Member #${idx + 1}` : undefined),
-        hcmutId: hcmut,
-        utsId: uts,
-        studentId: m.studentId || (hcmut && uts && hcmut !== '—' && uts !== '—' ? `HCMUT: ${hcmut} · UTS: ${uts}` : hcmut !== '—' ? hcmut : uts),
-      }
-    })
-  }
-  if (!b.members) return []
-  return b.members
-    .split(',')
-    .map((item) => item.trim())
-    .filter(Boolean)
-    .map((item) => {
-      const match = item.match(/^(.*?)\s*\((.*?)\)$/)
-      if (match) {
-        const idPart = match[2].trim()
-        const parts = idPart.split(/[/·,-]/).map((s) => s.trim()).filter(Boolean)
-        const hcmut = parts[0] || idPart
-        const uts = parts[1] || ''
-        return {
-          name: match[1].trim(),
-          hcmutId: hcmut,
-          utsId: uts,
-          studentId: idPart,
-        }
-      }
-      return { name: `Member`, hcmutId: item, utsId: '', studentId: item }
-    })
+  if (b?.memberList) return b.memberList
+  if (!b?.members) return []
+  // Existing records store a comma-separated roster at the end of the purpose.
+  return Array.from(b.members.matchAll(/(?:^|, )([^()]*?) \(([^()]*)\)/g), ([, name, ids]) => ({
+    name: name.trim(),
+    hcmutId: /HCMUT:\s*([^·]+)/i.exec(ids)?.[1].trim() ?? '',
+    utsId: /UTS:\s*([^·]+)/i.exec(ids)?.[1].trim() ?? '',
+    studentId: ids,
+  }))
 }
 
 export interface Booking {
@@ -78,19 +52,18 @@ export interface Booking {
   start: string
   end: string
   title: string
-  phone: string
+  kind: 'STUDENT' | 'OFFICIAL'
+  isMine: boolean
   purpose: string
   status: BookingStatus
-  passCode: string
+  passCode: string | null
   note?: string
   createdAt: string
   checkedOutAt?: string
   returnedAt?: string
   category?: string
   attendeeCount?: number
-  isEvent?: boolean
   members?: string
-  memberIds?: string[]
   memberList?: BookingMember[]
 }
 
@@ -109,7 +82,6 @@ export interface Settings {
   openTime: string
   closeTime: string
   maxDurationMinutes: number
-  minAdvanceDays: number
   maxAdvanceDays: number
   maxActiveBookings: number
 }

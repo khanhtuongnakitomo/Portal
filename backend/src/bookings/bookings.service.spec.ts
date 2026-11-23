@@ -1,4 +1,3 @@
-import { jest } from '@jest/globals';
 import { ConflictException } from '../common/http-exceptions.js';
 import type { AuthenticatedUser } from '../common/interfaces/authenticated-user.interface.js';
 import { BookingStatus, Role, RoomStatus, UserStatus } from '../generated/prisma/client.js';
@@ -6,10 +5,12 @@ import type { PrismaService } from '../prisma/prisma.service.js';
 import { NotificationsService } from '../notifications/notifications.service.js';
 import { BookingsService } from './bookings.service.js';
 
+const { fn } = import.meta.jest;
+
 type AsyncMock<T> = jest.Mock<Promise<T>, [unknown]>;
 
 function asyncMock<T>(value: T): AsyncMock<T> {
-  return jest.fn<Promise<T>, [unknown]>(() => Promise.resolve(value));
+  return fn<Promise<T>, [unknown]>(() => Promise.resolve(value));
 }
 
 type PendingLookup = {
@@ -56,24 +57,24 @@ describe('BookingsService - Competing Pending & Auto-Decline', () => {
   const student1: AuthenticatedUser = {
     id: 'student-1',
     email: 'student1@tne.edu.vn',
-    role: Role.USER,
     fullName: 'Student One',
+    role: Role.USER,
     status: UserStatus.ACTIVE,
   };
 
   const student2: AuthenticatedUser = {
     id: 'student-2',
     email: 'student2@tne.edu.vn',
-    role: Role.USER,
     fullName: 'Student Two',
+    role: Role.USER,
     status: UserStatus.ACTIVE,
   };
 
   const manager: AuthenticatedUser = {
     id: 'manager-1',
     email: 'manager@tne.edu.vn',
+    fullName: 'Manager One',
     role: Role.MANAGER,
-    fullName: 'Manager',
     status: UserStatus.ACTIVE,
   };
 
@@ -102,6 +103,7 @@ describe('BookingsService - Competing Pending & Auto-Decline', () => {
     purpose: string;
     attendeeCount: number;
     passCode: string;
+    isEvent: boolean;
     startTime: Date;
     endTime: Date;
     status: BookingStatus;
@@ -119,6 +121,7 @@ describe('BookingsService - Competing Pending & Auto-Decline', () => {
       id: string;
       fullName: string;
       email: string;
+      role: Role;
       studentProfile: null;
     };
     reviewedBy: { id: string; fullName: string } | null;
@@ -135,6 +138,7 @@ describe('BookingsService - Competing Pending & Auto-Decline', () => {
       purpose: 'Exam preparation',
       attendeeCount: 10,
       passCode: 'PASS1234',
+      isEvent: false,
       startTime,
       endTime,
       status,
@@ -152,6 +156,7 @@ describe('BookingsService - Competing Pending & Auto-Decline', () => {
         id: 'student-1',
         fullName: 'Student One',
         email: 's1@tne.edu.vn',
+        role: Role.USER,
         studentProfile: null,
       },
       reviewedBy:
@@ -174,9 +179,8 @@ describe('BookingsService - Competing Pending & Auto-Decline', () => {
     booking: {
       count: AsyncMock<number>;
       findFirst: AsyncMock<{ id: string } | null>;
-      findMany: AsyncMock<Array<{ id: string }>>;
+      updateManyAndReturn: AsyncMock<Array<{ id: string }>>;
       updateMany: AsyncMock<{ count: number }>;
-      update: AsyncMock<{ id: string }>;
       create: AsyncMock<{ id: string }>;
       findUnique: AsyncMock<PendingLookup | null>;
       findUniqueOrThrow: AsyncMock<BookingRecord>;
@@ -187,6 +191,7 @@ describe('BookingsService - Competing Pending & Auto-Decline', () => {
     };
     auditLog: {
       create: AsyncMock<object>;
+      createMany: AsyncMock<{ count: number }>;
     };
   };
 
@@ -202,11 +207,10 @@ describe('BookingsService - Competing Pending & Auto-Decline', () => {
       booking: {
         count: asyncMock(0),
         findFirst: asyncMock<{ id: string } | null>(null),
-        findMany: asyncMock<Array<{ id: string }>>([]),
+        updateManyAndReturn: asyncMock<Array<{ id: string }>>([]),
         updateMany: asyncMock({ count: 1 }),
-        update: asyncMock({ id: 'booking-1' }),
         create: asyncMock({ id: 'new-booking' }),
-        findUnique: jest.fn<Promise<PendingLookup | null>, [unknown]>(),
+        findUnique: fn<Promise<PendingLookup | null>, [unknown]>(),
         findUniqueOrThrow: asyncMock(bookingRecord(BookingStatus.PENDING, null)),
       },
       bookingStatusHistory: {
@@ -215,16 +219,12 @@ describe('BookingsService - Competing Pending & Auto-Decline', () => {
       },
       auditLog: {
         create: asyncMock<object>({}),
+        createMany: asyncMock({ count: 1 }),
       },
     };
 
     const mockPrisma = {
-      $transaction: jest.fn((callback: (tx: typeof mockTx) => Promise<unknown>) =>
-        callback(mockTx),
-      ),
-      booking: {
-        findUnique: jest.fn<Promise<unknown>, [unknown]>(),
-      },
+      $transaction: fn((callback: (tx: typeof mockTx) => Promise<unknown>) => callback(mockTx)),
     };
 
     notifications = new RecordingNotifications();
@@ -265,13 +265,16 @@ describe('BookingsService - Competing Pending & Auto-Decline', () => {
 
     it('auto-rejects overlapping PENDING student requests when manager creates scheduled activity', async () => {
       mockTx.booking.findFirst.mockResolvedValue(null);
-      mockTx.booking.findMany.mockResolvedValue([{ id: 'pending-1' }, { id: 'pending-2' }]);
+      mockTx.booking.updateManyAndReturn.mockResolvedValue([
+        { id: 'pending-1' },
+        { id: 'pending-2' },
+      ]);
 
       await service.create(baseBookingDto, manager);
       expect(notifications.decisionBookings).toEqual(['pending-1', 'pending-2']);
 
-      expect(mockTx.booking.updateMany.mock.calls[0]?.[0]).toMatchObject({
-        where: { id: { in: ['pending-1', 'pending-2'] } },
+      expect(mockTx.booking.updateManyAndReturn.mock.calls[0]?.[0]).toMatchObject({
+        where: { roomId: mockRoom.id, status: BookingStatus.PENDING },
         data: {
           status: BookingStatus.REJECTED,
           reviewNote: 'Slot assigned to an official room activity',
@@ -304,7 +307,7 @@ describe('BookingsService - Competing Pending & Auto-Decline', () => {
         endTime,
       });
       mockTx.booking.findFirst.mockResolvedValue(null);
-      mockTx.booking.findMany.mockResolvedValue([{ id: 'competing-pending-2' }]);
+      mockTx.booking.updateManyAndReturn.mockResolvedValue([{ id: 'competing-pending-2' }]);
       mockTx.booking.findUniqueOrThrow.mockResolvedValue(
         bookingRecord(BookingStatus.APPROVED, 'Looks good'),
       );
@@ -313,8 +316,12 @@ describe('BookingsService - Competing Pending & Auto-Decline', () => {
       expect(result.status).toBe(BookingStatus.APPROVED);
       expect(notifications.decisionBookings).toEqual(['booking-1', 'competing-pending-2']);
 
-      expect(mockTx.booking.updateMany.mock.calls[1]?.[0]).toMatchObject({
-        where: { id: { in: ['competing-pending-2'] } },
+      expect(mockTx.booking.updateMany.mock.calls[0]?.[0]).toMatchObject({
+        where: { id: 'booking-1', status: BookingStatus.PENDING },
+        data: { status: BookingStatus.APPROVED },
+      });
+      expect(mockTx.booking.updateManyAndReturn.mock.calls[0]?.[0]).toMatchObject({
+        where: { roomId: mockRoom.id, status: BookingStatus.PENDING },
         data: {
           status: BookingStatus.REJECTED,
           reviewedById: manager.id,

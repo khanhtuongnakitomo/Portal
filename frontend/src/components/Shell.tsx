@@ -1,8 +1,8 @@
-import { useEffect, useState, type ReactNode } from 'react'
-import { ArrowRight, Check, LogOut, ShieldAlert, TriangleAlert } from 'lucide-react'
+import { useCallback, useEffect, useState, type ReactNode } from 'react'
+import { ArrowRight, ShieldAlert, TriangleAlert } from 'lucide-react'
 import { useStore } from '@/lib/store'
 import type { Role } from '@/lib/types'
-import { Button, Eyebrow, Mono, cx } from './ui'
+import { Button, Eyebrow, cx } from './ui'
 import { BlurText, ScrollRevealText, SplitText } from './effects'
 import { UtsLogo } from './UtsLogo'
 import { BrandLockup } from './BrandLockup'
@@ -25,49 +25,40 @@ export function useHashRoute(): [Route, (r: Route) => void] {
     window.addEventListener('hashchange', on)
     return () => window.removeEventListener('hashchange', on)
   }, [])
-  return [route, (r) => (window.location.hash = r)]
+  const go = useCallback((r: Route) => { window.location.hash = r }, [])
+  return [route, go]
 }
 
-export function LogoMark({ size = 18, className }: { size?: number; className?: string }) {
+export function ConnectionStatus({ go }: { go: (r: Route) => void }) {
+  const { connection, sessionRecovery, retrySession, currentUser } = useStore()
+  const { t } = useI18n()
+  const status = sessionRecovery === 'checking' ? 'restoring' : sessionRecovery === 'offline' ? 'restoreFailed' : connection
   return (
-    <svg width={size} height={size} viewBox="0 0 18 18" className={className} aria-hidden>
-      <rect x="0.5" y="0.5" width="17" height="17" fill="none" stroke="currentColor" />
-      <rect x="4" y="4" width="4" height="4" fill="#0F62FE" />
-      <rect x="10" y="10" width="4" height="4" fill="currentColor" />
-      <path d="M8 6h4v4" fill="none" stroke="#0F62FE" strokeWidth="1" />
-    </svg>
-  )
-}
-
-export function RoleSwitcher({ go }: { go: (r: Route) => void }) {
-  const { currentUser } = useStore()
-  const { locale } = useI18n()
-  if (!currentUser) return null
-  const personal = locale === 'vi' ? 'Đặt phòng cá nhân' : 'Personal bookings'
-  const manager = locale === 'vi' ? 'Quản lý phòng' : 'Manage rooms'
-  return (
-    <nav aria-label={locale === 'vi' ? 'Chế độ làm việc' : 'Workspace'} className="bg-forest text-paper">
-      <div className="mx-auto flex max-w-[1440px] flex-wrap items-center justify-between gap-2 px-6 py-2">
-        <span className="text-[12px]">{currentUser.email}</span>
-        <div className="flex flex-wrap gap-2">
-          <button className="rounded-md border border-white/40 px-3 py-1 text-[12px] hover:bg-white/10" onClick={() => go('/student')}>{personal}</button>
-          {currentUser.role !== 'USER' && <button className="rounded-md border border-white/40 px-3 py-1 text-[12px] hover:bg-white/10" onClick={() => go('/manager')}>{manager}</button>}
-          {currentUser.role === 'ADMIN' && <button className="rounded-md border border-white/40 px-3 py-1 text-[12px] hover:bg-white/10" onClick={() => go('/admin')}>{locale === 'vi' ? 'Quản trị' : 'Administration'}</button>}
-        </div>
+    <div className="bg-forest text-paper">
+      <div className="mx-auto flex max-w-[1440px] flex-wrap items-center gap-3 px-6 py-2 font-mono text-[12px]">
+        <span role="status" className="flex items-center gap-2">
+          <span aria-hidden className={cx('h-2 w-2 rounded-full', connection === 'live' ? 'bg-tint' : 'bg-white/60')} />
+          {t(`core.${status}`)}
+        </span>
+        {sessionRecovery === 'offline' && <Button size="xs" variant="outline" onClick={() => void retrySession()}>{t('core.retry')}</Button>}
+        {currentUser && currentUser.role !== 'USER' && (
+          <nav aria-label={t('core.workspace')} className="ml-auto flex flex-wrap gap-3">
+            <button onClick={() => go('/student')}>{t('core.personal')}</button>
+            <button onClick={() => go('/manager')}>{t('core.manage')}</button>
+            {currentUser.role === 'ADMIN' && <button onClick={() => go('/admin')}>{t('core.admin')}</button>}
+          </nav>
+        )}
       </div>
-    </nav>
+    </div>
   )
 }
 
 export function TopNav({ children }: { children?: ReactNode }) {
   const { currentUser } = useStore()
-  const { locale } = useI18n()
+  const { t } = useI18n()
   if (!currentUser) return null
 
-  const title =
-    locale === 'vi'
-      ? 'Hệ thống đặt phòng dành cho TNE - UTS'
-      : 'Room Booking System for TNE - UTS'
+  const title = t('common.appName')
 
   return (
     <header className="sticky top-0 z-40 border-b border-rule bg-paper/95 shadow-nav backdrop-blur select-none">
@@ -153,20 +144,21 @@ export function PageHeader({ eyebrow, title, body, right }: { eyebrow: string; t
 
 export function AccessDenied({ need, go }: { need: Role; go: (r: Route) => void }) {
   const { currentUser } = useStore()
+  const { t } = useI18n()
   return (
     <div className="flex min-h-[70vh] items-center justify-center px-6">
       <div className="w-full max-w-[520px] rounded-lg border border-ink bg-paper p-8">
         <div className="mb-6 flex items-center gap-3 text-plum">
           <ShieldAlert size={20} strokeWidth={1.5} />
-          <Eyebrow className="!text-plum">HTTP 403 · ROUTE GUARD</Eyebrow>
+          <Eyebrow className="!text-plum">HTTP 403 · {t('core.accessDenied')}</Eyebrow>
         </div>
-        <h1 className="font-display text-section font-w450 text-ink">This console requires the {need} role.</h1>
+        <h1 className="font-display text-section font-w450 text-ink">{t('core.needsRole', { role: t(`core.${need}`) })}</h1>
         <p className="mt-3 text-[16px] leading-6 font-normal text-graphite">
-          You are signed in as <Mono className="text-ink">{currentUser?.role}</Mono>. Role-based routing keeps each workspace isolated.
+          {currentUser && t('core.yourRole', { role: t(`core.${currentUser.role}`) })}
         </p>
         {currentUser && (
           <Button size="md" className="mt-8" onClick={() => go(homeFor(currentUser.role))}>
-            Go to my workspace <ArrowRight size={16} />
+            {t('core.backWorkspace')} <ArrowRight size={16} />
           </Button>
         )}
       </div>
@@ -175,29 +167,14 @@ export function AccessDenied({ need, go }: { need: Role; go: (r: Route) => void 
 }
 
 export function Footer() {
-  const { locale } = useI18n()
-  const title =
-    locale === 'vi'
-      ? 'Hệ thống đặt phòng dành cho TNE - UTS'
-      : 'Room Booking System for TNE - UTS'
+  const { t } = useI18n()
+  const title = t('common.appName')
 
+  const { rooms } = useStore()
   const cols = [
-    {
-      t: locale === 'vi' ? 'Phòng học' : 'Rooms',
-      l: ['Seminar Hall 601', 'Studio Room 602', 'Lecture Theatre 605'],
-    },
-    {
-      t: locale === 'vi' ? 'Quy định' : 'Policy',
-      l: [
-        locale === 'vi' ? 'Đặt trước 2–7 ngày' : 'Booking window 2–7 days',
-        locale === 'vi' ? 'Nhận/trả chìa tại phòng Manager' : 'Key custody rules',
-        locale === 'vi' ? 'Ưu tiên sự kiện học thuật' : 'Event priority',
-      ],
-    },
-    {
-      t: locale === 'vi' ? 'Hỗ trợ' : 'Support',
-      l: ['Facilities desk · Level 1', 'it-support@uts-tne.edu.vn', 'Ext. 6021'],
-    },
+    { t: t('core.rooms'), l: rooms.map((r) => r.name) },
+    { t: t('core.policy'), l: [t('core.bookingLimits'), t('core.custody'), t('core.eventPriority')] },
+    { t: t('core.support'), l: [t('core.desk'), 'it-support@uts-tne.edu.vn', t('core.ext')] },
   ]
   return (
     <footer className="mt-16 bg-forest text-paper select-none">
@@ -211,7 +188,6 @@ export function Footer() {
               </div>
             </div>
           </div>
-          <div className="font-mono text-[12px] text-white/75">BUILD 2.4.1 · NODE AP-SE-1 · ALL SYSTEMS NOMINAL</div>
         </div>
         <div className="grid grid-cols-2 gap-8 pt-8 md:grid-cols-4">
           {cols.map((c) => (
@@ -225,8 +201,8 @@ export function Footer() {
             </div>
           ))}
           <div className="flex flex-col gap-2">
-            <div className="text-[14px] font-semibold">{locale === 'vi' ? 'Cơ sở' : 'Campus'}</div>
-            <div className="text-[14px] font-normal text-white/75">Level 6, TNE Building · UTS × HCMUT</div>
+            <div className="text-[14px] font-semibold">{t('core.campus')}</div>
+            <div className="text-[14px] font-normal text-white/75">{t('core.location')}</div>
             <div className="text-[14px] font-normal text-white/75">
               © {new Date().getFullYear()} {title}
             </div>

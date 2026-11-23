@@ -112,8 +112,14 @@ describe('booking decision notifications (PostgreSQL e2e)', () => {
       })
       .expect(201);
     const booking = response.body as BookingResponse;
-    expect(booking.status).toBe('PENDING');
-    expect((response.body as { isEvent: boolean }).isEvent).toBe(false);
+    expect(response.body).toMatchObject({ status: 'PENDING', kind: 'STUDENT', isEvent: false });
+    const calendar = await request(app)
+      .get('/api/v1/bookings/calendar')
+      .query({ roomId, from: slot().startTime, to: slot().endTime })
+      .expect(200);
+    expect(calendar.body).toMatchObject({
+      bookings: [{ id: booking.id, kind: 'STUDENT', isMine: false }],
+    });
     await review(booking.id, 'approve').expect(200);
     const email = await prisma.notificationOutbox.findFirstOrThrow({
       where: { bookingId: booking.id, eventType: 'BOOKING_APPROVED' },
@@ -216,7 +222,7 @@ describe('booking decision notifications (PostgreSQL e2e)', () => {
       await request(app)
         .post('/api/v1/manager/room-blocks')
         .set('Authorization', `Bearer ${tokens[0]}`)
-        .send({ roomId, reason: 'University event', ...slot() })
+        .send({ roomId, reason: 'University event', displaceBookings: true, ...slot() })
         .expect(201);
       const rejected = (await studentEmails(booking.id)).filter(
         (row) => row.eventType === 'BOOKING_REJECTED',

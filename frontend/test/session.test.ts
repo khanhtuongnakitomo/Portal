@@ -3,10 +3,12 @@ import assert from 'node:assert/strict'
 import { createElement } from 'react'
 import { renderToString } from 'react-dom/server'
 import { createServer, type ViteDevServer } from 'vite'
-import type { Store } from '../src/lib/store.tsx'
+import type { Store, StoreProvider } from '../src/lib/store.tsx'
+import type { I18nProvider as LocaleProvider } from '../src/lib/i18n.tsx'
 
+let I18nProvider: typeof LocaleProvider
 let vite: ViteDevServer
-let sessionModule: { StoreProvider: typeof import('../src/lib/store.tsx').StoreProvider; useStore: () => Store }
+let sessionModule: { StoreProvider: typeof StoreProvider; useStore: () => Store }
 const originalFetch = globalThis.fetch
 const values = new Map<string, string>()
 Object.defineProperty(globalThis, 'localStorage', { configurable: true, value: {
@@ -23,6 +25,7 @@ before(async () => {
     server: { middlewareMode: true, hmr: false },
     appType: 'custom',
   })
+  I18nProvider = (await vite.ssrLoadModule('/src/lib/i18n.tsx')).I18nProvider
   sessionModule = await vite.ssrLoadModule(process.env.PORTAL_STORE_PATH || '/src/lib/store.tsx') as typeof sessionModule
 })
 after(async () => { await vite?.close() })
@@ -32,24 +35,22 @@ afterEach(() => { globalThis.fetch = originalFetch })
 function captureStore(): Store {
   let captured: Store | undefined
   function Probe() { captured = sessionModule.useStore(); return null }
-  renderToString(createElement(sessionModule.StoreProvider, { children: createElement(Probe) }))
+  renderToString(createElement(I18nProvider, { children: createElement(sessionModule.StoreProvider, { children: createElement(Probe) }) }))
   assert.ok(captured)
   return captured
 }
 
 test('registration rejection cannot become a successful browser-only account', async () => {
   globalThis.fetch = async () => new Response(JSON.stringify({ message: 'Email or student code is already registered' }), { status: 409 })
-  const result = await captureStore().registerAsync({ fullName: 'Test User', email: 'existing@example.com', password: 'SyntheticTest123!', hcmutId: '1234567', utsId: '12345678' })
-  assert.equal(result.error, 'Email or student code is already registered')
-  assert.equal(result.user, undefined)
+  const result = await captureStore().register({ fullName: 'Test User', email: 'existing@example.com', password: 'SyntheticTest123!', studentCode: '1234567 / 12345678' })
+  assert.equal(result, 'Email or student code is already registered')
   assert.equal(values.get('tne_access_token'), undefined)
 })
 
 test('a cached manager cannot sign in with a role-wide demo password after API rejection', async () => {
   values.set('tne_v7_users', JSON.stringify([{ id: '11111111-1111-4111-8111-111111111111', email: 'cached@example.com', fullName: 'Cached Manager', role: 'MANAGER', status: 'ACTIVE', password: '' }]))
   globalThis.fetch = async () => new Response(JSON.stringify({ message: 'Invalid email or password' }), { status: 401 })
-  const result = await captureStore().loginAsync('cached@example.com', 'Manager123456!')
-  assert.equal(result.error, 'Invalid email or password')
-  assert.equal(result.user, undefined)
+  const result = await captureStore().login('cached@example.com', 'Manager123456!')
+  assert.equal(result, 'Invalid email or password')
   assert.equal(values.get('tne_access_token'), undefined)
 })

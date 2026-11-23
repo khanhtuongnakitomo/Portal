@@ -1,3 +1,4 @@
+import { Type } from 'class-transformer';
 import {
   IsBoolean,
   IsInt,
@@ -7,6 +8,7 @@ import {
   MaxLength,
   Min,
   MinLength,
+  ValidateIf,
 } from 'class-validator';
 
 export class CreateRoomDto {
@@ -30,7 +32,8 @@ export class CreateRoomDto {
   @Max(1000)
   capacity!: number;
 
-  @IsOptional()
+  @Type(() => Object)
+  @ValidateIf((_dto, value: unknown) => value !== undefined)
   @IsBoolean()
   autoApprove?: boolean;
 }

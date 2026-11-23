@@ -5,29 +5,19 @@ import { validateEnvironment } from './config/environment.js';
 import { NotificationWorkerService } from './notifications/notification-worker.service.js';
 import { ResendEmailProvider } from './notifications/resend-email.provider.js';
 
-const config = validateEnvironment(process.env);
-const port = config.PORT;
-const prefix = (process.env.API_PREFIX || 'api/v1').replace(/^\/+|\/+$/g, '');
-
-const { app, prisma } = createApp();
-const notificationWorker = config.EMAIL_NOTIFICATIONS_ENABLED
+const environment = validateEnvironment(process.env);
+const { port, apiPrefix } = environment;
+const { app, prisma } = createApp(undefined, environment);
+const notificationWorker = environment.email
   ? new NotificationWorkerService(
       prisma,
-      new ResendEmailProvider({
-        apiKey: config.RESEND_API_KEY,
-        from: config.EMAIL_FROM,
-        replyTo: config.EMAIL_REPLY_TO,
-      }),
-      {
-        frontendUrl: config.FRONTEND_URL,
-        batchSize: config.EMAIL_BATCH_SIZE,
-        maxAttempts: config.EMAIL_MAX_ATTEMPTS,
-      },
+      new ResendEmailProvider(environment.email.provider),
+      environment.email.worker,
     )
   : null;
 
 const server = app.listen(port, () => {
-  console.info(`Express API listening on http://localhost:${port}/${prefix}`);
+  console.info(`Express API listening on http://localhost:${port}${apiPrefix}`);
   if (notificationWorker) notificationWorker.start();
   else console.info('Email notifications are disabled');
 });

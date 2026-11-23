@@ -18,12 +18,12 @@ Chi tiết toàn bộ triết lý thiết kế **Modern Treasury**, bảng màu 
 ## 📁 Repository Layout
 
 ```text
-backend/                 Express REST API + Prisma + PostgreSQL
+backend/                 Express 5 REST API + Prisma + PostgreSQL
 frontend/                React 19 + TypeScript + Tailwind CSS v4 Frontend
 docs/API_HANDOFF.md      Hợp đồng API và luồng tích hợp frontend
 docs/TNE_PORTAL_ERD.dbml ERD chi tiết để import vào dbdiagram.io
 DESIGN.md                Tài liệu Design System & Style Guide chi tiết
-.github/workflows/       CI kiểm tra backend
+.github/workflows/       CI kiểm tra backend và frontend
 ```
 
 ---
@@ -37,8 +37,8 @@ Backend hiện đã triển khai ERD v2, Resend email outbox cho manager và ema
 - `ADMIN`: Toàn quyền manager cộng quản lý user, role, trạng thái phòng và chính sách hệ thống.
 
 Manager/Admin dùng cùng một tài khoản để chuyển giữa **Đặt phòng cá nhân** và **Quản lý phòng**
-trên thanh điều hướng. Yêu cầu cá nhân chờ duyệt và nhận email kết quả; hoạt động chính thức
-được tạo từ màn quản lý. Đăng nhập/đăng ký cần API xác nhận thành công, không tạo tài khoản
+trên thanh điều hướng. Yêu cầu cá nhân áp dụng chính sách tự duyệt của phòng và nhận email
+kết quả; hoạt động chính thức được tạo từ màn quản lý. Đăng nhập/đăng ký cần API xác nhận thành công, không tạo tài khoản
 hoặc phiên đăng nhập giả khi API từ chối.
 
 ---
@@ -63,6 +63,8 @@ npm run build
 
 ## ⚙️ Hướng dẫn chạy Backend
 
+Sau khi copy `.env.example`, đặt `JWT_ACCESS_SECRET`, `ADMIN_EMAIL` và `ADMIN_PASSWORD` trong `backend/.env` trước khi chạy seed và khởi động API.
+
 ```powershell
 cd backend
 Copy-Item .env.example .env
@@ -74,7 +76,8 @@ pnpm db:seed
 pnpm start:dev
 ```
 
-Hướng dẫn backend chi tiết: [backend/README.md](backend/README.md).
+Hợp đồng API: [docs/API_HANDOFF.md](docs/API_HANDOFF.md).
+Xem [hướng dẫn backend](backend/README.md) và [tài khoản demo / `pnpm db:reset-demo`](backend/README.md#tài-khoản-demo-và-reset-local).
 
 ---
 

@@ -1,4 +1,6 @@
-import { useEffect, useMemo, type ButtonHTMLAttributes, type InputHTMLAttributes, type ReactNode, type SelectHTMLAttributes, type TextareaHTMLAttributes } from 'react'
+import { useId, useLayoutEffect, useRef, type ButtonHTMLAttributes, type InputHTMLAttributes, type ReactNode, type SelectHTMLAttributes, type TextareaHTMLAttributes } from 'react'
+import { createPortal } from 'react-dom'
+import { useI18n } from '@/lib/i18n'
 import { X } from 'lucide-react'
 import type { BookingStatus } from '@/lib/types'
 
@@ -117,10 +119,11 @@ const statusStyle: Record<BookingStatus, string> = {
 }
 
 export function StatusChip({ status, className }: { status: BookingStatus; className?: string }) {
+  const { t } = useI18n()
   return (
     <span className={cx('inline-flex items-center gap-1.5 rounded-sm border px-1.5 py-[2px] font-mono text-[11px] font-bold leading-[1.4] tracking-[0.02em] whitespace-nowrap', statusStyle[status], className)}>
       <span className={cx('h-1.5 w-1.5', status === 'KEY_CHECKED_OUT' ? 'bg-tint' : 'bg-current')} />
-      {status}
+      {t(status === 'KEY_CHECKED_OUT' ? 'core.keyOut' : `common.${status.toLowerCase()}`)}
     </span>
   )
 }
@@ -134,6 +137,73 @@ export function Tag({ children, tone = 'neutral', className }: { children: React
     ink: 'border-ink bg-ink text-paper',
   }[tone]
   return <span className={cx('inline-flex items-center gap-1 rounded-sm border px-1.5 py-[2px] font-mono text-[11px] font-bold leading-[1.4] whitespace-nowrap', t, className)}>{children}</span>
+}
+
+export function Dialog({
+  open,
+  onClose,
+  labelledBy,
+  children,
+  className,
+}: {
+  open: boolean
+  onClose: () => void
+  labelledBy: string
+  children: ReactNode
+  className?: string
+}) {
+  const ref = useRef<HTMLDialogElement>(null)
+
+  useLayoutEffect(() => {
+    const dialog = ref.current
+    if (!open || !dialog) return
+    const opener = document.activeElement
+    // Native modal dialogs place the rest of the document in an inert state.
+    dialog.showModal()
+    return () => {
+      dialog.close()
+      if (opener instanceof HTMLElement && opener.isConnected) opener.focus({ preventScroll: true })
+    }
+  }, [open])
+
+  if (!open) return null
+  return createPortal(
+    <dialog
+      ref={ref}
+      aria-labelledby={labelledBy}
+      aria-modal="true"
+      className={cx('fixed inset-0 m-auto w-[calc(100%_-_2rem)] max-h-[calc(100dvh_-_2rem)] overflow-auto rounded-lg border border-ink bg-paper p-0 text-ink shadow-nav backdrop:bg-ink/50 backdrop:backdrop-blur-xs', className)}
+      onCancel={(event) => {
+        event.preventDefault()
+        onClose()
+      }}
+      onClick={(event) => {
+        if (event.target !== event.currentTarget) return
+        const rect = event.currentTarget.getBoundingClientRect()
+        if (event.clientX < rect.left || event.clientX >= rect.right || event.clientY < rect.top || event.clientY >= rect.bottom) onClose()
+      }}
+      onKeyDown={(event) => {
+        if (event.key !== 'Tab') return
+        const dialog = event.currentTarget
+        const stops = Array.from(dialog.querySelectorAll<HTMLElement>(
+          'a[href], button, input, select, textarea, summary, [tabindex], [contenteditable="true"]',
+        )).filter((el) => el.tabIndex >= 0 && !el.matches(':disabled') && el.getClientRects().length && getComputedStyle(el).visibility === 'visible')
+        const first = stops[0]
+        const last = stops[stops.length - 1]
+        const active = document.activeElement
+        if (!first || !last) {
+          event.preventDefault()
+        } else if (!stops.some((el) => el === active) || (event.shiftKey ? active === first : active === last)) {
+          event.preventDefault()
+          const next = event.shiftKey ? last : first
+          next.focus()
+        }
+      }}
+    >
+      {children}
+    </dialog>,
+    document.body,
+  )
 }
 
 export function Modal({
@@ -155,58 +225,22 @@ export function Modal({
   width?: string
   className?: string
 }) {
-  useEffect(() => {
-    if (!open) return
-    const h = (e: KeyboardEvent) => e.key === 'Escape' && onClose()
-    window.addEventListener('keydown', h)
-    return () => window.removeEventListener('keydown', h)
-  }, [open, onClose])
-
-  if (!open) return null
-
+  const { t } = useI18n()
+  const titleId = useId()
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-2.5 sm:p-4 md:p-6 overflow-hidden">
-      {/* Backdrop */}
-      <div className="fixed inset-0 bg-ink/40 backdrop-blur-[2px] transition-opacity" onClick={onClose} />
-
-      {/* Dialog container */}
-      <div
-        role="dialog"
-        aria-modal="true"
-        className={cx(
-          'relative w-full my-auto flex max-h-[calc(100vh-1.5rem)] sm:max-h-[calc(100vh-3rem)] flex-col overflow-hidden rounded-lg border border-ink bg-paper shadow-2xl z-10',
-          width,
-          className,
-        )}
-      >
-        {/* Header */}
-        <div className="flex shrink-0 items-start justify-between border-b border-rule bg-paper px-5 sm:px-6 pt-4 sm:pt-5 pb-3.5 sm:pb-4 select-none z-10">
-          <div className="flex flex-col gap-1 sm:gap-2">
-            {eyebrow && <Eyebrow className="select-none">{eyebrow}</Eyebrow>}
-            <h2 className="font-display text-[20px] sm:text-feature font-w450 text-ink select-none">{title}</h2>
-          </div>
-          <button
-            onClick={onClose}
-            aria-label="Close"
-            className="-mr-1.5 sm:-mr-2 rounded-md p-1.5 text-steel hover:bg-ice hover:text-ink cursor-pointer transition-colors"
-          >
-            <X size={18} strokeWidth={1.5} />
-          </button>
+    <Dialog open={open} onClose={onClose} labelledBy={titleId} className={cx(width, 'open:flex flex-col overflow-hidden', className)}>
+      <div className="flex items-start justify-between border-b border-rule px-6 pt-5 pb-4">
+        <div className="flex flex-col gap-2">
+          {eyebrow && <Eyebrow>{eyebrow}</Eyebrow>}
+          <h2 id={titleId} className="font-display text-feature font-w450 text-ink">{title}</h2>
         </div>
-
-        {/* Scrollable Content Body */}
-        <div className="flex-1 overflow-y-auto overscroll-contain">
-          {children}
-        </div>
-
-        {/* Optional Pinned/Sticky Footer */}
-        {footer && (
-          <div className="shrink-0 border-t border-rule bg-paper px-5 sm:px-6 py-3.5 sm:py-4 z-10">
-            {footer}
-          </div>
-        )}
+        <button type="button" onClick={onClose} aria-label={t('common.close')} className="-mr-2 rounded-md p-1.5 text-steel hover:bg-ice hover:text-ink">
+          <X size={18} strokeWidth={1.5} />
+        </button>
       </div>
-    </div>
+      <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain">{children}</div>
+      {footer && <div className="shrink-0 border-t border-rule bg-paper px-5 py-3.5 sm:px-6">{footer}</div>}
+    </Dialog>
   )
 }
 
@@ -217,50 +251,6 @@ export function LedgerRow({ k, v, mono }: { k: string; v: ReactNode; mono?: bool
       <span className="font-mono text-[12px] font-semibold uppercase text-steel">{k}</span>
       <span className={cx('text-right text-[14px] text-ink', mono ? 'font-mono font-semibold' : 'font-semibold')}>{v}</span>
     </div>
-  )
-}
-
-function hash(str: string) {
-  let h = 2166136261
-  for (let i = 0; i < str.length; i++) {
-    h ^= str.charCodeAt(i)
-    h = Math.imul(h, 16777619)
-  }
-  return () => {
-    h ^= h << 13
-    h ^= h >>> 17
-    h ^= h << 5
-    return ((h >>> 0) % 1000) / 1000
-  }
-}
-
-/** Deterministic QR-style placeholder (visual only) */
-export function QRCode({ value, size = 132, fg = '#000000' }: { value: string; size?: number; fg?: string }) {
-  const n = 25
-  const cells = useMemo(() => {
-    const rnd = hash(value)
-    const out: [number, number][] = []
-    const inFinder = (x: number, y: number) => (x < 8 && y < 8) || (x > n - 9 && y < 8) || (x < 8 && y > n - 9)
-    for (let y = 0; y < n; y++) for (let x = 0; x < n; x++) if (!inFinder(x, y) && rnd() > 0.52) out.push([x, y])
-    return out
-  }, [value])
-  const finder = (x: number, y: number) => (
-    <g key={`${x}-${y}`}>
-      <rect x={x} y={y} width={7} height={7} fill={fg} />
-      <rect x={x + 1} y={y + 1} width={5} height={5} fill="#fff" />
-      <rect x={x + 2} y={y + 2} width={3} height={3} fill={fg} />
-    </g>
-  )
-  return (
-    <svg width={size} height={size} viewBox={`-1 -1 ${n + 2} ${n + 2}`} shapeRendering="crispEdges" role="img" aria-label={`QR code for ${value}`}>
-      <rect x={-1} y={-1} width={n + 2} height={n + 2} fill="#fff" />
-      {cells.map(([x, y]) => (
-        <rect key={`${x}.${y}`} x={x} y={y} width={1} height={1} fill={fg} />
-      ))}
-      {finder(0, 0)}
-      {finder(n - 7, 0)}
-      {finder(0, n - 7)}
-    </svg>
   )
 }
 
