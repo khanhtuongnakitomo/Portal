@@ -1,11 +1,11 @@
-import { useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { ArrowRight, ChevronLeft, ChevronRight } from 'lucide-react'
 import { ACTIVE_STATUSES, useStore } from '@/lib/store'
 import { useI18n } from '@/lib/i18n'
 import { addDays, at, ensureWorkday, fmtDuration, fmtShort, minutesOfDay, parseHM, sameDay, startOfWeek } from '@/lib/time'
 import { Button, Eyebrow, Tag, cx } from '@/components/ui'
 import { NavItem, PageHeader, TopNav } from '@/components/Shell'
-import { RoomTabs, roomColor } from '@/components/RoomTabs'
+import { RoomTabs } from '@/components/RoomTabs'
 import { Reveal, ScrollRevealText, SplitText } from '@/components/effects'
 import { WeekCalendar, type Selection } from './WeekCalendar'
 import { BookingModal } from './BookingModal'
@@ -16,16 +16,21 @@ import { StudentBookingPopover } from './StudentBookingPopover'
 export function StudentView() {
   const { rooms, bookings, myBookings, blocks, settings, currentUser, notify, connection, refreshData, refreshMyBookings } = useStore()
   const { t, locale } = useI18n()
-  const [roomId, setRoomId] = useState<string>('ALL')
+  const [roomId, setRoomId] = useState<string>(() => rooms[0]?.id ?? '')
   const [weekStart, setWeekStart] = useState(() => startOfWeek(new Date()))
   const [selection, setSelection] = useState<Selection | null>(null)
   const [activeBooking, setActiveBooking] = useState<{ id: string; el: HTMLElement } | null>(null)
   const checkingBooking = useRef<typeof activeBooking>(null)
   const [drawer, setDrawer] = useState(false)
 
-  const selectedRoom = rooms.find((entry) => entry.id === roomId)
-  const isAllRooms = !selectedRoom
-  const room = selectedRoom ?? rooms.find((entry) => entry.status === 'AVAILABLE') ?? rooms[0]
+  useEffect(() => {
+    const first = rooms[0]
+    if (first && (!roomId || roomId === 'ALL' || !rooms.some((entry) => entry.id === roomId))) {
+      setRoomId(first.id)
+    }
+  }, [rooms, roomId])
+
+  const room = rooms.find((entry) => entry.id === roomId) ?? rooms[0]
   const activeBookingObj = myBookings.find((b) => b.id === activeBooking?.id)
 
   const now = new Date()
@@ -102,7 +107,8 @@ export function StudentView() {
           <Reveal as="section">
             <RoomTabs
               rooms={rooms}
-              activeId={isAllRooms ? 'ALL' : room.id}
+              activeId={room.id}
+              showAllTab={false}
               onChange={(id) => {
                 checkingBooking.current = null
                 setRoomId(id)
@@ -157,12 +163,6 @@ export function StudentView() {
                   <Button size="xs" onClick={openReservation}>{t('student.newReservation')}</Button>
                 </div>
                 <div className="flex flex-wrap items-center gap-3 text-[11px] text-graphite">
-                  {isAllRooms && (
-                    <>
-                      {rooms.map((entry) => <Legend key={entry.id} swatch={roomColor(entry).dot} label={t('student.roomCode', { code: entry.code })} />)}
-                      <span className="text-rule">|</span>
-                    </>
-                  )}
                   <Legend swatch="border border-accent bg-accent" label={t('student.yours')} />
                   <Legend swatch="border border-dashed border-meta" label={t('student.yoursPending')} />
                   <Legend swatch="border border-[#b9c0cb] bg-reserved" label={t('student.reserved')} />
@@ -171,7 +171,7 @@ export function StudentView() {
                   <Legend swatch="border border-accent bg-tint" label={t('student.selection')} />
                 </div>
               </div>
-              {!isAllRooms && room.status !== 'AVAILABLE' && (
+              {room.status !== 'AVAILABLE' && (
                 <div className="border-b border-plum/30 bg-plum/[0.06] px-4 py-2 font-mono text-[12px] font-semibold text-plum">
                   {t('student.roomSuspended', { code: room.code, status: t(`student.roomStatus.${room.status}`) })}
                 </div>
@@ -213,7 +213,7 @@ export function StudentView() {
                       setActiveBooking(target)
                     }}
                     activeId={activeBooking?.id}
-                    allRooms={isAllRooms}
+                    allRooms={false}
                     rooms={rooms}
                   />
                 </div>
@@ -224,15 +224,15 @@ export function StudentView() {
           <Reveal as="aside" stagger className="flex flex-col gap-6">
             <div className="rounded-lg bg-ice p-6">
               <Eyebrow>
-                {isAllRooms ? t('student.allRooms') : t('student.roomFloor', { code: room.code, floor: room.floor })}
+                {t('student.roomFloor', { code: room.code, floor: room.floor })}
               </Eyebrow>
               <h3 className="mt-3 font-display text-feature font-w450 text-ink">
-                <SplitText key={isAllRooms ? 'all' : room.id} text={isAllRooms ? t('student.combinedSchedule') : room.name} />
+                <SplitText key={room.id} text={room.name} />
               </h3>
               <div className="mt-4 grid grid-cols-2 gap-px border border-rule bg-rule">
                 <div className="bg-paper px-3 py-2">
                   <div className="font-mono text-[10px] text-steel">{t('student.approval')}</div>
-                  <div className="font-mono text-[13px] font-semibold text-accent">{t(isAllRooms ? 'student.approvalVaries' : room.autoApprove ? 'student.autoWhenFree' : 'student.managerRole')}</div>
+                  <div className="font-mono text-[13px] font-semibold text-accent">{t(room.autoApprove ? 'student.autoWhenFree' : 'student.managerRole')}</div>
                 </div>
                 <div className="bg-paper px-3 py-2">
                   <div className="font-mono text-[10px] text-steel">{t('student.keyPickup')}</div>
@@ -240,7 +240,7 @@ export function StudentView() {
                 </div>
               </div>
               <div className="mt-4 flex flex-wrap gap-1.5">
-                {(isAllRooms ? [...new Set(rooms.flatMap((entry) => entry.features))] : room.features).map((f) => (
+                {room.features.map((f) => (
                   <Tag key={f}>{f}</Tag>
                 ))}
               </div>
@@ -288,7 +288,7 @@ export function StudentView() {
         </div>
       </main>
 
-      {selection && <BookingModal room={room} rooms={rooms} allowRoomChange={isAllRooms} selection={selection} onClose={() => setSelection(null)} />}
+      {selection && <BookingModal room={room} rooms={[room]} allowRoomChange={false} selection={selection} onClose={() => setSelection(null)} />}
       <MyBookingsDrawer open={drawer} onClose={() => setDrawer(false)} />
       {activeBooking && activeBookingObj && (
         <StudentBookingPopover
